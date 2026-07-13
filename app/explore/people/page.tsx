@@ -87,8 +87,8 @@ export default function SuggestionsPage() {
         <h1 className="text-xl font-bold">Рекомендации</h1>
       </div>
 
-      <div className="flex flex-col gap-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-850 rounded-xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-zinc-200 dark:border-zinc-850 select-none">
+      <div className="flex flex-col gap-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 select-none">
           <span className="font-semibold text-sm text-zinc-500 dark:text-zinc-400">
             Все рекомендации для вас
           </span>
