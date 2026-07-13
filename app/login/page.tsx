@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useApp } from "../context/AppContext";
 import { ChevronLeft } from "lucide-react";
 
@@ -165,13 +166,12 @@ export default function LoginPage() {
           </button>
 
           {/* Sign Up Switch Option */}
-          <button
-            type="button"
-            onClick={() => router.push("/accounts/emailsignup")}
-            className="w-full border border-[#0095f6] hover:bg-[#0095f6]/10 rounded-full py-3 text-sm font-bold text-[#0095f6] transition cursor-pointer"
+          <Link
+            href="/accounts/emailsignup"
+            className="w-full border border-[#0095f6] hover:bg-[#0095f6]/10 rounded-full py-3 text-sm font-bold text-[#0095f6] transition cursor-pointer text-center block"
           >
             Create new account
-          </button>
+          </Link>
 
         </div>
 
