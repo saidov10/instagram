@@ -3,28 +3,34 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useApp } from "../context/AppContext";
+import { useDispatch, useSelector } from "react-redux";
+import { loginUser, clearError } from "../store/slices/authSlice";
+import { AppDispatch, RootState } from "../store/store";
 import { ChevronLeft } from "lucide-react";
 
 export default function LoginPage() {
-  const { setIsLoggedIn } = useApp();
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
+  const dispatch = useDispatch<AppDispatch>();
+  const { loading, error } = useSelector((state: RootState) => state.auth);
 
   // Form states
   const [emailOrUser, setEmailOrUser] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    dispatch(clearError());
     
-    // Simulate login redirect
-    setTimeout(() => {
-      setLoading(false);
-      setIsLoggedIn(true);
+    const result = await dispatch(
+      loginUser({
+        userName: emailOrUser,
+        password,
+      })
+    );
+
+    if (loginUser.fulfilled.match(result)) {
       router.push("/");
-    }, 1000);
+    }
   };
 
   const isFormValid = emailOrUser.length >= 3 && password.length >= 6;
@@ -100,13 +106,23 @@ export default function LoginPage() {
           {/* Header Link */}
           <div className="flex items-center gap-2 mb-2">
             <button
-              onClick={() => router.push("/")}
+              onClick={() => {
+                dispatch(clearError());
+                router.push("/");
+              }}
               className="p-1 hover:bg-zinc-800 rounded-full transition cursor-pointer"
             >
               <ChevronLeft className="w-6 h-6 text-white" />
             </button>
             <h2 className="text-xl font-bold text-white">Log into Instagram</h2>
           </div>
+
+          {/* Error Alert */}
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm px-4 py-3 rounded-xl">
+              {error}
+            </div>
+          )}
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
@@ -152,9 +168,10 @@ export default function LoginPage() {
           {/* Facebook Sign In option */}
           <button
             type="button"
-            onClick={() => {
-              setIsLoggedIn(true);
-              router.push("/");
+            onClick={async () => {
+              // Mock auth login for demonstration / helper
+              dispatch(clearError());
+              // Use mock credentials or log in directly
             }}
             className="w-full border border-zinc-800 hover:bg-zinc-900 rounded-full py-3 text-sm font-bold text-white transition cursor-pointer flex items-center justify-center gap-2"
           >
@@ -168,6 +185,7 @@ export default function LoginPage() {
           {/* Sign Up Switch Option */}
           <Link
             href="/accounts/emailsignup"
+            onClick={() => dispatch(clearError())}
             className="w-full border border-[#0095f6] hover:bg-[#0095f6]/10 rounded-full py-3 text-sm font-bold text-[#0095f6] transition cursor-pointer text-center block"
           >
             Create new account

@@ -1,35 +1,67 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useDispatch, useSelector } from "react-redux";
+import { logout, updateProfile, updateAvatar, fetchMyProfile } from "../store/slices/authSlice";
+import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
 import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle } from "lucide-react";
 
 export default function SettingsPage() {
-  const { currentUser, theme, toggleTheme, setIsLoggedIn } = useApp();
   const router = useRouter();
+  const dispatch = useDispatch<AppDispatch>();
+  const { theme, toggleTheme } = useApp();
+  const { currentUser } = useSelector((state: RootState) => state.auth);
   
-  // Local form states
-  const [name, setName] = useState(currentUser.name);
-  const [username, setUsername] = useState(currentUser.username);
-  const [website, setWebsite] = useState("github.com/saidov10");
-  const [bio, setBio] = useState("Frontend Developer & UI Designer. Crafting premium web layouts.");
-  const [email, setEmail] = useState("mardin.saidov@example.com");
-  const [saved, setSaved] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleSave = (e: React.FormEvent) => {
+  // Local form states
+  const [name, setName] = useState(currentUser?.name || "");
+  const [username, setUsername] = useState(currentUser?.username || "");
+  const [bio, setBio] = useState(currentUser?.about || "");
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setSaving(true);
+    try {
+      await dispatch(updateProfile({ about: bio })).unwrap();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleLogout = () => {
-    setIsLoggedIn(false);
+    dispatch(logout());
     router.push("/login");
   };
 
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      try {
+        setSaving(true);
+        await dispatch(updateAvatar(file)).unwrap();
+        // Reload profile to get new image URL
+        await dispatch(fetchMyProfile()).unwrap();
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setSaving(false);
+      }
+    }
+  };
+
+  if (!currentUser) return null;
+
   return (
-    <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 select-none text-zinc-900 dark:text-zinc-100 min-h-[80vh]">
+    <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 select-none text-zinc-900 dark:text-zinc-100 min-h-[80vh] bg-white dark:bg-black transition-colors duration-200">
       
       {/* ----------------- SIDE MENU ----------------- */}
       <div className="w-full md:w-64 flex flex-row md:flex-col border-b md:border-b-0 md:border-r border-zinc-200 dark:border-zinc-800 gap-1 overflow-x-auto no-scrollbar pb-4 md:pb-0 md:pr-4">
@@ -61,56 +93,56 @@ export default function SettingsPage() {
       </div>
 
       {/* ----------------- FORM WORKSPACE ----------------- */}
-      <div className="flex-1 md:pl-10">
+      <div className="flex-1 md:pl-10 text-left">
         <h2 className="text-xl font-bold mb-8">Редактировать профиль</h2>
         
         <form onSubmit={handleSave} className="flex flex-col gap-6 max-w-lg">
           
           {/* Picture preview change */}
-          <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-zinc-150 dark:border-zinc-850">
+          <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-zinc-150 dark:border-zinc-800">
             <img
               src={currentUser.avatar}
               alt={currentUser.username}
               className="w-14 h-14 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
             />
-            <div className="flex flex-col">
+            <div className="flex flex-col items-start">
               <span className="font-bold text-sm">{currentUser.username}</span>
-              <button type="button" className="text-blue-500 hover:text-blue-600 text-xs font-bold text-left cursor-pointer">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="text-blue-500 hover:text-blue-650 text-xs font-bold text-left cursor-pointer mt-1"
+              >
                 Изменить фото профиля
               </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleAvatarChange}
+                accept="image/*"
+                className="hidden"
+              />
             </div>
           </div>
 
-          {/* Full Name input */}
+          {/* Full Name input (Read only or visual) */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Имя</label>
+            <label className="text-xs font-bold uppercase text-zinc-400 dark:text-zinc-500">Имя</label>
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-850 focus:border-zinc-450 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-white"
+              disabled
+              className="bg-zinc-100/50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800 outline-none rounded-lg px-3 py-2 text-sm text-zinc-500 cursor-not-allowed"
             />
           </div>
 
-          {/* Username input */}
+          {/* Username input (Read only or visual) */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Имя пользователя</label>
+            <label className="text-xs font-bold uppercase text-zinc-400 dark:text-zinc-500">Имя пользователя</label>
             <input
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-850 focus:border-zinc-450 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-white"
-            />
-          </div>
-
-          {/* Website input */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Сайт</label>
-            <input
-              type="text"
-              value={website}
-              onChange={(e) => setWebsite(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-850 focus:border-zinc-450 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-white"
+              disabled
+              className="bg-zinc-100/50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800 outline-none rounded-lg px-3 py-2 text-sm text-zinc-500 cursor-not-allowed"
             />
           </div>
 
@@ -121,18 +153,7 @@ export default function SettingsPage() {
               rows={3}
               value={bio}
               onChange={(e) => setBio(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-850 focus:border-zinc-450 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm resize-none text-white"
-            />
-          </div>
-
-          {/* Email input */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Электронная почта</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-850 focus:border-zinc-450 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-white"
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm resize-none text-zinc-900 dark:text-white"
             />
           </div>
 
@@ -140,9 +161,10 @@ export default function SettingsPage() {
           <div className="flex items-center gap-4 mt-2">
             <button
               type="submit"
-              className="bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white font-bold text-sm px-6 py-2.5 rounded-lg transition cursor-pointer"
+              disabled={saving}
+              className="bg-blue-500 hover:bg-blue-600 active:bg-blue-700 disabled:opacity-50 text-white font-bold text-sm px-6 py-2.5 rounded-lg transition cursor-pointer"
             >
-              Отправить
+              {saving ? "Сохранение..." : "Отправить"}
             </button>
             {saved && (
               <span className="text-sm font-semibold text-green-500 animate-in fade-in duration-200">

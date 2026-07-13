@@ -3,13 +3,15 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useApp } from "../../context/AppContext";
+import { useDispatch, useSelector } from "react-redux";
+import { registerUser, clearError } from "../../store/slices/authSlice";
+import { AppDispatch, RootState } from "../../store/store";
 import { ChevronLeft, HelpCircle } from "lucide-react";
 
 export default function SignupPage() {
-  const { setIsLoggedIn } = useApp();
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
+  const dispatch = useDispatch<AppDispatch>();
+  const { loading, error } = useSelector((state: RootState) => state.auth);
 
   // Form states
   const [emailOrPhone, setEmailOrPhone] = useState("");
@@ -20,23 +22,33 @@ export default function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    dispatch(clearError());
     
-    // Simulate signup & login
-    setTimeout(() => {
-      setLoading(false);
-      setIsLoggedIn(true);
-      router.push("/");
-    }, 1000);
+    const result = await dispatch(
+      registerUser({
+        userName: username,
+        fullName,
+        emailOrPhone,
+        password,
+        confirmPassword: password,
+        day,
+        month,
+        year,
+      })
+    );
+
+    if (registerUser.fulfilled.match(result)) {
+      router.push("/login");
+    }
   };
 
-  const isFormValid = 
-    emailOrPhone.length >= 5 && 
-    password.length >= 6 && 
-    day !== "День" && 
-    month !== "Месяц" && 
+  const isFormValid =
+    emailOrPhone.length >= 5 &&
+    password.length >= 6 &&
+    day !== "День" &&
+    month !== "Месяц" &&
     year !== "Год" &&
     fullName.trim().length >= 2 &&
     username.trim().length >= 3;
@@ -55,7 +67,10 @@ export default function SignupPage() {
       {/* ----------------- TOP NAVBAR ----------------- */}
       <header className="max-w-[580px] w-full mx-auto px-6 pt-6 flex flex-col items-start gap-4">
         <button
-          onClick={() => router.push("/login")}
+          onClick={() => {
+            dispatch(clearError());
+            router.push("/login");
+          }}
           className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-900 rounded-full transition cursor-pointer"
         >
           <ChevronLeft className="w-6 h-6 text-zinc-600 dark:text-zinc-300" />
@@ -82,6 +97,13 @@ export default function SignupPage() {
             Зарегистрируйтесь, чтобы смотреть фото и видео ваших друзей.
           </p>
         </div>
+
+        {/* Error Alert */}
+        {error && (
+          <div className="mb-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 text-red-650 dark:text-red-400 text-sm px-4 py-3.5 rounded-xl">
+            {error}
+          </div>
+        )}
 
         {/* Form Fields */}
         <form onSubmit={handleSubmit} className="flex flex-col gap-6">
@@ -223,7 +245,11 @@ export default function SignupPage() {
         {/* Redirect back to Login */}
         <div className="flex items-center justify-center gap-1.5 mt-8 text-sm font-semibold text-zinc-500 dark:text-zinc-400">
           <span>Есть аккаунт?</span>
-          <Link href="/login" className="text-[#0064e0] dark:text-blue-400 font-bold hover:underline transition">
+          <Link
+            href="/login"
+            onClick={() => dispatch(clearError())}
+            className="text-[#0064e0] dark:text-blue-400 font-bold hover:underline transition"
+          >
             Войти
           </Link>
         </div>
