@@ -53,15 +53,15 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   // Search overlay (for desktop sidebar)
   const [showSearchPanel, setShowSearchPanel] = useState(false);
 
-  // Redirect to login if not logged in (and not already on login page)
+  // Redirect to login if not logged in (and not already on login or signup pages)
   React.useEffect(() => {
-    if (!isLoggedIn && pathname !== "/login") {
+    if (!isLoggedIn && pathname !== "/login" && pathname !== "/accounts/emailsignup") {
       router.push("/login");
     }
   }, [isLoggedIn, pathname, router]);
 
-  // If on login page, just show content without sidebar/navs
-  if (pathname === "/login") {
+  // If on login or signup pages, just show content without sidebar/navs
+  if (pathname === "/login" || pathname === "/accounts/emailsignup") {
     return <>{children}</>;
   }
 
