@@ -10,6 +10,10 @@ import { createPost } from "../store/slices/postsSlice";
 import { createStory } from "../store/slices/storiesSlice";
 import { AppDispatch, RootState } from "../store/store";
 import { getStoredToken, api, getFullImageUrl } from "../services/api";
+<<<<<<< HEAD
+=======
+import NotificationsPanel from "./NotificationsPanel";
+>>>>>>> fea698158567fd3fef9efe53dbc34c9fc20e3ff4
 import {
   Home,
   Search,
@@ -58,6 +62,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [showSearchPanel, setShowSearchPanel] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
+<<<<<<< HEAD
   const [isSearching, setIsSearching] = useState(false);
   const [followingList, setFollowingList] = useState<any[]>([]);
 
@@ -113,6 +118,42 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     } catch (err) {
       console.error("Failed to start chat:", err);
     }
+=======
+  const [searchLoading, setSearchLoading] = useState(false);
+
+  // Notifications panel
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
+
+  // Debounced user search
+  React.useEffect(() => {
+    if (!showSearchPanel) return;
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const users = await api.user.getUsers({ userName: q });
+        setSearchResults(users || []);
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchQuery, showSearchPanel]);
+
+  const goToUser = (id: string, text: string) => {
+    api.user.addSearchHistory(text).catch(() => {});
+    setShowSearchPanel(false);
+    setSearchQuery("");
+    setSearchResults([]);
+    router.push(`/u/${id}`);
+>>>>>>> fea698158567fd3fef9efe53dbc34c9fc20e3ff4
   };
 
   // Handle token & profile initialization on mount
@@ -247,7 +288,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     { label: "Интересное", href: "/explore", icon: Compass },
     { label: "Reels", href: "/reels", icon: Film },
     { label: "Сообщения", href: "/direct/inbox", icon: Send },
-    { label: "Уведомления", href: "#", icon: Heart },
+    { label: "Уведомления", href: "#", icon: Heart, onClick: () => { setShowNotifPanel(true); setShowSearchPanel(false); } },
     { label: "Создать", href: "#", icon: PlusSquare, onClick: () => setCreateOpen(true) },
     { label: "Профиль", href: "/profile", icon: User }
   ];
@@ -255,10 +296,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const userAvatar = currentUser?.avatar || DEFAULT_AVATAR;
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-white dark:bg-black text-black dark:text-white transition-colors duration-200">
-      
+    <div className="min-h-screen flex flex-col md:flex-row text-black dark:text-white transition-colors duration-200">
+
       {/* ----------------- DESKTOP & TABLET SIDEBAR ----------------- */}
-      <aside className={`hidden md:flex flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black h-screen sticky top-0 z-40 transition-all duration-300 ${showSearchPanel ? "w-[72px]" : "w-[72px] xl:w-64"} p-3 justify-between`}>
+      <aside className={`hidden md:flex flex-col glass h-screen sticky top-0 z-40 transition-all duration-300 ${showSearchPanel || showNotifPanel ? "w-[72px]" : "w-[72px] xl:w-64"} p-3 justify-between`} style={{ borderRight: "1px solid var(--border)" }}>
         <div className="flex flex-col gap-6">
           {/* Logo */}
           <Link href="/" className="h-14 flex items-center px-3 mt-4">
@@ -290,7 +331,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   {item.onClick ? (
                     <button
                       onClick={item.onClick}
-                      className="w-full flex items-center gap-4 p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900 transition duration-200 text-left cursor-pointer"
+                      className={`group w-full flex items-center gap-4 p-3 rounded-2xl press transition duration-200 text-left cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 ${
+                        isActive ? "bg-black/5 dark:bg-white/8" : ""
+                      }`}
                     >
                       {item.label === "Профиль" ? (
                         <img
@@ -301,7 +344,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           } object-cover`}
                         />
                       ) : (
-                        <Icon className={`w-6 h-6 ${isActive ? "stroke-[3px]" : "stroke-[2px]"}`} />
+                        <Icon className={`w-6 h-6 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
                       )}
                       <span className={`text-base hidden ${showSearchPanel ? "" : "xl:inline"} ${isActive ? "font-bold" : "font-normal"}`}>
                         {item.label}
@@ -310,7 +353,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   ) : (
                     <Link
                       href={item.href}
-                      className="w-full flex items-center gap-4 p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900 transition duration-200"
+                      className={`group w-full flex items-center gap-4 p-3 rounded-2xl press transition duration-200 hover:bg-black/5 dark:hover:bg-white/5 ${
+                        isActive ? "bg-black/5 dark:bg-white/8" : ""
+                      }`}
                     >
                       {item.label === "Профиль" ? (
                         <img
@@ -321,7 +366,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           } object-cover`}
                         />
                       ) : (
-                        <Icon className={`w-6 h-6 ${isActive ? "stroke-[3px]" : "stroke-[2px]"}`} />
+                        <Icon className={`w-6 h-6 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
                       )}
                       <span className={`text-base hidden ${showSearchPanel ? "" : "xl:inline"} ${isActive ? "font-bold" : "font-normal"}`}>
                         {item.label}
@@ -337,7 +382,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         {/* More Menu Trigger */}
         <div className="relative">
           {showMoreMenu && (
-            <div className="absolute bottom-16 left-0 w-64 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
+            <div className="absolute bottom-16 left-0 w-64 glass-strong rounded-2xl shadow-soft-lg p-2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
               <button
                 onClick={toggleTheme}
                 className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-850 text-sm font-medium transition cursor-pointer"
@@ -385,7 +430,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
       {/* ----------------- SEARCH SLIDE-OUT PANEL (DESKTOP) ----------------- */}
       {showSearchPanel && (
-        <div className="hidden md:flex flex-col w-96 bg-white dark:bg-black border-r border-zinc-200 dark:border-zinc-800 h-screen sticky top-0 z-30 p-6 animate-in slide-in-from-left duration-300">
+        <div className="hidden md:flex flex-col w-96 glass h-screen sticky top-0 z-30 p-6 animate-in slide-in-from-left duration-300">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold">Поиск</h2>
             <button
@@ -402,13 +447,29 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           <div className="relative mb-6">
             <input
               type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Поиск"
+<<<<<<< HEAD
               value={searchQuery}
               onChange={handleSearchChange}
               className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-650"
+=======
+              className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-white"
+>>>>>>> fea698158567fd3fef9efe53dbc34c9fc20e3ff4
             />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
           <hr className="border-zinc-200 dark:border-zinc-800 mb-4" />
+<<<<<<< HEAD
           <div className="flex-1 flex flex-col overflow-y-auto no-scrollbar gap-4">
             {isSearching ? (
               <div className="flex-1 flex items-center justify-center text-sm text-zinc-400 dark:text-zinc-550">
@@ -460,21 +521,74 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   </div>
                 );
               })
+=======
+          <div className="flex-1 overflow-y-auto">
+            {!searchQuery.trim() ? (
+              <div className="h-full flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-650">
+                <span className="text-sm font-medium">Нет недавних запросов.</span>
+              </div>
+            ) : searchLoading ? (
+              <div className="flex flex-col gap-4 pt-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 animate-pulse">
+                    <div className="w-11 h-11 rounded-full bg-zinc-200 dark:bg-zinc-800" />
+                    <div className="flex flex-col gap-2">
+                      <div className="w-24 h-3 rounded bg-zinc-200 dark:bg-zinc-800" />
+                      <div className="w-16 h-2.5 rounded bg-zinc-100 dark:bg-zinc-900" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : searchResults.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-650">
+                <span className="text-sm font-medium">Ничего не найдено.</span>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                {searchResults.map((u: any) => {
+                  const uid = u.id || u.userId || "";
+                  const uname = u.userName || u.username || "user";
+                  return (
+                    <button
+                      key={uid || uname}
+                      onClick={() => goToUser(uid, uname)}
+                      className="flex items-center gap-3 p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900 transition text-left cursor-pointer"
+                    >
+                      <img
+                        src={getFullImageUrl(u.avatar || u.imagePath) || DEFAULT_AVATAR}
+                        alt={uname}
+                        className="w-11 h-11 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                      />
+                      <div className="flex flex-col">
+                        <span className="text-sm font-semibold">{uname}</span>
+                        <span className="text-xs text-zinc-400">{u.fullName || u.name || ""}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+>>>>>>> fea698158567fd3fef9efe53dbc34c9fc20e3ff4
             )}
           </div>
         </div>
       )}
 
+      {/* ----------------- NOTIFICATIONS PANEL ----------------- */}
+      {showNotifPanel && <NotificationsPanel onClose={() => setShowNotifPanel(false)} />}
+
       {/* ----------------- MOBILE TOP BAR ----------------- */}
-      <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-800 sticky top-0 bg-white dark:bg-black z-40">
+      <header className="md:hidden flex items-center justify-between px-4 py-3 glass sticky top-0 z-40">
         <Link href="/" className="font-serif text-2xl font-bold tracking-wider italic bg-gradient-to-r from-purple-500 via-pink-500 to-yellow-500 bg-clip-text text-transparent">
           Instagram
         </Link>
         <div className="flex items-center gap-4">
-          <button onClick={toggleTheme} className="p-1 text-zinc-700 dark:text-zinc-300">
+          <button onClick={toggleTheme} className="p-1 text-zinc-700 dark:text-zinc-300 press">
             {theme === "dark" ? <Sun className="w-6 h-6" /> : <Moon className="w-6 h-6" />}
           </button>
-          <Link href="/direct/inbox" className="relative p-1 text-zinc-700 dark:text-zinc-300">
+          <button onClick={() => setShowNotifPanel(true)} className="relative p-1 text-zinc-700 dark:text-zinc-300 press">
+            <Heart className="w-6 h-6" />
+          </button>
+          <Link href="/direct/inbox" className="relative p-1 text-zinc-700 dark:text-zinc-300 press">
             <Send className="w-6 h-6" />
           </Link>
         </div>
@@ -486,7 +600,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
       </main>
 
       {/* ----------------- MOBILE BOTTOM NAV ----------------- */}
-      <footer className="md:hidden flex items-center justify-around border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black h-16 fixed bottom-0 left-0 right-0 z-40">
+      <footer className="md:hidden flex items-center justify-around glass h-16 fixed bottom-3 left-3 right-3 z-40 rounded-3xl shadow-soft-lg">
         <Link href="/" className="p-2 text-zinc-700 dark:text-zinc-300">
           <Home className={`w-6 h-6 ${pathname === "/" ? "fill-black dark:fill-white" : ""}`} />
         </Link>
@@ -525,7 +639,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           </button>
 
           {/* Modal Container */}
-          <div className="bg-white dark:bg-zinc-900 w-full max-w-lg md:max-w-4xl rounded-xl shadow-2xl flex flex-col overflow-hidden max-h-[85vh] transition-all duration-300 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-white">
+          <div className="glass-strong w-full max-w-lg md:max-w-4xl rounded-3xl shadow-soft-lg flex flex-col overflow-hidden max-h-[85vh] transition-all duration-300 text-zinc-900 dark:text-white animate-pop-in">
             {/* Header */}
             <div className="flex justify-between items-center px-4 py-3 border-b border-zinc-200 dark:border-zinc-800">
               <button

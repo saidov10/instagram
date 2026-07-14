@@ -186,7 +186,7 @@ export const api = {
     },
 
     async getUserProfileById(id: string): Promise<any> {
-      return request(`/UserProfile/get-user-profile-by-id?id=${id}`);
+      return request(`/UserProfile/get-user-profile-by-id?userId=${id}`);
     },
 
     async getIsFollowUserProfileById(followingUserId: string): Promise<boolean> {

@@ -8,6 +8,7 @@ export interface Comment {
 
 export interface Post {
   id: number;
+  userId: string;
   username: string;
   avatar: string;
   location: string;
@@ -40,29 +41,45 @@ const initialState: PostsState = {
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
-const formatBackendPost = (p: any): Post => ({
-  id: p.id || p.postId,
-  username: p.userName || p.username || "user",
-  avatar: getFullImageUrl(p.userAvatar || p.userImage) || DEFAULT_AVATAR,
-  location: p.locationName || p.location || "",
-  image: getFullImageUrl(p.filePath || p.imagePath || (p.images && p.images[0]) || p.image) || DEFAULT_AVATAR,
-  caption: p.content || p.title || "",
-  likes: p.likeCount || p.likes || 0,
-  time: p.createAt ? new Date(p.createAt).toLocaleDateString() : "Just now",
-  isLiked: p.isLikedByCurrentUser || p.isLiked || false,
-  isSaved: p.isSavedByCurrentUser || p.isSaved || false,
-  comments: (p.comments || []).map((c: any) => ({
-    id: c.id || c.commentId,
-    username: c.userName || c.username || "commenter",
-    text: c.comment || c.text || "",
-  })),
-});
+const formatBackendPost = (p: any, currentUserId = ""): Post => {
+  // Backend returns `likes` as an array of user ids that liked the post.
+  const likeArray: string[] = Array.isArray(p.likes) ? p.likes : [];
+  const likeCount = typeof p.likeCount === "number" ? p.likeCount : likeArray.length;
+  const isLiked = currentUserId
+    ? likeArray.includes(currentUserId)
+    : p.isLikedByCurrentUser || p.isLiked || false;
+
+  return {
+    id: p.id || p.postId,
+    userId: p.userId || p.userProfileId || "",
+    username: p.userName || p.username || "user",
+    avatar: getFullImageUrl(p.userAvatar || p.userImage) || DEFAULT_AVATAR,
+    location: p.locationName || p.location || "",
+    image: getFullImageUrl((p.images && p.images[0]) || p.filePath || p.imagePath || p.image) || DEFAULT_AVATAR,
+    caption: p.content || p.title || "",
+    likes: likeCount,
+    time: p.createAt ? new Date(p.createAt).toLocaleDateString() : "Just now",
+    isLiked,
+    isSaved: p.isSavedByCurrentUser || p.isSaved || false,
+    comments: (p.comments || []).map((c: any) => ({
+      id: c.id || c.commentId,
+      username: c.userName || c.username || "commenter",
+      text: c.comment || c.text || "",
+    })),
+  };
+};
 
 // Async Thunks
+const currentIdFrom = (getState: () => unknown): string => {
+  const state = getState() as { auth?: { currentUser?: { id?: string } } };
+  return state.auth?.currentUser?.id || "";
+};
+
 export const fetchFollowingPosts = createAsyncThunk(
   "posts/fetchFollowing",
-  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { rejectWithValue }) => {
+  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { getState, rejectWithValue }) => {
     try {
+      const myId = currentIdFrom(getState);
       // Default to getFollowingPost if logged in, fallback to getPosts
       let list;
       try {
@@ -70,7 +87,7 @@ export const fetchFollowingPosts = createAsyncThunk(
       } catch {
         list = await api.post.getPosts(params);
       }
-      return list.map(formatBackendPost);
+      return list.map((p) => formatBackendPost(p, myId));
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load posts.");
     }
@@ -79,10 +96,11 @@ export const fetchFollowingPosts = createAsyncThunk(
 
 export const fetchPosts = createAsyncThunk(
   "posts/fetchAll",
-  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { rejectWithValue }) => {
+  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { getState, rejectWithValue }) => {
     try {
+      const myId = currentIdFrom(getState);
       const list = await api.post.getPosts(params);
-      return list.map(formatBackendPost);
+      return list.map((p) => formatBackendPost(p, myId));
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load posts.");
     }
@@ -91,10 +109,11 @@ export const fetchPosts = createAsyncThunk(
 
 export const fetchMyPosts = createAsyncThunk(
   "posts/fetchMy",
-  async (_, { rejectWithValue }) => {
+  async (_, { getState, rejectWithValue }) => {
     try {
+      const myId = currentIdFrom(getState);
       const list = await api.post.getMyPosts();
-      return list.map(formatBackendPost);
+      return list.map((p) => formatBackendPost(p, myId));
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load my posts.");
     }
@@ -180,7 +199,23 @@ export const addPostFavorite = createAsyncThunk(
 const postsSlice = createSlice({
   name: "posts",
   initialState,
-  reducers: {},
+  reducers: {
+    // Merge locally-persisted saved state + comments into loaded posts.
+    hydrateLocal(
+      state,
+      action: PayloadAction<{ savedIds: number[]; comments: Record<number, Comment[]> }>
+    ) {
+      const { savedIds, comments } = action.payload;
+      const apply = (list: Post[]) => {
+        list.forEach((p) => {
+          p.isSaved = savedIds.includes(p.id);
+          if (comments[p.id]) p.comments = comments[p.id];
+        });
+      };
+      apply(state.posts);
+      apply(state.myPosts);
+    },
+  },
   extraReducers: (builder) => {
     builder
       // Fetch Following Posts
@@ -263,4 +298,5 @@ const postsSlice = createSlice({
   },
 });
 
+export const { hydrateLocal } = postsSlice.actions;
 export default postsSlice.reducer;

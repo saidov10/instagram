@@ -6,7 +6,8 @@ import { useDispatch, useSelector } from "react-redux";
 import { logout, updateProfile, updateAvatar, fetchMyProfile } from "../store/slices/authSlice";
 import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
-import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle } from "lucide-react";
+import { api } from "../services/api";
+import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock } from "lucide-react";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -22,6 +23,42 @@ export default function SettingsPage() {
   const [bio, setBio] = useState(currentUser?.about || "");
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Change-password form
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [pwLoading, setPwLoading] = useState(false);
+  const [pwMessage, setPwMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwMessage(null);
+    if (newPassword.length < 6) {
+      setPwMessage({ type: "err", text: "Пароль должен быть не короче 6 символов." });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwMessage({ type: "err", text: "Пароли не совпадают." });
+      return;
+    }
+    setPwLoading(true);
+    try {
+      await api.account.changePassword({
+        OldPassword: oldPassword,
+        Password: newPassword,
+        ConfirmPassword: confirmPassword,
+      });
+      setPwMessage({ type: "ok", text: "Пароль успешно изменён." });
+      setOldPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      setPwMessage({ type: "err", text: err?.message || "Не удалось изменить пароль." });
+    } finally {
+      setPwLoading(false);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,11 +98,11 @@ export default function SettingsPage() {
   if (!currentUser) return null;
 
   return (
-    <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 select-none text-zinc-900 dark:text-zinc-100 min-h-[80vh] bg-white dark:bg-black transition-colors duration-200">
+    <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 select-none text-zinc-900 dark:text-zinc-100 min-h-[80vh] transition-colors duration-200 animate-fade-up">
       
       {/* ----------------- SIDE MENU ----------------- */}
       <div className="w-full md:w-64 flex flex-row md:flex-col border-b md:border-b-0 md:border-r border-zinc-200 dark:border-zinc-800 gap-1 overflow-x-auto no-scrollbar pb-4 md:pb-0 md:pr-4">
-        <button className="flex items-center gap-3 px-4 py-3 rounded-lg bg-zinc-100 dark:bg-zinc-900 font-semibold text-sm text-left flex-shrink-0 cursor-pointer">
+        <button className="flex items-center gap-3 px-4 py-3 rounded-xl glass font-semibold text-sm text-left flex-shrink-0 cursor-pointer">
           <User className="w-5 h-5 stroke-[1.8px]" />
           <span>Редактировать профиль</span>
         </button>
@@ -174,6 +211,56 @@ export default function SettingsPage() {
           </div>
 
         </form>
+
+        {/* ----------------- CHANGE PASSWORD ----------------- */}
+        <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
+          <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+            <Lock className="w-5 h-5" /> Сменить пароль
+          </h3>
+          <form onSubmit={handleChangePassword} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Текущий пароль</label>
+              <input
+                type="password"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Новый пароль</label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Подтвердите новый пароль</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              />
+            </div>
+            <div className="flex items-center gap-4 mt-2">
+              <button
+                type="submit"
+                disabled={pwLoading || !oldPassword || !newPassword || !confirmPassword}
+                className="bg-blue-500 hover:bg-blue-600 active:bg-blue-700 disabled:opacity-50 text-white font-bold text-sm px-6 py-2.5 rounded-lg transition cursor-pointer"
+              >
+                {pwLoading ? "Сохранение..." : "Сменить пароль"}
+              </button>
+              {pwMessage && (
+                <span className={`text-sm font-semibold animate-in fade-in duration-200 ${pwMessage.type === "ok" ? "text-green-500" : "text-red-500"}`}>
+                  {pwMessage.text}
+                </span>
+              )}
+            </div>
+          </form>
+        </div>
       </div>
 
     </div>

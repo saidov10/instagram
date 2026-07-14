@@ -6,7 +6,8 @@ import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import { loginUser, clearError } from "../store/slices/authSlice";
 import { AppDispatch, RootState } from "../store/store";
-import { ChevronLeft } from "lucide-react";
+import { api } from "../services/api";
+import { ChevronLeft, X } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,6 +17,26 @@ export default function LoginPage() {
   // Form states
   const [emailOrUser, setEmailOrUser] = useState("");
   const [password, setPassword] = useState("");
+
+  // Forgot-password modal
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+    setForgotBusy(true);
+    try {
+      await api.account.forgotPassword(forgotEmail.trim());
+    } catch {
+      // Always show the same confirmation (don't reveal whether the account exists)
+    } finally {
+      setForgotBusy(false);
+      setForgotSent(true);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,12 +179,13 @@ export default function LoginPage() {
           </form>
 
           {/* Forgot Password Link */}
-          <a
-            href="#"
-            className="text-white hover:underline text-sm font-semibold text-center mt-1.5 transition"
+          <button
+            type="button"
+            onClick={() => { setShowForgot(true); setForgotSent(false); setForgotEmail(""); }}
+            className="text-white hover:underline text-sm font-semibold text-center mt-1.5 transition cursor-pointer"
           >
             Forgot password?
-          </a>
+          </button>
 
           {/* Facebook Sign In option */}
           <button
@@ -202,6 +224,59 @@ export default function LoginPage() {
         </div>
 
       </div>
+
+      {/* ----------------- FORGOT PASSWORD MODAL ----------------- */}
+      {showForgot && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1c1c1e] border border-zinc-800 rounded-2xl w-full max-w-sm p-6 relative">
+            <button
+              onClick={() => setShowForgot(false)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {forgotSent ? (
+              <div className="flex flex-col items-center text-center gap-4 py-4">
+                <div className="w-16 h-16 rounded-full border-2 border-zinc-600 flex items-center justify-center text-3xl">✉️</div>
+                <h3 className="text-lg font-bold text-white">Проверьте почту</h3>
+                <p className="text-sm text-zinc-400">
+                  Если для <span className="text-white">{forgotEmail}</span> есть аккаунт, мы отправили ссылку для сброса пароля.
+                </p>
+                <button
+                  onClick={() => setShowForgot(false)}
+                  className="w-full mt-2 bg-[#0095f6] hover:bg-[#18a2f8] text-white font-bold rounded-full py-3 text-sm cursor-pointer"
+                >
+                  Готово
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleForgot} className="flex flex-col gap-4">
+                <h3 className="text-lg font-bold text-white">Сброс пароля</h3>
+                <p className="text-sm text-zinc-400 -mt-1">
+                  Введите email, и мы отправим ссылку для восстановления доступа.
+                </p>
+                <input
+                  type="email"
+                  required
+                  placeholder="Email"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  className="w-full bg-[#121212] border border-zinc-800 focus:border-zinc-700 outline-none rounded-xl px-4 py-3 text-sm placeholder-zinc-500 text-white"
+                />
+                <button
+                  type="submit"
+                  disabled={forgotBusy || !forgotEmail.trim()}
+                  className="w-full bg-[#0095f6] hover:bg-[#18a2f8] disabled:bg-[#002d62]/55 disabled:text-zinc-500 text-white font-bold rounded-full py-3 text-sm transition cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {forgotBusy && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  Отправить ссылку
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
 
     </div>
   );
