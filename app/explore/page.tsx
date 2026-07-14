@@ -10,6 +10,8 @@ import {
   Smile,
   Search
 } from "lucide-react";
+import { useSelector } from "react-redux";
+import { RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
 
 interface ExploreItem {
@@ -26,7 +28,7 @@ interface ExploreItem {
 }
 
 export default function ExplorePage() {
-  const { currentUser } = useApp();
+  const { currentUser } = useSelector((state: RootState) => state.auth);
   const [selectedItem, setSelectedItem] = useState<ExploreItem | null>(null);
   const [newComment, setNewComment] = useState("");
 
@@ -192,7 +194,7 @@ export default function ExplorePage() {
     if (!selectedItem || !newComment.trim()) return;
 
     const newCommentObj = {
-      username: currentUser.username,
+      username: currentUser?.username || "user",
       text: newComment.trim()
     };
 
@@ -317,7 +319,7 @@ export default function ExplorePage() {
                 {/* User comments list */}
                 {selectedItem.comments.map((comment, index) => (
                   <div key={index} className="flex gap-3">
-                    <div className="w-8 h-8 rounded-full bg-zinc-200 dark:bg-zinc-850 flex-shrink-0 flex items-center justify-center text-xs font-bold font-mono text-zinc-650 dark:text-zinc-400 select-none uppercase">
+                    <div className="w-8 h-8 rounded-full bg-zinc-200 dark:bg-zinc-800 flex-shrink-0 flex items-center justify-center text-xs font-bold font-mono text-zinc-650 dark:text-zinc-400 select-none uppercase">
                       {comment.username.slice(0, 2)}
                     </div>
                     <div className="text-sm">

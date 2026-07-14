@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import {
   Heart,
   MessageCircle,
@@ -13,6 +14,8 @@ import {
   X,
   Smile
 } from "lucide-react";
+import { AppDispatch, RootState } from "../store/store";
+import { fetchReels, toggleLikePost, addComment, addPostFavorite } from "../store/slices/postsSlice";
 import { useApp } from "../context/AppContext";
 
 interface ReelComment {
@@ -38,90 +41,106 @@ interface Reel {
   comments: ReelComment[];
 }
 
+const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
+
 export default function ReelsPage() {
-  const { currentUser } = useApp();
+  const dispatch = useDispatch<AppDispatch>();
+  const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
+  const { reels: backendReels, loading } = useSelector((state: RootState) => state.posts);
+  
   const [muted, setMuted] = useState(false);
   const [activeReelIndex, setActiveReelIndex] = useState(0);
   const [showComments, setShowComments] = useState(false);
   const [newComment, setNewComment] = useState("");
 
-  const [reels, setReels] = useState<Reel[]>([
-    {
-      id: 1,
-      creator: "surfer_extreme",
-      avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop",
-      media: "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
-      caption: "Catching the biggest wave of the season in Hawaii! Mind-blowing swell today. #surf #hawaii #ocean #adrenaline",
-      musicName: "Original Audio - surfer_extreme",
-      likesCount: 45210,
-      commentsCount: 512,
-      isLiked: false,
-      isSaved: false,
-      comments: [
-        { id: 1, username: "beach_bum", avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=80&h=80&fit=crop", text: "Dude, that drop was absolutely mental!", likes: 42, time: "1h" },
-        { id: 2, username: "water_lilly", avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop", text: "The camera angle makes it look 100ft high, so cool!", likes: 18, time: "40m" }
-      ]
-    },
-    {
-      id: 2,
-      creator: "adventure_drone",
-      avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&h=100&fit=crop",
-      media: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&h=1000&fit=crop",
-      caption: "Flying above the fog during sunrise. Epic drone capture! #drone #sunrise #foggy #morning #explore",
-      musicName: "Morning Chill Beats - Lofi Artist",
-      likesCount: 89043,
-      commentsCount: 924,
-      isLiked: false,
-      isSaved: false,
-      comments: [
-        { id: 1, username: "sky_high", avatar: "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=80&h=80&fit=crop", text: "Which drone model did you use for this? Extremely stable flight.", likes: 88, time: "3h" },
-        { id: 2, username: "fog_watcher", avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&h=80&fit=crop", text: "Looks like a painting. Outstanding colors!", likes: 31, time: "2h" }
-      ]
-    },
-    {
-      id: 3,
-      creator: "dance_vibe",
-      avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop",
-      media: "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=600&h=1000&fit=crop",
-      caption: "Choreography for our upcoming show. Let us know what you think in the comments! #dance #choreo #hiphop #vibes",
-      musicName: "Dance Remix 2026 - DJ Club",
-      likesCount: 124392,
-      commentsCount: 1840,
-      isLiked: false,
-      isSaved: false,
-      comments: [
-        { id: 1, username: "groove_master", avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=80&h=80&fit=crop", text: "The sync in the chorus is immaculate!", likes: 212, time: "5h" }
-      ]
+  const [reels, setReels] = useState<Reel[]>([]);
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      dispatch(fetchReels({}));
     }
-  ]);
+  }, [isLoggedIn, dispatch]);
+
+  useEffect(() => {
+    if (backendReels && backendReels.length > 0) {
+      const formatted: Reel[] = backendReels.map((p: any) => ({
+        id: p.id || p.postId,
+        creator: p.userName || p.username || "creator",
+        avatar: p.userAvatar || p.userImage || DEFAULT_AVATAR,
+        media: p.filePath || p.imagePath || p.image || "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
+        caption: p.content || p.title || "",
+        musicName: `Original Audio - ${p.userName || "creator"}`,
+        likesCount: p.likeCount || p.likes || 0,
+        commentsCount: p.comments?.length || 0,
+        isLiked: p.isLikedByCurrentUser || p.isLiked || false,
+        isSaved: p.isSavedByCurrentUser || p.isSaved || false,
+        comments: (p.comments || []).map((c: any) => ({
+          id: c.id || c.commentId,
+          username: c.userName || c.username || "commenter",
+          avatar: c.userAvatar || DEFAULT_AVATAR,
+          text: c.comment || c.text || "",
+          likes: 0,
+          time: "Just now",
+        })),
+      }));
+      setReels(formatted);
+    } else {
+      // Fallback mocks if backend reels list is empty
+      setReels([
+        {
+          id: 101,
+          creator: "saidov.7",
+          avatar: DEFAULT_AVATAR,
+          media: "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
+          caption: "Epic views! #explore #surf #nature",
+          musicName: "Original Audio - saidov.7",
+          likesCount: 1530,
+          commentsCount: 2,
+          isLiked: false,
+          isSaved: false,
+          comments: [
+            { id: 1, username: "surfer_joe", avatar: DEFAULT_AVATAR, text: "Awesome capture!", likes: 10, time: "1h" }
+          ]
+        }
+      ]);
+    }
+  }, [backendReels]);
 
   const currentReel = reels[activeReelIndex];
 
   const handleLike = (id: number) => {
+    dispatch(toggleLikePost(id));
     setReels((prev) =>
-      prev.map((reel) => {
-        if (reel.id === id) {
-          const isLiked = !reel.isLiked;
+      prev.map((r) => {
+        if (r.id === id) {
+          const liked = !r.isLiked;
           return {
-            ...reel,
-            isLiked,
-            likesCount: isLiked ? reel.likesCount + 1 : reel.likesCount - 1
+            ...r,
+            isLiked: liked,
+            likesCount: liked ? r.likesCount + 1 : r.likesCount - 1
           };
         }
-        return reel;
+        return r;
       })
     );
   };
 
   const handleSave = (id: number) => {
+    dispatch(addPostFavorite(id));
     setReels((prev) =>
-      prev.map((reel) => (reel.id === id ? { ...reel, isSaved: !reel.isSaved } : reel))
+      prev.map((r) => (r.id === id ? { ...r, isSaved: !r.isSaved } : r))
     );
   };
 
   const handleAddComment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newComment.trim()) return;
+    if (!newComment.trim() || !currentUser || !currentReel) return;
+
+    dispatch(addComment({
+      postId: currentReel.id,
+      comment: newComment.trim(),
+      username: currentUser.username
+    }));
 
     const newCommentObj: ReelComment = {
       id: Date.now(),
@@ -133,15 +152,15 @@ export default function ReelsPage() {
     };
 
     setReels((prev) =>
-      prev.map((reel) => {
-        if (reel.id === currentReel.id) {
+      prev.map((r) => {
+        if (r.id === currentReel.id) {
           return {
-            ...reel,
-            commentsCount: reel.commentsCount + 1,
-            comments: [newCommentObj, ...reel.comments]
+            ...r,
+            commentsCount: r.commentsCount + 1,
+            comments: [newCommentObj, ...r.comments]
           };
         }
-        return reel;
+        return r;
       })
     );
 
@@ -156,6 +175,14 @@ export default function ReelsPage() {
       setActiveReelIndex(newIdx);
     }
   };
+
+  if (!currentReel) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-zinc-950 text-white">
+        <div className="w-8 h-8 border-4 border-t-transparent border-white rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex justify-center items-center py-4 md:py-8 h-[calc(100vh-64px)] md:h-screen bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
@@ -176,17 +203,27 @@ export default function ReelsPage() {
                 key={reel.id}
                 className="w-full h-full snap-start snap-always relative flex-shrink-0"
               >
-                {/* Visual Media (Mocking tall videos with high-quality tall pictures) */}
-                <img
-                  src={reel.media}
-                  alt={reel.creator}
-                  className="w-full h-full object-cover select-none"
-                />
+                {reel.media.toLowerCase().endsWith('.mp4') || reel.media.toLowerCase().endsWith('.mov') || reel.media.toLowerCase().endsWith('.webm') ? (
+                  <video
+                    src={reel.media}
+                    className="w-full h-full object-cover select-none"
+                    muted={muted}
+                    loop
+                    autoPlay={activeReelIndex === idx}
+                    playsInline
+                  />
+                ) : (
+                  <img
+                    src={reel.media}
+                    alt={reel.creator}
+                    className="w-full h-full object-cover select-none"
+                  />
+                )}
 
                 {/* Progress bar line */}
                 {activeReelIndex === idx && (
                   <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-700">
-                    <div className="h-full bg-white animate-reel-progress w-full origin-left duration-[15s]" />
+                    <div className="h-full bg-white animate-reel-progress w-full origin-left" style={{ animationDuration: '15s' }} />
                   </div>
                 )}
               </div>
@@ -216,11 +253,10 @@ export default function ReelsPage() {
               <span className="font-semibold text-sm hover:underline cursor-pointer">
                 {currentReel.creator}
               </span>
-              <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-semibold">Follow</span>
             </div>
 
             {/* Caption */}
-            <p className="text-xs line-clamp-2 leading-relaxed opacity-90 select-text">
+            <p className="text-xs line-clamp-2 leading-relaxed opacity-90 select-text text-left">
               {currentReel.caption}
             </p>
 
@@ -249,29 +285,23 @@ export default function ReelsPage() {
                   }`}
                 />
               </button>
-              <span className="text-[10px] font-semibold drop-shadow">
-                {currentReel.likesCount.toLocaleString()}
-              </span>
+              <span className="text-xs font-semibold drop-shadow">{currentReel.likesCount.toLocaleString()}</span>
             </div>
 
-            {/* Comment toggler */}
+            {/* Comments toggle */}
             <div className="flex flex-col items-center gap-1">
               <button
-                onClick={() => setShowComments(!showComments)}
-                className={`hover:bg-black/60 active:scale-90 transition p-2.5 rounded-full backdrop-blur-md ${
-                  showComments ? "bg-white text-black" : "bg-black/40 text-white"
-                }`}
+                onClick={() => setShowComments(true)}
+                className="bg-black/40 hover:bg-black/60 active:scale-90 transition p-2.5 rounded-full backdrop-blur-md"
               >
-                <MessageCircle className="w-6 h-6" />
+                <MessageCircle className="w-6 h-6 text-white" />
               </button>
-              <span className="text-[10px] font-semibold drop-shadow">
-                {currentReel.commentsCount.toLocaleString()}
-              </span>
+              <span className="text-xs font-semibold drop-shadow">{currentReel.commentsCount}</span>
             </div>
 
             {/* Share */}
             <button className="bg-black/40 hover:bg-black/60 active:scale-90 transition p-2.5 rounded-full backdrop-blur-md">
-              <Send className="w-6 h-6" />
+              <Send className="w-6 h-6 text-white" />
             </button>
 
             {/* Save */}
@@ -279,110 +309,93 @@ export default function ReelsPage() {
               onClick={() => handleSave(currentReel.id)}
               className="bg-black/40 hover:bg-black/60 active:scale-90 transition p-2.5 rounded-full backdrop-blur-md"
             >
-              <Bookmark
-                className={`w-6 h-6 ${currentReel.isSaved ? "fill-white" : ""}`}
-              />
+              <Bookmark className={`w-6 h-6 ${currentReel.isSaved ? "fill-white text-white" : "text-white"}`} />
             </button>
 
             {/* Menu */}
-            <button className="bg-black/40 hover:bg-black/60 transition p-2 rounded-full">
-              <MoreVertical className="w-5 h-5" />
+            <button className="bg-black/40 hover:bg-black/60 active:scale-90 transition p-2.5 rounded-full backdrop-blur-md">
+              <MoreVertical className="w-6 h-6 text-white" />
             </button>
-
-            {/* Spinning Music Disc */}
-            <div className="w-7 h-7 rounded-full border-2 border-white overflow-hidden animate-spin-slow shadow-lg mt-2">
-              <img
-                src={currentReel.avatar}
-                alt="music-art"
-                className="w-full h-full object-cover"
-              />
-            </div>
           </div>
 
         </div>
 
-        {/* ----------------- COMMENTS PANEL (DESKTOP) ----------------- */}
-        {showComments && (
-          <div className="hidden lg:flex flex-col w-[350px] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl h-full shadow-2xl overflow-hidden animate-in slide-in-from-left duration-300">
+      </div>
+
+      {/* ----------------- COMMENTS BOTTOM/RIGHT PANEL ----------------- */}
+      {showComments && (
+        <div className="fixed inset-0 md:relative md:inset-auto bg-black/60 backdrop-blur-sm md:bg-transparent md:backdrop-blur-none flex md:block items-end justify-center z-50 h-full md:h-auto select-none pointer-events-auto">
+          {/* Modal layout for mobile, simple card for desktop */}
+          <div className="bg-white dark:bg-zinc-900 w-full md:w-[350px] h-[70vh] md:h-[85vh] rounded-t-2xl md:rounded-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-250">
             {/* Header */}
-            <div className="flex justify-between items-center p-4 border-b border-zinc-200 dark:border-zinc-800">
-              <span className="font-bold text-sm">Комментарии</span>
+            <div className="flex items-center justify-between p-4 border-b border-zinc-150 dark:border-zinc-800">
+              <h3 className="font-bold text-base text-zinc-900 dark:text-white">Комментарии</h3>
               <button
                 onClick={() => setShowComments(false)}
-                className="p-1 hover:bg-zinc-150 dark:hover:bg-zinc-800 rounded-full cursor-pointer"
+                className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full cursor-pointer text-zinc-900 dark:text-white"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Comments List */}
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 text-left">
               {currentReel.comments.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
-                  <span className="text-sm font-medium">Комментариев пока нет.</span>
-                  <span className="text-xs">Начните общение.</span>
+                <div className="h-full flex items-center justify-center text-zinc-450 dark:text-zinc-500 text-sm">
+                  Нет комментариев. Будьте первыми!
                 </div>
               ) : (
                 currentReel.comments.map((comment) => (
-                  <div key={comment.id} className="flex gap-3">
-                    <img
-                      src={comment.avatar}
-                      alt={comment.username}
-                      className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-                    />
-                    <div className="flex-1 flex flex-col gap-0.5">
-                      <p className="text-xs">
-                        <span className="font-bold mr-2 hover:underline cursor-pointer">
-                          {comment.username}
-                        </span>
-                        <span className="text-zinc-800 dark:text-zinc-250 leading-snug">
-                          {comment.text}
-                        </span>
-                      </p>
-                      <div className="flex items-center gap-3 text-[10px] text-zinc-400 dark:text-zinc-500 mt-1 select-none">
-                        <span>{comment.time}</span>
-                        {comment.likes > 0 && <span>Отметок &quot;Нравится&quot;: {comment.likes}</span>}
-                        <button className="hover:text-zinc-700 dark:hover:text-zinc-300 font-semibold cursor-pointer">Ответить</button>
+                  <div key={comment.id} className="flex items-start justify-between text-sm">
+                    <div className="flex items-start gap-3">
+                      <img
+                        src={comment.avatar}
+                        alt={comment.username}
+                        className="w-8 h-8 rounded-full object-cover border border-zinc-200"
+                      />
+                      <div className="flex flex-col">
+                        <span className="font-bold text-zinc-900 dark:text-white">{comment.username}</span>
+                        <p className="text-zinc-800 dark:text-zinc-200 leading-snug mt-0.5">{comment.text}</p>
+                        <div className="flex gap-3 text-[11px] text-zinc-400 mt-1">
+                          <span>{comment.time}</span>
+                          <button className="font-bold cursor-pointer">Reply</button>
+                        </div>
                       </div>
                     </div>
-                    <button className="p-0.5 text-zinc-400 hover:text-red-500 transition self-start cursor-pointer">
-                      <Heart className="w-3.5 h-3.5" />
-                    </button>
                   </div>
                 ))
               )}
             </div>
 
-            {/* Comment Input */}
+            {/* Form Box */}
             <form
               onSubmit={handleAddComment}
-              className="border-t border-zinc-200 dark:border-zinc-800 p-3.5 flex items-center justify-between"
+              className="border-t border-zinc-150 dark:border-zinc-800 p-4 flex items-center gap-3 bg-white dark:bg-zinc-900"
             >
-              <div className="flex items-center gap-3 flex-1">
-                <button type="button" className="text-zinc-750 dark:text-zinc-255 hover:text-zinc-500 cursor-pointer">
-                  <Smile className="w-5 h-5" />
-                </button>
-                <input
-                  type="text"
-                  placeholder="Добавьте комментарий..."
-                  value={newComment}
-                  onChange={(e) => setNewComment(e.target.value)}
-                  className="bg-transparent text-sm w-full outline-none placeholder-zinc-400 border-none ring-0 p-0"
-                />
-              </div>
+              <button type="button" className="text-zinc-800 dark:text-white hover:text-zinc-500">
+                <Smile className="w-5 h-5" />
+              </button>
+              <input
+                type="text"
+                placeholder="Добавить комментарий..."
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 text-zinc-900 dark:text-white"
+              />
               {newComment.trim() && (
                 <button
                   type="submit"
-                  className="text-blue-500 font-semibold text-sm hover:text-blue-600 px-1 cursor-pointer"
+                  className="text-blue-500 font-semibold text-sm hover:text-blue-650 cursor-pointer"
                 >
                   Опубликовать
                 </button>
               )}
             </form>
-          </div>
-        )}
 
-      </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
