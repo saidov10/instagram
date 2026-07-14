@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import { useRouter } from "next/navigation";
 import {
@@ -115,12 +116,32 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!selectedPost || !newComment.trim() || !currentUser) return;
 
-    dispatch(addComment({
-      postId: selectedPost.id,
-      comment: newComment.trim(),
-      username: currentUser.username
-    }));
+    const comment = newComment.trim();
+    dispatch(addComment({ postId: selectedPost.id, comment, username: currentUser.username }));
+    addLocalComment(selectedPost.id, { id: Date.now(), username: currentUser.username, text: comment });
     setNewComment("");
+  };
+
+  const openSaved = (post: SavedPost) => {
+    setSelectedSaved(post);
+    setSavedCommentList(getLocalComments(post.id));
+    setSavedComment("");
+  };
+
+  const handleAddSavedComment = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSaved || !savedComment.trim() || !currentUser) return;
+    const c: LocalComment = { id: Date.now(), username: currentUser.username, text: savedComment.trim() };
+    addLocalComment(selectedSaved.id, c);
+    setSavedCommentList((prev) => [...prev, c]);
+    setSavedComment("");
+  };
+
+  const handleUnsave = (postId: number) => {
+    if (!currentUser) return;
+    removeSavedPost(currentUser.id, postId);
+    refreshSaved();
+    setSelectedSaved(null);
   };
 
   const handleFollowToggle = async (userId: string, isFollowing: boolean, username: string) => {
@@ -285,11 +306,115 @@ export default function ProfilePage() {
         )}
 
         {activeTab === "saved" && (
-          <div className="text-center py-20 text-zinc-400 select-none">
-            Сохраненные публикации скрыты.
-          </div>
+          savedPosts.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-4">
+              <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                <BookmarkIcon className="w-8 h-8" />
+              </div>
+              <h3 className="text-2xl font-bold">Сохранёнными не поделишься</h3>
+              <p className="text-sm text-zinc-400 max-w-xs">
+                Нажимайте на значок закладки под публикациями — они появятся здесь, видны только вам.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-1 md:gap-7">
+              {savedPosts.map((post) => (
+                <div
+                  key={post.id}
+                  onClick={() => openSaved(post)}
+                  className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                >
+                  {post.image.toLowerCase().match(/\.(mp4|mov|webm)$/) ? (
+                    <video src={post.image} className="w-full h-full object-cover" muted playsInline />
+                  ) : (
+                    <img src={post.image} alt="Saved" className="w-full h-full object-cover transition duration-300 group-hover:scale-105" />
+                  )}
+                  <div className="absolute top-2 right-2 text-white drop-shadow">
+                    <BookmarkIcon className="w-5 h-5 fill-white" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
         )}
       </div>
+
+      {/* ----------------- SAVED POST MODAL ----------------- */}
+      {selectedSaved && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedSaved(null)}>
+          <button className="absolute top-4 right-4 text-white md:text-zinc-400 hover:text-zinc-300 p-2 z-55">
+            <X className="w-6 h-6" />
+          </button>
+          <div
+            className="glass-strong rounded-3xl overflow-hidden shadow-soft-lg flex flex-col md:flex-row w-full max-w-4xl max-h-[85vh] animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Media */}
+            <div className="flex-1 bg-zinc-950 flex items-center justify-center max-h-[45vh] md:max-h-full">
+              {selectedSaved.image.toLowerCase().match(/\.(mp4|mov|webm)$/) ? (
+                <video src={selectedSaved.image} className="w-full h-full object-contain aspect-square" controls autoPlay loop />
+              ) : (
+                <img src={selectedSaved.image} alt="Detail" className="w-full h-full object-contain aspect-square" />
+              )}
+            </div>
+
+            {/* Side */}
+            <div className="w-full md:w-[380px] flex flex-col border-t md:border-t-0 md:border-l border-[var(--border)] h-[40vh] md:h-auto">
+              <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
+                <Link href={selectedSaved.userId ? `/u/${selectedSaved.userId}` : "#"} className="flex items-center gap-3">
+                  <img src={selectedSaved.avatar} alt={selectedSaved.username} className="w-8 h-8 rounded-full object-cover" />
+                  <span className="font-bold text-sm">{selectedSaved.username}</span>
+                </Link>
+                <button
+                  onClick={() => handleUnsave(selectedSaved.id)}
+                  className="text-xs font-bold text-red-500 hover:text-red-400 cursor-pointer flex items-center gap-1"
+                >
+                  <BookmarkIcon className="w-4 h-4 fill-current" /> Убрать
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 text-left">
+                {selectedSaved.caption && (
+                  <div className="flex items-start gap-3 text-sm">
+                    <img src={selectedSaved.avatar} alt="" className="w-8 h-8 rounded-full object-cover" />
+                    <p className="leading-snug">
+                      <span className="font-bold mr-2">{selectedSaved.username}</span>
+                      {selectedSaved.caption}
+                    </p>
+                  </div>
+                )}
+                {savedCommentList.length > 0 && <hr className="border-[var(--border)]" />}
+                {savedCommentList.map((c) => (
+                  <div key={c.id} className="flex items-start gap-3 text-sm">
+                    <div className="w-8 h-8 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center font-bold text-xs uppercase">
+                      {c.username.charAt(0)}
+                    </div>
+                    <p className="leading-snug">
+                      <span className="font-bold mr-2">{c.username}</span>
+                      {c.text}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <form onSubmit={handleAddSavedComment} className="p-4 border-t border-[var(--border)] flex items-center justify-between">
+                <input
+                  type="text"
+                  placeholder="Добавить комментарий..."
+                  value={savedComment}
+                  onChange={(e) => setSavedComment(e.target.value)}
+                  className="bg-transparent text-sm w-full outline-none placeholder-zinc-400 border-none ring-0 p-0 text-black dark:text-white"
+                />
+                {savedComment.trim() && (
+                  <button type="submit" className="text-blue-500 font-semibold text-sm hover:text-blue-400 cursor-pointer">
+                    Опубликовать
+                  </button>
+                )}
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ----------------- FOLLOWERS MODAL ----------------- */}
       {showFollowersList && (
