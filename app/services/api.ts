@@ -5,7 +5,11 @@ import axios, { Method } from "axios";
  * Base URL: https://instaback-cw0j.onrender.com
  */
 
-export const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+let rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+if (rawBaseUrl.includes("/swagger")) {
+  rawBaseUrl = rawBaseUrl.split("/swagger")[0];
+}
+export const BASE_URL = rawBaseUrl;
 
 export function getFullImageUrl(path: string | null | undefined): string {
   if (!path) return "";
