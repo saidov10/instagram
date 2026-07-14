@@ -38,18 +38,18 @@ const initialState: ChatsState = {
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
 const formatBackendChat = (c: any, currentUserId: string): Chat => {
-  // Determine receiver user
-  const receiver = c.users?.find((u: any) => u.id !== currentUserId) || c.user || {};
-  
-  // Format messages
+  // Backend returns the other participant as `otherUser`.
+  const receiver = c.otherUser || c.users?.find((u: any) => u.id !== currentUserId) || c.user || {};
+
+  // Format messages (backend field is `senderId`)
   const rawMsgs = c.messages || [];
   const messages: Message[] = rawMsgs.map((m: any) => ({
     id: m.id || m.messageId,
-    sender: m.senderUserId === currentUserId ? "me" : "them",
+    sender: (m.senderId || m.senderUserId) === currentUserId ? "me" : "them",
     text: m.messageText || m.text || "",
     image: getFullImageUrl(m.filePath || m.imagePath) || null,
     time: m.createAt ? new Date(m.createAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just now",
-    reaction: m.reactions?.[0]?.reaction || m.reaction || null,
+    reaction: m.reactions?.[m.reactions.length - 1]?.reaction || m.reaction || null,
   }));
 
   return {

@@ -16,10 +16,19 @@ import {
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import { fetchMyProfile } from "../store/slices/authSlice";
-import { fetchMyPosts, toggleLikePost, addComment, addPostFavorite } from "../store/slices/postsSlice";
+import { fetchMyPosts, toggleLikePost, addComment, hydrateLocal } from "../store/slices/postsSlice";
 import { api, getFullImageUrl } from "../services/api";
+import {
+  getSavedPosts,
+  getLocalComments,
+  addLocalComment,
+  removeSavedPost,
+  SavedPost,
+  LocalComment,
+} from "../services/localStore";
 import { ProfileSkeleton } from "../components/SkeletonLoader";
 import { useApp } from "../context/AppContext";
+import { Bookmark as BookmarkIcon } from "lucide-react";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
 
@@ -37,15 +46,37 @@ export default function ProfilePage() {
   // Modal lists
   const [showFollowersList, setShowFollowersList] = useState(false);
   const [showFollowingList, setShowFollowingList] = useState(false);
-  
+
   // Follow list dynamic states
   const [followers, setFollowers] = useState<any[]>([]);
   const [following, setFollowing] = useState<any[]>([]);
 
+  // Saved posts (local)
+  const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
+  const [selectedSaved, setSelectedSaved] = useState<SavedPost | null>(null);
+  const [savedComment, setSavedComment] = useState("");
+  const [savedCommentList, setSavedCommentList] = useState<LocalComment[]>([]);
+
+  const refreshSaved = () => {
+    if (currentUser) setSavedPosts(getSavedPosts(currentUser.id));
+  };
+
   useEffect(() => {
     if (isLoggedIn && currentUser) {
-      dispatch(fetchMyPosts());
-      
+      dispatch(fetchMyPosts()).then((action) => {
+        if (fetchMyPosts.fulfilled.match(action)) {
+          const loaded = action.payload as { id: number }[];
+          const savedIds = getSavedPosts(currentUser.id).map((p) => p.id);
+          const comments: Record<number, any[]> = {};
+          loaded.forEach((p) => {
+            const local = getLocalComments(p.id);
+            if (local.length) comments[p.id] = local;
+          });
+          dispatch(hydrateLocal({ savedIds, comments }));
+        }
+      });
+      setSavedPosts(getSavedPosts(currentUser.id));
+
       // Fetch followers & following
       const loadRelations = async () => {
         try {
@@ -95,9 +126,9 @@ export default function ProfilePage() {
   const handleFollowToggle = async (userId: string, isFollowing: boolean, username: string) => {
     try {
       if (isFollowing) {
-        await api.following.unfollow(username);
+        await api.following.unfollow(userId);
       } else {
-        await api.following.follow(username);
+        await api.following.follow(userId);
       }
       // Refresh relations
       if (currentUser) {
@@ -120,14 +151,14 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col gap-10 bg-white dark:bg-black text-black dark:text-white transition-colors duration-200">
+    <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col gap-10 text-black dark:text-white transition-colors duration-200 animate-fade-up">
       
       {/* ----------------- PROFILE HEADER ----------------- */}
       <header className="flex flex-col md:flex-row items-center md:items-start gap-8 md:gap-24 border-b border-zinc-200 dark:border-zinc-800 pb-10">
         {/* Profile Picture */}
         <div className="relative w-36 h-36 flex-shrink-0 cursor-pointer group">
-          <div className="w-full h-full rounded-full p-[3px] bg-gradient-to-tr from-yellow-500 via-red-500 to-purple-600">
-            <div className="bg-white dark:bg-black p-1 rounded-full w-full h-full">
+          <div className="w-full h-full rounded-full p-[3px] gradient-ring animate-gradient shadow-soft-md">
+            <div className="bg-background p-1 rounded-full w-full h-full">
               <img
                 src={currentUser.avatar}
                 alt={currentUser.username}
@@ -147,7 +178,7 @@ export default function ProfilePage() {
             <div className="flex gap-2 text-sm font-semibold select-none">
               <button
                 onClick={() => router.push("/settings")}
-                className="bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 active:opacity-80 px-4 py-1.5 rounded-lg transition cursor-pointer"
+                className="glass press px-5 py-2 rounded-xl transition cursor-pointer hover:shadow-soft"
               >
                 Редактировать профиль
               </button>
@@ -232,7 +263,7 @@ export default function ProfilePage() {
                   <div
                     key={post.id}
                     onClick={() => setSelectedPostId(post.id)}
-                    className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden"
+                    className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
                   >
                     <img src={post.image} alt="Grid thumbnail" className="w-full h-full object-cover transition duration-300 group-hover:scale-103" />
                     {/* Hover Overlay */}

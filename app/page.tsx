@@ -19,8 +19,16 @@ import {
   fetchFollowingPosts,
   toggleLikePost,
   addComment,
-  addPostFavorite
+  addPostFavorite,
+  deletePost,
+  hydrateLocal
 } from "./store/slices/postsSlice";
+import {
+  getSavedPosts,
+  toggleSavedPost,
+  getLocalComments,
+  addLocalComment
+} from "./services/localStore";
 import {
   fetchStories,
   viewStory,
@@ -56,17 +64,51 @@ export default function HomeFeed() {
   // Handle post commenting input states
   const [commentInputs, setCommentInputs] = useState<{ [key: number]: string }>({});
 
+  // Post options menu (⋯)
+  const [menuPostId, setMenuPostId] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const menuPost = posts.find((p) => p.id === menuPostId) || null;
+  const isOwnMenuPost = !!(menuPost && currentUser && menuPost.userId === currentUser.id);
+
+  const handleCopyLink = (postId: number) => {
+    const url = `${window.location.origin}/?post=${postId}`;
+    navigator.clipboard?.writeText(url).catch(() => {});
+    setCopied(true);
+    setTimeout(() => {
+      setCopied(false);
+      setMenuPostId(null);
+    }, 1000);
+  };
+
+  const handleDeletePost = (postId: number) => {
+    dispatch(deletePost(postId));
+    setMenuPostId(null);
+  };
+
   useEffect(() => {
     if (isLoggedIn) {
-      dispatch(fetchFollowingPosts({}));
+      dispatch(fetchFollowingPosts({})).then((action) => {
+        if (fetchFollowingPosts.fulfilled.match(action) && currentUser) {
+          const loaded = action.payload as { id: number }[];
+          const savedIds = getSavedPosts(currentUser.id).map((p) => p.id);
+          const comments: Record<number, any[]> = {};
+          loaded.forEach((p) => {
+            const local = getLocalComments(p.id);
+            if (local.length) comments[p.id] = local;
+          });
+          dispatch(hydrateLocal({ savedIds, comments }));
+        }
+      });
       dispatch(fetchStories());
-      
+
       // Fetch suggestions
       const loadSuggestions = async () => {
         try {
           const users = await api.user.getUsers({ pageSize: 5 });
-          const formatted = users.map((u: any, idx: number) => ({
+          const formatted = (users || []).map((u: any, idx: number) => ({
             id: u.id || u.userId || idx,
+            userId: u.id || u.userId || "",
             username: u.userName || u.username || "user",
             avatar: getFullImageUrl(u.avatar || u.imagePath) || "",
             subtitle: u.about || "Suggested for you",
@@ -84,7 +126,8 @@ export default function HomeFeed() {
       };
       loadSuggestions();
     }
-  }, [isLoggedIn, dispatch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn, dispatch, currentUser?.id]);
 
   const handleLike = (postId: number) => {
     dispatch(toggleLikePost(postId));
@@ -101,6 +144,20 @@ export default function HomeFeed() {
 
   const handleSave = (postId: number) => {
     dispatch(addPostFavorite(postId));
+    if (!currentUser) return;
+    const post = posts.find((p) => p.id === postId);
+    if (post) {
+      toggleSavedPost(currentUser.id, {
+        id: post.id,
+        userId: post.userId,
+        username: post.username,
+        avatar: post.avatar,
+        image: post.image,
+        caption: post.caption,
+        likes: post.likes,
+        time: post.time,
+      });
+    }
   };
 
   const handleAddComment = (postId: number, e: React.FormEvent) => {
@@ -108,7 +165,9 @@ export default function HomeFeed() {
     const text = commentInputs[postId];
     if (!text || !text.trim() || !currentUser) return;
 
-    dispatch(addComment({ postId, comment: text.trim(), username: currentUser.username }));
+    const comment = text.trim();
+    dispatch(addComment({ postId, comment, username: currentUser.username }));
+    addLocalComment(postId, { id: Date.now(), username: currentUser.username, text: comment });
     setCommentInputs({ ...commentInputs, [postId]: "" });
   };
 
@@ -117,26 +176,40 @@ export default function HomeFeed() {
     setActiveStory(story);
   };
 
+  // Auto-advance stories (like real Instagram), 5s each
+  useEffect(() => {
+    if (!activeStory) return;
+    const idx = stories.findIndex((s) => s.id === activeStory.id);
+    const timer = setTimeout(() => {
+      if (idx >= 0 && idx < stories.length - 1) {
+        handleViewStory(stories[idx + 1]);
+      } else {
+        setActiveStory(null);
+      }
+    }, 5000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStory, stories]);
+
   const handleFollowSuggestion = async (id: string | number) => {
     try {
       const sug = suggestions.find((s) => s.id === id);
-      if (sug) {
-        if (sug.followed) {
-          await api.following.unfollow(String(sug.username));
-        } else {
-          await api.following.follow(String(sug.username));
-        }
-        setSuggestions((prev) =>
-          prev.map((s) => (s.id === id ? { ...s, followed: !s.followed } : s))
-        );
+      if (!sug || !sug.userId) return;
+      if (sug.followed) {
+        await api.following.unfollow(sug.userId);
+      } else {
+        await api.following.follow(sug.userId);
       }
+      setSuggestions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, followed: !s.followed } : s))
+      );
     } catch (err) {
       console.error(err);
     }
   };
 
   return (
-    <div className="flex-1 flex max-w-[935px] mx-auto w-full px-4 md:py-8 justify-between gap-16 select-none bg-white dark:bg-black text-black dark:text-white transition-colors duration-200">
+    <div className="flex-1 flex max-w-[935px] mx-auto w-full px-4 md:py-8 justify-between gap-16 select-none text-black dark:text-white transition-colors duration-200">
       
       {/* Feed Area */}
       <div className="flex-1 max-w-[470px] mx-auto md:mx-0 flex flex-col gap-6">
@@ -183,10 +256,8 @@ export default function HomeFeed() {
                     className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer outline-none group"
                   >
                     <div
-                      className={`p-[2.5px] rounded-full transition-transform group-hover:scale-103 ${
-                        story.viewed
-                          ? "bg-zinc-200 dark:bg-zinc-800"
-                          : "bg-gradient-to-tr from-yellow-500 via-red-500 to-purple-600"
+                      className={`p-[2.5px] rounded-full transition-transform duration-200 group-hover:scale-110 ${
+                        story.viewed ? "bg-zinc-200 dark:bg-zinc-800" : "gradient-ring animate-gradient"
                       }`}
                     >
                       <div className="bg-white dark:bg-black p-[2.5px] rounded-full flex items-center justify-center">
@@ -232,28 +303,30 @@ export default function HomeFeed() {
             posts.map((post) => (
               <article
                 key={post.id}
-                className="bg-white dark:bg-black border border-zinc-200 dark:border-zinc-800 md:rounded-xl overflow-hidden flex flex-col w-full"
+                className="card lift md:rounded-3xl rounded-2xl overflow-hidden flex flex-col w-full animate-fade-up"
               >
                 {/* Header */}
                 <div className="flex items-center justify-between p-3">
                   <div className="flex items-center gap-3">
-                    <img
-                      src={post.avatar}
-                      alt={post.username}
-                      className="w-8 h-8 rounded-full object-cover border border-zinc-250 dark:border-zinc-900"
-                    />
+                    <Link href={post.userId ? `/u/${post.userId}` : "#"}>
+                      <img
+                        src={post.avatar}
+                        alt={post.username}
+                        className="w-8 h-8 rounded-full object-cover border border-zinc-250 dark:border-zinc-900"
+                      />
+                    </Link>
                     <div className="flex flex-col">
                       <div className="flex items-center gap-1 flex-wrap">
                         {post.collabUser ? (
                           <div className="flex items-center gap-1 text-sm font-semibold text-zinc-900 dark:text-white">
-                            <span className="cursor-pointer hover:text-zinc-500">{post.username}</span>
+                            <Link href={post.userId ? `/u/${post.userId}` : "#"} className="cursor-pointer hover:text-zinc-500">{post.username}</Link>
                             {post.isVerified && <VerifiedBadge />}
                             <span className="font-normal text-zinc-400 mx-0.5">and</span>
                             <span className="cursor-pointer hover:text-zinc-500">{post.collabUser}</span>
                           </div>
                         ) : (
                           <div className="flex items-center gap-1 text-sm font-semibold text-zinc-900 dark:text-white">
-                            <span className="cursor-pointer hover:text-zinc-500">{post.username}</span>
+                            <Link href={post.userId ? `/u/${post.userId}` : "#"} className="cursor-pointer hover:text-zinc-500">{post.username}</Link>
                             {post.isVerified && <VerifiedBadge />}
                           </div>
                         )}
@@ -266,7 +339,10 @@ export default function HomeFeed() {
                       )}
                     </div>
                   </div>
-                  <button className="text-zinc-650 dark:text-white p-1 hover:text-zinc-400">
+                  <button
+                    onClick={() => setMenuPostId(post.id)}
+                    className="text-zinc-650 dark:text-white p-1 hover:text-zinc-400 cursor-pointer"
+                  >
                     <MoreHorizontal className="w-5 h-5" />
                   </button>
                 </div>
@@ -296,7 +372,7 @@ export default function HomeFeed() {
                   {/* Big Heart Animation */}
                   {heartAnimPostId === post.id && (
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <Heart className="w-24 h-24 text-white fill-white drop-shadow-2xl animate-ping opacity-90 stroke-[1px]" />
+                      <Heart className="w-28 h-28 text-white fill-white drop-shadow-2xl animate-heart-burst stroke-[1px]" />
                     </div>
                   )}
                 </div>
@@ -504,8 +580,13 @@ export default function HomeFeed() {
 
           {/* Story Container */}
           <div className="relative w-full max-w-md h-[80vh] rounded-xl overflow-hidden shadow-2xl flex flex-col bg-zinc-950">
+            {/* Progress bar (auto-advance) */}
+            <div className="absolute top-2 left-3 right-3 z-20 h-0.5 bg-white/30 rounded overflow-hidden">
+              <div key={activeStory.id} className="h-full bg-white origin-left animate-reel-progress" style={{ animationDuration: "5s" }} />
+            </div>
+
             {/* Header info */}
-            <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/80 to-transparent z-10 flex items-center gap-3">
+            <div className="absolute top-0 left-0 right-0 p-4 pt-5 bg-gradient-to-b from-black/80 to-transparent z-10 flex items-center gap-3">
               <img
                 src={activeStory.avatar}
                 alt={activeStory.username}
@@ -520,6 +601,19 @@ export default function HomeFeed() {
               alt="Story"
               className="w-full h-full object-contain"
             />
+
+            {/* Bottom action bar: reply + like */}
+            <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent z-10 flex items-center gap-3">
+              <div className="flex-1 border border-white/40 rounded-full px-4 py-2.5 text-white/80 text-sm select-none">
+                Ответить {activeStory.username}...
+              </div>
+              <button
+                onClick={() => dispatch(likeStory(activeStory.id))}
+                className="text-white hover:scale-110 active:scale-90 transition"
+              >
+                <Heart className="w-7 h-7" />
+              </button>
+            </div>
           </div>
 
           {/* Next Story Arrow */}
@@ -535,6 +629,49 @@ export default function HomeFeed() {
           >
             <ChevronRight className="w-10 h-10" />
           </button>
+        </div>
+      )}
+
+      {/* ----------------- POST OPTIONS MENU ----------------- */}
+      {menuPost && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-60 flex items-center justify-center p-4"
+          onClick={() => setMenuPostId(null)}
+        >
+          <div
+            className="glass-strong w-full max-w-sm rounded-3xl overflow-hidden shadow-soft-lg flex flex-col divide-y divide-zinc-200 dark:divide-zinc-700/60 text-center animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handleDeletePost(menuPost.id)}
+                className="py-3.5 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Удалить
+              </button>
+            )}
+            {menuPost.userId && (
+              <Link
+                href={`/u/${menuPost.userId}`}
+                onClick={() => setMenuPostId(null)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Перейти к профилю
+              </Link>
+            )}
+            <button
+              onClick={() => handleCopyLink(menuPost.id)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {copied ? "Ссылка скопирована ✓" : "Скопировать ссылку"}
+            </button>
+            <button
+              onClick={() => setMenuPostId(null)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              Отмена
+            </button>
+          </div>
         </div>
       )}
     </div>

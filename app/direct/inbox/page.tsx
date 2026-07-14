@@ -14,7 +14,11 @@ import {
   Edit,
   Search,
   X,
-  Plus
+  Plus,
+  SmilePlus,
+  StickyNote,
+  Pin,
+  Trash2
 } from "lucide-react";
 import { AppDispatch, RootState } from "../../store/store";
 import {
@@ -32,6 +36,31 @@ import { ChatsListSkeleton } from "../../components/SkeletonLoader";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
 
+interface ChatNote {
+  id: number;
+  text: string;
+  color: string;
+  pinned: boolean;
+  createdAt: number;
+}
+
+// Soft note colors (iOS-style)
+const NOTE_COLORS = ["#FEF3C7", "#DBEAFE", "#FCE7F3", "#D1FAE5", "#EDE9FE", "#FFE4E6"];
+
+// Quick reactions (iMessage / Instagram style)
+const REACTIONS = ["❤️", "🔥", "😂", "😍", "👍", "👏", "😮"];
+
+// Emoji picker set
+const EMOJIS = [
+  "😀", "😂", "🥹", "😍", "😎", "🥳", "😭", "😅", "🤔", "🙄",
+  "😴", "🤩", "😇", "😜", "🤗", "🫶", "👍", "👏", "🙏", "💪",
+  "🔥", "✨", "⭐", "💯", "❤️", "🧡", "💛", "💚", "💙", "💜",
+  "🎉", "🎊", "🎁", "🌸", "🌈", "☀️", "🌙", "⚡", "💫", "🍀",
+];
+
+// Gradient "stickers" (sent as a message) — no external deps
+const STICKERS = ["💖", "🔥", "🎉", "😂", "😍", "👑", "🚀", "🌟", "🍕", "☕", "🐱", "🐶"];
+
 export default function InboxPage() {
   const dispatch = useDispatch<AppDispatch>();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
@@ -43,9 +72,90 @@ export default function InboxPage() {
   const [showCreateChatModal, setShowCreateChatModal] = useState(false);
   const [searchUsersResults, setSearchUsersResults] = useState<any[]>([]);
   const [userSearchText, setUserSearchText] = useState("");
-  
+
+  // Emoji / sticker picker + reactions
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [reactionMsgId, setReactionMsgId] = useState<number | null>(null);
+
+  // Chat notes (local, per-user)
+  const [showNotes, setShowNotes] = useState(false);
+  const [notes, setNotes] = useState<ChatNote[]>([]);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteColor, setNoteColor] = useState(NOTE_COLORS[0]);
+  const [noteSearch, setNoteSearch] = useState("");
+  const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ---- Notes persistence (localStorage per user) ----
+  const notesKey = currentUser ? `chat_notes_${currentUser.id}` : "chat_notes_guest";
+  useEffect(() => {
+    if (!currentUser) return;
+    try {
+      const raw = localStorage.getItem(notesKey);
+      setNotes(raw ? JSON.parse(raw) : []);
+    } catch {
+      setNotes([]);
+    }
+  }, [notesKey, currentUser]);
+
+  const persistNotes = (next: ChatNote[]) => {
+    setNotes(next);
+    try {
+      localStorage.setItem(notesKey, JSON.stringify(next));
+    } catch {
+      /* ignore quota errors */
+    }
+  };
+
+  const saveNote = () => {
+    const text = noteDraft.trim();
+    if (!text) return;
+    if (editingNoteId != null) {
+      persistNotes(notes.map((n) => (n.id === editingNoteId ? { ...n, text, color: noteColor } : n)));
+      setEditingNoteId(null);
+    } else {
+      persistNotes([{ id: Date.now(), text, color: noteColor, pinned: false, createdAt: Date.now() }, ...notes]);
+    }
+    setNoteDraft("");
+  };
+
+  const editNote = (n: ChatNote) => {
+    setEditingNoteId(n.id);
+    setNoteDraft(n.text);
+    setNoteColor(n.color);
+  };
+
+  const togglePinNote = (id: number) =>
+    persistNotes(notes.map((n) => (n.id === id ? { ...n, pinned: !n.pinned } : n)));
+
+  const deleteNote = (id: number) => {
+    persistNotes(notes.filter((n) => n.id !== id));
+    if (editingNoteId === id) {
+      setEditingNoteId(null);
+      setNoteDraft("");
+    }
+  };
+
+  const visibleNotes = [...notes]
+    .filter((n) => n.text.toLowerCase().includes(noteSearch.trim().toLowerCase()))
+    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.createdAt - a.createdAt);
+
+  // ---- Reactions (backend-backed) ----
+  const handleReact = (messageId: number, reaction: string) => {
+    if (!selectedChatId) return;
+    dispatch(reactToMessage({ messageId, reaction, chatId: selectedChatId }));
+    setReactionMsgId(null);
+  };
+
+  // ---- Emoji / sticker send ----
+  const insertEmoji = (emoji: string) => setInputText((t) => t + emoji);
+  const sendSticker = (sticker: string) => {
+    if (!selectedChatId || !currentUser) return;
+    dispatch(sendMessage({ chatId: selectedChatId, messageText: sticker, currentUserId: currentUser.id }));
+    setShowEmoji(false);
+  };
 
   // Auto scroll messages to bottom
   useEffect(() => {
@@ -148,10 +258,10 @@ export default function InboxPage() {
   );
 
   return (
-    <div className="flex-1 flex bg-white dark:bg-black h-[calc(100vh-64px)] md:h-screen transition-colors duration-200">
-      
+    <div className="flex-1 flex h-[calc(100vh-64px)] md:h-screen transition-colors duration-200">
+
       {/* ----------------- CHATS SIDEBAR ----------------- */}
-      <div className={`w-full md:w-96 border-r border-zinc-200 dark:border-zinc-800 flex flex-col ${selectedChatId !== null ? "hidden md:flex" : "flex"}`}>
+      <div className={`w-full md:w-96 glass flex flex-col ${selectedChatId !== null ? "hidden md:flex" : "flex"}`}>
         
         {/* Header */}
         <div className="flex items-center justify-between p-5 pb-3">
@@ -244,11 +354,11 @@ export default function InboxPage() {
       </div>
 
       {/* ----------------- ACTIVE CHAT VIEWPORT ----------------- */}
-      <div className={`flex-1 flex flex-col h-full bg-white dark:bg-black ${selectedChatId === null ? "hidden md:flex" : "flex"}`}>
+      <div className={`flex-1 flex flex-col h-full ${selectedChatId === null ? "hidden md:flex" : "flex"}`}>
         {activeChat ? (
           <>
             {/* Header info */}
-            <div className="flex items-center justify-between p-4 px-6 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-black/80 backdrop-blur-md sticky top-0 z-10 text-left">
+            <div className="flex items-center justify-between p-4 px-6 glass sticky top-0 z-10 text-left">
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setSelectedChatId(null)}
@@ -271,11 +381,21 @@ export default function InboxPage() {
               </div>
 
               {/* Call & delete actions */}
-              <div className="flex items-center gap-4 text-zinc-800 dark:text-zinc-200">
-                <button className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full">
+              <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200">
+                <button
+                  onClick={() => setShowNotes(true)}
+                  title="Заметки"
+                  className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full press cursor-pointer relative"
+                >
+                  <StickyNote className="w-5 h-5" />
+                  {notes.length > 0 && (
+                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full gradient-bg" />
+                  )}
+                </button>
+                <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full press cursor-pointer">
                   <Phone className="w-5 h-5" />
                 </button>
-                <button className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full">
+                <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full press cursor-pointer">
                   <Video className="w-5 h-5" />
                 </button>
                 <button
@@ -295,7 +415,7 @@ export default function InboxPage() {
                 return (
                   <div
                     key={msg.id}
-                    className={`flex gap-3 max-w-[70%] ${isMe ? "self-end flex-row-reverse" : "self-start"}`}
+                    className={`group flex gap-3 max-w-[78%] ${isMe ? "self-end flex-row-reverse" : "self-start"}`}
                   >
                     {!isMe && (
                       <img
@@ -304,23 +424,67 @@ export default function InboxPage() {
                         className="w-7 h-7 rounded-full object-cover self-end mb-1"
                       />
                     )}
-                    <div className="flex flex-col gap-1 text-left">
-                      {msg.image ? (
-                        <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800">
-                          <img src={msg.image} alt="Attachment" className="max-w-full h-auto object-cover max-h-60" />
+                    <div className="flex flex-col gap-1 text-left min-w-0">
+                      <div className="relative">
+                        {msg.image ? (
+                          <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-soft">
+                            <img src={msg.image} alt="Attachment" className="max-w-full h-auto object-cover max-h-60" />
+                          </div>
+                        ) : (
+                          <div
+                            className={`rounded-2xl px-4 py-2.5 text-sm select-text break-words shadow-soft ${
+                              isMe
+                                ? "btn-grad rounded-br-md"
+                                : "glass rounded-bl-md text-zinc-900 dark:text-zinc-100"
+                            }`}
+                          >
+                            {msg.text}
+                          </div>
+                        )}
+
+                        {/* Reaction badge on the bubble */}
+                        {msg.reaction && (
+                          <span className={`absolute -bottom-2.5 ${isMe ? "left-1" : "right-1"} glass-strong rounded-full text-xs px-1.5 py-0.5 shadow-soft animate-pop-in`}>
+                            {msg.reaction}
+                          </span>
+                        )}
+
+                        {/* Hover actions: react + delete */}
+                        <div className={`absolute top-1/2 -translate-y-1/2 ${isMe ? "right-full mr-2" : "left-full ml-2"} flex items-center gap-1 opacity-0 group-hover:opacity-100 transition`}>
+                          <button
+                            onClick={() => setReactionMsgId(reactionMsgId === msg.id ? null : msg.id)}
+                            className="p-1.5 glass rounded-full press hover:shadow-soft cursor-pointer"
+                            title="Реакция"
+                          >
+                            <SmilePlus className="w-4 h-4" />
+                          </button>
+                          {isMe && (
+                            <button
+                              onClick={() => dispatch(deleteMessage({ messageId: msg.id, chatId: activeChat.id }))}
+                              className="p-1.5 glass rounded-full press hover:shadow-soft text-red-500 cursor-pointer"
+                              title="Удалить"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
-                      ) : (
-                        <div
-                          className={`rounded-2xl px-4 py-2.5 text-sm select-text break-words ${
-                            isMe
-                              ? "bg-blue-500 text-white"
-                              : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                          }`}
-                        >
-                          {msg.text}
-                        </div>
-                      )}
-                      <span className={`text-[9px] text-zinc-400 select-none ${isMe ? "text-right" : "text-left"}`}>
+
+                        {/* Reaction picker popover */}
+                        {reactionMsgId === msg.id && (
+                          <div className={`absolute z-20 -top-11 ${isMe ? "right-0" : "left-0"} glass-strong rounded-full px-2 py-1.5 flex items-center gap-1 shadow-soft-lg animate-pop-in`}>
+                            {REACTIONS.map((r) => (
+                              <button
+                                key={r}
+                                onClick={() => handleReact(msg.id, r)}
+                                className="text-lg leading-none hover:scale-125 transition-transform cursor-pointer"
+                              >
+                                {r}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <span className={`text-[9px] text-zinc-400 select-none ${isMe ? "text-right" : "text-left"} ${msg.reaction ? "mt-2" : ""}`}>
                         {msg.time}
                       </span>
                     </div>
@@ -331,9 +495,38 @@ export default function InboxPage() {
             </div>
 
             {/* Input Bar */}
-            <form onSubmit={handleSendMessage} className="p-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black">
-              <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-full px-4 py-2.5">
-                <button type="button" className="text-zinc-700 dark:text-zinc-300 hover:text-zinc-550 cursor-pointer">
+            <form onSubmit={handleSendMessage} className="p-4">
+              {showEmoji && (
+                <div className="mb-3 glass-strong rounded-3xl p-3 shadow-soft-lg animate-in slide-in-from-bottom-2 duration-200 max-h-64 overflow-y-auto no-scrollbar">
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-2 px-1">Стикеры</div>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {STICKERS.map((s) => (
+                      <button key={s} type="button" onClick={() => sendSticker(s)} className="text-3xl press hover:scale-110 transition">
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-2 px-1">Эмодзи</div>
+                  <div className="grid grid-cols-10 gap-1">
+                    {EMOJIS.map((e) => (
+                      <button
+                        key={e}
+                        type="button"
+                        onClick={() => insertEmoji(e)}
+                        className="text-xl p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 hover:scale-110 transition"
+                      >
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center gap-4 glass rounded-full px-4 py-2.5 shadow-soft">
+                <button
+                  type="button"
+                  onClick={() => setShowEmoji((v) => !v)}
+                  className={`cursor-pointer transition press ${showEmoji ? "text-[var(--accent-2)]" : "text-zinc-700 dark:text-zinc-300 hover:text-zinc-550"}`}
+                >
                   <Smile className="w-5 h-5" />
                 </button>
                 <input
@@ -396,10 +589,103 @@ export default function InboxPage() {
         )}
       </div>
 
+      {/* ----------------- CHAT NOTES DRAWER ----------------- */}
+      {showNotes && (
+        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setShowNotes(false)}>
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div
+            className="relative glass-strong w-full max-w-sm h-full flex flex-col shadow-soft-lg animate-in slide-in-from-right duration-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-[var(--border)]">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                <StickyNote className="w-5 h-5" /> Заметки
+              </h3>
+              <button onClick={() => setShowNotes(false)} className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-full cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Composer */}
+            <div className="p-4 flex flex-col gap-3 border-b border-[var(--border)]">
+              <textarea
+                rows={3}
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                placeholder={editingNoteId != null ? "Редактировать заметку..." : "Новая заметка..."}
+                className="w-full rounded-2xl px-3 py-2.5 text-sm resize-none outline-none text-zinc-900 shadow-soft"
+                style={{ background: noteColor }}
+              />
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {NOTE_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setNoteColor(c)}
+                      className={`w-6 h-6 rounded-full press border-2 transition ${noteColor === c ? "border-zinc-800 dark:border-white scale-110" : "border-transparent"}`}
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+                <button
+                  onClick={saveNote}
+                  disabled={!noteDraft.trim()}
+                  className="btn-grad px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
+                >
+                  {editingNoteId != null ? "Сохранить" : "Добавить"}
+                </button>
+              </div>
+            </div>
+
+            {/* Search */}
+            <div className="px-4 py-3">
+              <div className="relative flex items-center">
+                <Search className="absolute left-3 w-4 h-4 text-zinc-400" />
+                <input
+                  value={noteSearch}
+                  onChange={(e) => setNoteSearch(e.target.value)}
+                  placeholder="Поиск по заметкам"
+                  className="w-full glass rounded-xl pl-9 pr-3 py-2 text-sm outline-none text-zinc-900 dark:text-white"
+                />
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-3 no-scrollbar">
+              {visibleNotes.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center text-zinc-400 gap-2 py-10">
+                  <StickyNote className="w-9 h-9 stroke-[1.4px]" />
+                  <span className="text-sm">{noteSearch ? "Ничего не найдено." : "Заметок пока нет."}</span>
+                </div>
+              ) : (
+                visibleNotes.map((n) => (
+                  <div key={n.id} className="rounded-2xl p-3 shadow-soft text-zinc-900 relative group" style={{ background: n.color }}>
+                    {n.pinned && <Pin className="absolute top-2 right-2 w-3.5 h-3.5 fill-zinc-700 text-zinc-700" />}
+                    <p className="text-sm whitespace-pre-wrap break-words pr-5">{n.text}</p>
+                    <div className="flex items-center gap-3 mt-2 text-zinc-600 text-xs">
+                      <button onClick={() => togglePinNote(n.id)} className="hover:text-zinc-900 cursor-pointer flex items-center gap-1">
+                        <Pin className="w-3.5 h-3.5" /> {n.pinned ? "Открепить" : "Закрепить"}
+                      </button>
+                      <button onClick={() => editNote(n)} className="hover:text-zinc-900 cursor-pointer flex items-center gap-1">
+                        <Edit className="w-3.5 h-3.5" /> Изменить
+                      </button>
+                      <button onClick={() => deleteNote(n.id)} className="hover:text-red-600 cursor-pointer flex items-center gap-1 ml-auto">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ----------------- CREATE CHAT DIALOG MODAL ----------------- */}
       {showCreateChatModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-2xl w-full max-w-md flex flex-col">
+          <div className="glass-strong rounded-3xl overflow-hidden shadow-soft-lg w-full max-w-md flex flex-col animate-pop-in">
             <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
               <h3 className="font-bold text-base">Новое сообщение</h3>
               <button

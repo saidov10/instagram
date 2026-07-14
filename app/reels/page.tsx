@@ -71,9 +71,9 @@ export default function ReelsPage() {
         media: getFullImageUrl(p.filePath || p.imagePath || (p.images && p.images[0]) || p.image) || "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
         caption: p.content || p.title || "",
         musicName: `Original Audio - ${p.userName || "creator"}`,
-        likesCount: p.likeCount || p.likes || 0,
-        commentsCount: p.comments?.length || 0,
-        isLiked: p.isLikedByCurrentUser || p.isLiked || false,
+        likesCount: typeof p.likeCount === "number" ? p.likeCount : (Array.isArray(p.likes) ? p.likes.length : 0),
+        commentsCount: typeof p.commentCount === "number" ? p.commentCount : (p.comments?.length || 0),
+        isLiked: Array.isArray(p.likes) && currentUser ? p.likes.includes(currentUser.id) : (p.isLikedByCurrentUser || p.isLiked || false),
         isSaved: p.isSavedByCurrentUser || p.isSaved || false,
         comments: (p.comments || []).map((c: any) => ({
           id: c.id || c.commentId,
@@ -186,13 +186,13 @@ export default function ReelsPage() {
   }
 
   return (
-    <div className="flex-1 flex justify-center items-center py-4 md:py-8 h-[calc(100vh-64px)] md:h-screen bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
+    <div className="flex-1 flex justify-center items-center py-4 md:py-8 h-[calc(100vh-64px)] md:h-screen transition-colors duration-200">
       
       {/* Reels Core Layout container */}
       <div className="flex gap-6 max-h-[85vh] h-full items-center">
         
         {/* Reel Mobile Container */}
-        <div className="relative aspect-[9/16] w-full max-w-[400px] h-full bg-black rounded-xl overflow-hidden shadow-2xl flex flex-col">
+        <div className="relative aspect-[9/16] w-full max-w-[400px] h-full bg-black rounded-3xl overflow-hidden shadow-soft-lg flex flex-col ring-1 ring-white/10">
           
           {/* Vertical scroll container */}
           <div
@@ -327,7 +327,7 @@ export default function ReelsPage() {
       {showComments && (
         <div className="fixed inset-0 md:relative md:inset-auto bg-black/60 backdrop-blur-sm md:bg-transparent md:backdrop-blur-none flex md:block items-end justify-center z-50 h-full md:h-auto select-none pointer-events-auto">
           {/* Modal layout for mobile, simple card for desktop */}
-          <div className="bg-white dark:bg-zinc-900 w-full md:w-[350px] h-[70vh] md:h-[85vh] rounded-t-2xl md:rounded-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-250">
+          <div className="glass-strong w-full md:w-[350px] h-[70vh] md:h-[85vh] rounded-t-3xl md:rounded-3xl flex flex-col shadow-soft-lg overflow-hidden animate-in slide-in-from-bottom duration-250">
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-zinc-150 dark:border-zinc-800">
               <h3 className="font-bold text-base text-zinc-900 dark:text-white">Комментарии</h3>

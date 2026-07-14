@@ -1,8 +1,48 @@
 @import "tailwindcss";
 
+/* Make the `dark:` variant follow the .dark class that AppContext toggles
+   (Tailwind v4 defaults to prefers-color-scheme; we want manual control). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Base surfaces */
+  --background: #f4f4fb;
+  --foreground: #0e0f13;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #ffffff;
+  --surface-2: rgba(255, 255, 255, 0.55);
+  --muted: #6b7280;
+  --border: rgba(17, 17, 26, 0.08);
+  --border-strong: rgba(17, 17, 26, 0.14);
+
+  /* Accent gradient (unique violet → fuchsia → amber) */
+  --accent-1: #7c3aed;
+  --accent-2: #ec4899;
+  --accent-3: #f59e0b;
+  --accent: #7c3aed;
+  --accent-blue: #3b82f6;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(16, 16, 32, 0.06), 0 2px 8px rgba(16, 16, 32, 0.05);
+  --shadow-md: 0 4px 16px rgba(16, 16, 32, 0.08), 0 12px 40px rgba(16, 16, 32, 0.08);
+  --shadow-lg: 0 8px 30px rgba(16, 16, 32, 0.12), 0 24px 70px rgba(16, 16, 32, 0.14);
+  --glow: 0 0 0 1px rgba(124, 58, 237, 0.18), 0 8px 30px rgba(124, 58, 237, 0.22);
+}
+
+.dark {
+  --background: #07070c;
+  --foreground: #f5f5f7;
+  --surface: rgba(22, 22, 30, 0.62);
+  --surface-solid: #101017;
+  --surface-2: rgba(30, 30, 42, 0.5);
+  --muted: #9aa0ac;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 18px rgba(0, 0, 0, 0.5), 0 14px 44px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 10px 34px rgba(0, 0, 0, 0.6), 0 28px 80px rgba(0, 0, 0, 0.7);
+  --glow: 0 0 0 1px rgba(236, 72, 153, 0.28), 0 10px 40px rgba(124, 58, 237, 0.35);
 }
 
 @theme inline {
@@ -13,62 +53,185 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #000000;
-    --foreground: #ffffff;
+  :root:not(.dark):not(.light) {
+    color-scheme: dark;
   }
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
   color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--background);
+  /* Soft aurora glows for depth */
+  background-image:
+    radial-gradient(1100px 700px at 12% -8%, rgba(124, 58, 237, 0.14), transparent 60%),
+    radial-gradient(900px 600px at 100% 0%, rgba(236, 72, 153, 0.12), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(59, 130, 246, 0.1), transparent 60%);
+  background-attachment: fixed;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
+
+.dark body {
+  background-image:
+    radial-gradient(1100px 700px at 10% -10%, rgba(124, 58, 237, 0.22), transparent 60%),
+    radial-gradient(900px 600px at 100% 0%, rgba(236, 72, 153, 0.16), transparent 55%),
+    radial-gradient(1000px 800px at 50% 120%, rgba(59, 130, 246, 0.12), transparent 62%);
+}
+
+/* ============ DESIGN SYSTEM UTILITIES ============ */
+
+/* Frosted glass panel */
+.glass {
+  background: var(--surface);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--border);
+}
+.glass-strong {
+  background: var(--surface-solid);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--border);
+}
+
+/* Elevation helpers */
+.shadow-soft { box-shadow: var(--shadow-sm); }
+.shadow-soft-md { box-shadow: var(--shadow-md); }
+.shadow-soft-lg { box-shadow: var(--shadow-lg); }
+
+/* Card */
+.card {
+  background: var(--surface);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: var(--shadow-md);
+}
+
+/* Gradient text + brand */
+.gradient-text {
+  background: linear-gradient(110deg, var(--accent-1), var(--accent-2) 55%, var(--accent-3));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.gradient-bg {
+  background: linear-gradient(120deg, var(--accent-1), var(--accent-2) 50%, var(--accent-3));
+}
+
+/* Gradient ring (stories / avatars) */
+.gradient-ring {
+  background: conic-gradient(from 210deg, var(--accent-3), var(--accent-2), var(--accent-1), var(--accent-3));
+}
+
+/* Primary button */
+.btn-grad {
+  background: linear-gradient(120deg, var(--accent-1), var(--accent-2));
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.35);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+.btn-grad:hover { filter: brightness(1.07); box-shadow: 0 10px 28px rgba(124, 58, 237, 0.45); }
+.btn-grad:active { transform: scale(0.97); }
+
+/* Micro-interactions */
+.press { transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1); }
+.press:active { transform: scale(0.92); }
+.lift { transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease; }
+.lift:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+.hover-glow { transition: box-shadow 0.25s ease, transform 0.2s ease; }
+.hover-glow:hover { box-shadow: var(--glow); }
+
+/* ============ ANIMATIONS ============ */
 
 /* Hide scrollbars */
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-/* Audio marquee scrolling */
 @keyframes marquee {
-  0% {
-    transform: translate3d(100%, 0, 0);
-  }
-  100% {
-    transform: translate3d(-100%, 0, 0);
-  }
+  0% { transform: translate3d(100%, 0, 0); }
+  100% { transform: translate3d(-100%, 0, 0); }
 }
-.animate-marquee {
-  animation: marquee 12s linear infinite;
-}
+.animate-marquee { animation: marquee 12s linear infinite; }
 
-/* Spin slow */
 @keyframes spin-slow {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
-.animate-spin-slow {
-  animation: spin-slow 8s linear infinite;
+.animate-spin-slow { animation: spin-slow 8s linear infinite; }
+
+@keyframes reel-progress {
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+.animate-reel-progress { animation: reel-progress 15s linear infinite; transform-origin: left; }
+
+/* Fade / slide up entrance */
+@keyframes fade-up {
+  0% { opacity: 0; transform: translateY(14px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up { animation: fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes pop-in {
+  0% { opacity: 0; transform: scale(0.9); }
+  60% { transform: scale(1.03); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.animate-pop-in { animation: pop-in 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+/* Heart burst */
+@keyframes heart-burst {
+  0% { opacity: 0; transform: scale(0.3); }
+  35% { opacity: 1; transform: scale(1.15); }
+  70% { transform: scale(0.95); }
+  100% { opacity: 0; transform: scale(1.1); }
+}
+.animate-heart-burst { animation: heart-burst 0.9s ease-out forwards; }
+
+/* Floating (subtle) */
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.animate-floaty { animation: floaty 6s ease-in-out infinite; }
+
+/* Shimmer skeleton */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(130, 130, 150, 0.08) 0px,
+    rgba(130, 130, 150, 0.18) 120px,
+    rgba(130, 130, 150, 0.08) 240px
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+.dark .shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0px,
+    rgba(255, 255, 255, 0.1) 120px,
+    rgba(255, 255, 255, 0.04) 240px
+  );
 }
 
-/* Reel progress bar */
-@keyframes reel-progress {
-  0% {
-    transform: scaleX(0);
-  }
-  100% {
-    transform: scaleX(1);
-  }
+/* Gradient border pill (active nav / chips) */
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
 }
-.animate-reel-progress {
-  animation: reel-progress 15s linear infinite;
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-shift 4s linear infinite;
 }
