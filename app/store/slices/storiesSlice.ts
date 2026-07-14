@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
-import { api } from "../../services/api";
+import { api, getFullImageUrl } from "../../services/api";
 
 export interface Story {
   id: number;
@@ -29,8 +29,8 @@ const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf37
 const formatBackendStory = (s: any): Story => ({
   id: s.id || s.storyId,
   username: s.userName || s.username || s.viewerDto?.userName || "user",
-  avatar: s.userAvatar || s.viewerDto?.avatar || DEFAULT_AVATAR,
-  image: s.fileName || s.imagePath || s.image || DEFAULT_AVATAR,
+  avatar: getFullImageUrl(s.userAvatar || s.viewerDto?.avatar) || DEFAULT_AVATAR,
+  image: getFullImageUrl(s.fileName || s.imagePath || s.image) || DEFAULT_AVATAR,
   viewed: s.isViewed || false,
   userId: s.userId || "",
   likes: s.viewerDto?.viewLike || 0,

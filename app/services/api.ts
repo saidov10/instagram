@@ -1,9 +1,20 @@
+import axios, { Method } from "axios";
+
 /**
  * API Service Client for Instagram Backend
  * Base URL: https://instaback-cw0j.onrender.com
  */
 
-const BASE_URL = "http://localhost:5000";
+export const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+export function getFullImageUrl(path: string | null | undefined): string {
+  if (!path) return "";
+  if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) {
+    return path;
+  }
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return `${BASE_URL}${cleanPath}`;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -37,32 +48,39 @@ export function setStoredToken(token: string | null): void {
   }
 }
 
-// Generic Request Wrapper
+// Generic Request Wrapper using Axios
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: {
+    method?: string;
+    body?: any;
+    headers?: any;
+  } = {}
 ): Promise<T> {
   const token = getStoredToken();
-  const headers = new Headers(options.headers || {});
+  const headers = { ...options.headers };
 
   // Add authorization header if token exists
   if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   // Set Content-Type to application/json by default, unless it's FormData
-  if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
+  const isFormData = options.body instanceof FormData;
+  if (!isFormData && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
   }
 
   const url = `${BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
-  const config = {
-    ...options,
-    headers,
-  };
 
   try {
-    const response = await fetch(url, config);
+    const response = await axios({
+      url,
+      method: (options.method || "GET") as Method,
+      data: options.body,
+      headers,
+      validateStatus: () => true,
+    });
 
     if (response.status === 401) {
       // Clear token on unauthorized
@@ -85,38 +103,22 @@ async function request<T>(
       throw new ApiError(404, "Requested resource not found.");
     }
 
-    if (!response.ok) {
-      let errData;
-      try {
-        errData = await response.json();
-      } catch {
-        // Response is not JSON
-      }
-      const errorMsg = errData?.errors?.[0] || errData?.message || `Request failed with status ${response.status}`;
-      throw new ApiError(response.status, errorMsg, errData?.errors);
+    const result = response.data;
+
+    if (response.status < 200 || response.status >= 300) {
+      const errorMsg = result?.errors?.[0] || result?.message || `Request failed with status ${response.status}`;
+      throw new ApiError(response.status, errorMsg, result?.errors);
     }
 
-    // Handle responses
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      const result = await response.json();
-      // Swagger responses are wrapped: { data: T, errors: string[], statusCode: number }
-      // Sometimes it is direct. We handle both:
-      if (result && typeof result === "object" && "statusCode" in result) {
-        if (result.errors && result.errors.length > 0) {
-          throw new ApiError(result.statusCode || 400, result.errors[0], result.errors);
-        }
-        return result.data as T;
+    // Swagger responses are wrapped: { data: T, errors: string[], statusCode: number }
+    // Sometimes it is direct. We handle both:
+    if (result && typeof result === "object" && "statusCode" in result) {
+      if (result.errors && result.errors.length > 0) {
+        throw new ApiError(result.statusCode || 400, result.errors[0], result.errors);
       }
-      return result as T;
+      return result.data as T;
     }
-
-    const text = await response.text();
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      return text as unknown as T;
-    }
+    return result as T;
   } catch (err: any) {
     if (err instanceof ApiError) {
       throw err;
@@ -125,6 +127,7 @@ async function request<T>(
     throw new ApiError(502, err.message || "Network error. Please check your connection.");
   }
 }
+
 
 // API Endpoints Mapping
 export const api = {

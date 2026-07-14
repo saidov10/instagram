@@ -17,6 +17,7 @@ import {
 import { AppDispatch, RootState } from "../store/store";
 import { fetchReels, toggleLikePost, addComment, addPostFavorite } from "../store/slices/postsSlice";
 import { useApp } from "../context/AppContext";
+import { getFullImageUrl } from "../services/api";
 
 interface ReelComment {
   id: number;
@@ -66,8 +67,8 @@ export default function ReelsPage() {
       const formatted: Reel[] = backendReels.map((p: any) => ({
         id: p.id || p.postId,
         creator: p.userName || p.username || "creator",
-        avatar: p.userAvatar || p.userImage || DEFAULT_AVATAR,
-        media: p.filePath || p.imagePath || p.image || "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
+        avatar: getFullImageUrl(p.userAvatar || p.userImage) || DEFAULT_AVATAR,
+        media: getFullImageUrl(p.filePath || p.imagePath || (p.images && p.images[0]) || p.image) || "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
         caption: p.content || p.title || "",
         musicName: `Original Audio - ${p.userName || "creator"}`,
         likesCount: p.likeCount || p.likes || 0,
@@ -77,7 +78,7 @@ export default function ReelsPage() {
         comments: (p.comments || []).map((c: any) => ({
           id: c.id || c.commentId,
           username: c.userName || c.username || "commenter",
-          avatar: c.userAvatar || DEFAULT_AVATAR,
+          avatar: getFullImageUrl(c.userAvatar) || DEFAULT_AVATAR,
           text: c.comment || c.text || "",
           likes: 0,
           time: "Just now",
