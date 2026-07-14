@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import { api, getFullImageUrl } from "../../services/api";
 export interface Comment {
   id: number;
+  userId: string;
   username: string;
   text: string;
 }
@@ -18,9 +19,17 @@ export interface Post {
   time: string;
   isLiked: boolean;
   isSaved: boolean;
+  allowComments: boolean;
   comments: Comment[];
   collabUser?: string;
   isVerified?: boolean;
+}
+
+export interface SavedAudio {
+  audioId: string;
+  title: string;
+  artist: string;
+  audioUrl: string;
 }
 
 interface PostsState {
@@ -28,6 +37,7 @@ interface PostsState {
   reels: any[];
   myPosts: Post[];
   savedPosts: Post[];
+  savedAudios: SavedAudio[];
   loading: boolean;
   error: string | null;
 }
@@ -37,6 +47,7 @@ const initialState: PostsState = {
   reels: [],
   myPosts: [],
   savedPosts: [],
+  savedAudios: [],
   loading: false,
   error: null,
 };
@@ -50,7 +61,7 @@ export const formatBackendPost = (p: any): Post => {
     id: p.id || p.postId,
     userId: p.userId || p.userProfileId || "",
     username: p.userName || p.username || "user",
-    avatar: getFullImageUrl(p.userAvatar || p.userImage) || DEFAULT_AVATAR,
+    avatar: getFullImageUrl(p.userAvatar || p.userImage),
     location: p.locationName || p.location || "",
     image: getFullImageUrl((p.images && p.images[0]) || p.filePath || p.imagePath || p.image) || DEFAULT_AVATAR,
     caption: p.content || p.title || "",
@@ -59,8 +70,11 @@ export const formatBackendPost = (p: any): Post => {
     // Backend now returns these directly on the post object, based on the JWT-authenticated user.
     isLiked: !!p.isLiked,
     isSaved: !!p.isSaved,
+    // Comments are open unless the author explicitly disabled them.
+    allowComments: p.allowComments !== false,
     comments: (p.comments || []).map((c: any) => ({
       id: c.id || c.commentId,
+      userId: c.userId || "",
       username: c.userName || c.username || "commenter",
       text: c.comment || c.text || "",
     })),
@@ -127,10 +141,53 @@ export const fetchReels = createAsyncThunk(
   "posts/fetchReels",
   async (params: { pageNumber?: number; pageSize?: number } = {}, { rejectWithValue }) => {
     try {
-      const list = await api.post.getReels(params.pageNumber, params.pageSize);
-      return list; // Return reels as-is (we'll format in component or thunk)
+      // The trending feed is the primary source; fall back to the plain reels list if it is unavailable.
+      let list;
+      try {
+        list = await api.post.getTrendingReels();
+      } catch {
+        list = await api.post.getReels(params.pageNumber, params.pageSize);
+      }
+      return list; // Raw reels — formatted in the Reels page (it carries audio/video-specific fields).
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load reels.");
+    }
+  }
+);
+
+export const fetchSavedAudios = createAsyncThunk(
+  "posts/fetchSavedAudios",
+  async (_, { rejectWithValue }) => {
+    try {
+      const list = await api.post.getSavedAudios();
+      return (list || []).map((a: any): SavedAudio => ({
+        audioId: String(a.audioId ?? a.id ?? ""),
+        title: a.title || "Оригинальный звук",
+        artist: a.artist || "",
+        audioUrl: getFullImageUrl(a.audioUrl || a.url),
+      }));
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to load saved audios.");
+    }
+  }
+);
+
+export const saveAudio = createAsyncThunk(
+  "posts/saveAudio",
+  async (
+    audio: { audioId: string; title: string; artist: string; audioUrl: string },
+    { dispatch, rejectWithValue }
+  ) => {
+    try {
+      await api.post.saveAudio(audio.audioId, {
+        title: audio.title,
+        artist: audio.artist,
+        audioUrl: audio.audioUrl,
+      });
+      dispatch(fetchSavedAudios());
+      return audio;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to save audio.");
     }
   }
 );
@@ -151,6 +208,34 @@ export const createPost = createAsyncThunk(
   }
 );
 
+export const createReel = createAsyncThunk(
+  "posts/createReel",
+  async (
+    data: { file: File; caption?: string; audioId?: string; audioName?: string; audioArtist?: string },
+    { dispatch, rejectWithValue }
+  ) => {
+    try {
+      const res = await api.post.addReel(data);
+      dispatch(fetchReels({}));
+      return res;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to upload reel.");
+    }
+  }
+);
+
+export const togglePostComments = createAsyncThunk(
+  "posts/toggleComments",
+  async ({ postId, allowComments }: { postId: number; allowComments: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.toggleComments(postId, allowComments);
+      return { postId, allowComments };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle comments.");
+    }
+  }
+);
+
 export const toggleLikePost = createAsyncThunk(
   "posts/toggleLike",
   async (postId: number, { rejectWithValue }) => {
@@ -165,10 +250,10 @@ export const toggleLikePost = createAsyncThunk(
 
 export const addComment = createAsyncThunk(
   "posts/addComment",
-  async (data: { postId: number; comment: string; username: string }, { rejectWithValue }) => {
+  async (data: { postId: number; comment: string; username: string; userId: string }, { rejectWithValue }) => {
     try {
       await api.post.addComment({ postId: data.postId, comment: data.comment });
-      return { postId: data.postId, comment: data.comment, username: data.username };
+      return { postId: data.postId, comment: data.comment, username: data.username, userId: data.userId };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to add comment.");
     }
@@ -239,6 +324,19 @@ const postsSlice = createSlice({
         state.savedPosts = action.payload;
       })
 
+      // Fetch Saved Audios
+      .addCase(fetchSavedAudios.fulfilled, (state, action: PayloadAction<SavedAudio[]>) => {
+        state.savedAudios = action.payload;
+      })
+
+      // Toggle Comments (author only)
+      .addCase(togglePostComments.fulfilled, (state, action) => {
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === action.payload.postId);
+          if (post) post.allowComments = action.payload.allowComments;
+        });
+      })
+
       // Local mutations to speed up user response
       // Toggle Like
       .addCase(toggleLikePost.fulfilled, (state, action: PayloadAction<number>) => {
@@ -258,6 +356,7 @@ const postsSlice = createSlice({
           if (post) {
             post.comments.push({
               id: Date.now(),
+              userId: action.payload.userId,
               username: action.payload.username,
               text: action.payload.comment,
             });

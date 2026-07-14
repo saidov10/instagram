@@ -12,7 +12,10 @@ import {
   Smile,
   ChevronLeft,
   ChevronRight,
-  X
+  X,
+  Star,
+  Flag,
+  MessageCircleOff
 } from "lucide-react";
 import { AppDispatch, RootState } from "./store/store";
 import {
@@ -20,17 +23,23 @@ import {
   toggleLikePost,
   addComment,
   addPostFavorite,
-  deletePost
+  deletePost,
+  togglePostComments,
+  Post
 } from "./store/slices/postsSlice";
 import {
   fetchStories,
+  fetchMyStories,
   viewStory,
-  likeStory,
   Story
 } from "./store/slices/storiesSlice";
 import { api, getFullImageUrl } from "./services/api";
 import { PostSkeleton, StoriesSkeleton } from "./components/SkeletonLoader";
 import { useApp } from "./context/AppContext";
+import Avatar from "./components/Avatar";
+import ReportModal, { ReportTarget } from "./components/ReportModal";
+import HashtagText from "./components/HashtagText";
+import StoryViewer from "./components/StoryViewer";
 
 const VerifiedBadge = () => (
   <svg viewBox="0 0 24 24" className="w-[14px] h-[14px] fill-sky-500 text-white flex-shrink-0 inline-block" style={{ verticalAlign: 'middle' }}>
@@ -43,13 +52,19 @@ export default function HomeFeed() {
   const { setCreateOpen, setCreateType } = useApp();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
   const { posts, loading: postsLoading } = useSelector((state: RootState) => state.posts);
-  const { stories, loading: storiesLoading } = useSelector((state: RootState) => state.stories);
+  const { stories, myStories, loading: storiesLoading } = useSelector((state: RootState) => state.stories);
 
   // Suggestions state loaded dynamically
   const [suggestions, setSuggestions] = useState<any[]>([]);
 
-  // Active Story Modal Viewer
-  const [activeStory, setActiveStory] = useState<Story | null>(null);
+  // Active Story Modal Viewer — sourced from either `stories` (followed users) or `myStories`.
+  // Only the *id* lives here: the story itself is read back from the store on every render, so a
+  // like or a poll vote shows up immediately instead of freezing a stale copy in local state.
+  const [activeStoryId, setActiveStoryId] = useState<number | null>(null);
+  const [viewerSource, setViewerSource] = useState<"stories" | "my">("stories");
+
+  const viewerList = viewerSource === "my" ? myStories : stories;
+  const activeStory = activeStoryId === null ? null : viewerList.find((s) => s.id === activeStoryId) || null;
 
   // Animation states for heart popup on double-click
   const [heartAnimPostId, setHeartAnimPostId] = useState<number | null>(null);
@@ -60,6 +75,10 @@ export default function HomeFeed() {
   // Post options menu (⋯)
   const [menuPostId, setMenuPostId] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [commentsBusy, setCommentsBusy] = useState(false);
+
+  // Reporting (post / comment / story)
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
 
   const menuPost = posts.find((p) => p.id === menuPostId) || null;
   const isOwnMenuPost = !!(menuPost && currentUser && menuPost.userId === currentUser.id);
@@ -79,10 +98,24 @@ export default function HomeFeed() {
     setMenuPostId(null);
   };
 
+  const handleToggleComments = async (post: Post) => {
+    if (commentsBusy) return;
+    setCommentsBusy(true);
+    try {
+      await dispatch(togglePostComments({ postId: post.id, allowComments: !post.allowComments })).unwrap();
+      setMenuPostId(null);
+    } catch (err) {
+      console.error("Failed to toggle comments:", err);
+    } finally {
+      setCommentsBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (isLoggedIn) {
       dispatch(fetchFollowingPosts({}));
       dispatch(fetchStories());
+      dispatch(fetchMyStories());
 
       // Fetch suggestions
       const loadSuggestions = async () => {
@@ -134,29 +167,16 @@ export default function HomeFeed() {
     if (!text || !text.trim() || !currentUser) return;
 
     const comment = text.trim();
-    dispatch(addComment({ postId, comment, username: currentUser.username }));
+    dispatch(addComment({ postId, comment, username: currentUser.username, userId: currentUser.id }));
     setCommentInputs({ ...commentInputs, [postId]: "" });
   };
 
-  const handleViewStory = (story: Story) => {
+  // Auto-advance lives inside StoryViewer, which can pause it while the viewer is typing or voting.
+  const handleViewStory = (story: Story, source: "stories" | "my" = "stories") => {
     dispatch(viewStory(story.id));
-    setActiveStory(story);
+    setViewerSource(source);
+    setActiveStoryId(story.id);
   };
-
-  // Auto-advance stories (like real Instagram), 5s each
-  useEffect(() => {
-    if (!activeStory) return;
-    const idx = stories.findIndex((s) => s.id === activeStory.id);
-    const timer = setTimeout(() => {
-      if (idx >= 0 && idx < stories.length - 1) {
-        handleViewStory(stories[idx + 1]);
-      } else {
-        setActiveStory(null);
-      }
-    }, 5000);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStory, stories]);
 
   const handleFollowSuggestion = async (id: string | number) => {
     try {
@@ -188,29 +208,47 @@ export default function HomeFeed() {
           ) : (
             <div className="flex gap-4.5 py-2 overflow-x-auto no-scrollbar scroll-smooth w-full">
               {currentUser && (
-                <button
+                <div
                   onClick={() => {
-                    setCreateType("story");
-                    setCreateOpen(true);
+                    if (myStories.length > 0) {
+                      handleViewStory(myStories[0], "my");
+                    } else {
+                      setCreateType("story");
+                      setCreateOpen(true);
+                    }
                   }}
                   className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer outline-none group"
                 >
                   <div className="relative p-[2.5px]">
-                    <div className="bg-white dark:bg-black p-[2.5px] rounded-full flex items-center justify-center border border-zinc-200 dark:border-zinc-800">
-                      <img
-                        src={currentUser.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop"}
-                        alt="Your story"
-                        className="w-14 h-14 rounded-full object-cover"
-                      />
+                    <div
+                      className={`p-[2.5px] rounded-full transition-transform duration-200 group-hover:scale-110 ${
+                        myStories.length > 0
+                          ? myStories.every((s) => s.viewed)
+                            ? "bg-zinc-200 dark:bg-zinc-800"
+                            : "gradient-ring animate-gradient"
+                          : ""
+                      }`}
+                    >
+                      <div className="bg-white dark:bg-black p-[2.5px] rounded-full flex items-center justify-center border border-zinc-200 dark:border-zinc-800">
+                        <Avatar src={currentUser.avatar} name={currentUser.username} className="w-14 h-14" alt="Your story" />
+                      </div>
                     </div>
-                    <div className="absolute bottom-0 right-0 w-5 h-5 bg-blue-500 rounded-full border-2 border-white dark:border-black flex items-center justify-center text-white text-[11px] font-bold font-sans">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCreateType("story");
+                        setCreateOpen(true);
+                      }}
+                      className="absolute bottom-0 right-0 w-5 h-5 bg-blue-500 rounded-full border-2 border-white dark:border-black flex items-center justify-center text-white text-[11px] font-bold font-sans cursor-pointer"
+                      title="Добавить историю"
+                    >
                       +
-                    </div>
+                    </button>
                   </div>
                   <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal max-w-[74px] truncate">
                     Ваша история
                   </span>
-                </button>
+                </div>
               )}
 
               {stories.length === 0 && !currentUser ? (
@@ -219,24 +257,25 @@ export default function HomeFeed() {
                 stories.map((story) => (
                   <button
                     key={story.id}
-                    onClick={() => handleViewStory(story)}
+                    onClick={() => handleViewStory(story, "stories")}
                     className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer outline-none group"
                   >
                     <div
                       className={`p-[2.5px] rounded-full transition-transform duration-200 group-hover:scale-110 ${
-                        story.viewed ? "bg-zinc-200 dark:bg-zinc-800" : "gradient-ring animate-gradient"
+                        story.viewed
+                          ? "bg-zinc-200 dark:bg-zinc-800"
+                          : story.isForCloseFriends
+                            ? "bg-green-500"
+                            : "gradient-ring animate-gradient"
                       }`}
                     >
                       <div className="bg-white dark:bg-black p-[2.5px] rounded-full flex items-center justify-center">
-                        <img
-                          src={story.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop"}
-                          alt={story.username}
-                          className="w-14 h-14 rounded-full object-cover"
-                        />
+                        <Avatar src={story.avatar} name={story.username} className="w-14 h-14" />
                       </div>
                     </div>
-                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal max-w-[74px] truncate">
-                      {story.username}
+                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal max-w-[74px] truncate flex items-center gap-1">
+                      {story.isForCloseFriends && <Star className="w-2.5 h-2.5 fill-green-500 text-green-500 flex-shrink-0" />}
+                      <span className="truncate">{story.username}</span>
                     </span>
                   </button>
                 ))
@@ -276,11 +315,7 @@ export default function HomeFeed() {
                 <div className="flex items-center justify-between p-3">
                   <div className="flex items-center gap-3">
                     <Link href={post.userId ? `/u/${post.userId}` : "#"}>
-                      <img
-                        src={post.avatar}
-                        alt={post.username}
-                        className="w-8 h-8 rounded-full object-cover border border-zinc-250 dark:border-zinc-900"
-                      />
+                      <Avatar src={post.avatar} name={post.username} className="w-8 h-8 border border-zinc-250 dark:border-zinc-900" />
                     </Link>
                     <div className="flex flex-col">
                       <div className="flex items-center gap-1 flex-wrap">
@@ -389,50 +424,70 @@ export default function HomeFeed() {
                   {/* Caption */}
                   <p className="text-sm text-zinc-900 dark:text-white leading-tight">
                     <span className="font-bold mr-2 hover:underline cursor-pointer">{post.username}</span>
-                    {post.caption}
+                    <HashtagText text={post.caption} />
                   </p>
 
                   {/* Comment details list */}
-                  <div className="flex flex-col gap-1 mt-0.5">
-                    {post.comments.map((comment: any, index: number) => (
-                      <p key={index} className="text-sm text-zinc-800 dark:text-zinc-200">
-                        <span className="font-bold mr-2 hover:underline cursor-pointer text-zinc-900 dark:text-white">
-                          {comment.username}
-                        </span>
-                        <span>{comment.text}</span>
-                      </p>
-                    ))}
-                  </div>
+                  {post.allowComments && (
+                    <div className="flex flex-col gap-1 mt-0.5">
+                      {post.comments.map((comment, index: number) => (
+                        <p key={index} className="group/c text-sm text-zinc-800 dark:text-zinc-200 flex items-start gap-1.5">
+                          <span className="flex-1">
+                            <Link href={comment.userId ? `/u/${comment.userId}` : "#"} className="font-bold mr-2 hover:underline text-zinc-900 dark:text-white">
+                              {comment.username}
+                            </Link>
+                            <span>{comment.text}</span>
+                          </span>
+                          {currentUser && comment.userId !== currentUser.id && (
+                            <button
+                              onClick={() => setReportTarget({ type: "COMMENT", id: String(comment.id) })}
+                              title="Пожаловаться на комментарий"
+                              className="p-0.5 text-zinc-400 hover:text-red-500 opacity-0 group-hover/c:opacity-100 transition cursor-pointer flex-shrink-0"
+                            >
+                              <Flag className="w-3 h-3" />
+                            </button>
+                          )}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
-                {/* Comment Input Box */}
-                <form
-                  onSubmit={(e) => handleAddComment(post.id, e)}
-                  className="border-t border-zinc-100 dark:border-zinc-900/60 px-3.5 py-3 flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-3 flex-1">
-                    <button type="button" className="text-zinc-800 dark:text-white hover:text-zinc-400">
-                      <Smile className="w-5 h-5" />
-                    </button>
-                    <input
-                      type="text"
-                      placeholder="Добавить комментарий..."
-                      value={commentInputs[post.id] || ""}
-                      onChange={(e) =>
-                        setCommentInputs({ ...commentInputs, [post.id]: e.target.value })
-                      }
-                      className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 border-none ring-0 p-0 text-zinc-900 dark:text-white"
-                    />
+                {/* Comment Input Box — hidden when the author disabled comments */}
+                {post.allowComments ? (
+                  <form
+                    onSubmit={(e) => handleAddComment(post.id, e)}
+                    className="border-t border-zinc-100 dark:border-zinc-900/60 px-3.5 py-3 flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3 flex-1">
+                      <button type="button" className="text-zinc-800 dark:text-white hover:text-zinc-400">
+                        <Smile className="w-5 h-5" />
+                      </button>
+                      <input
+                        type="text"
+                        placeholder="Добавить комментарий..."
+                        value={commentInputs[post.id] || ""}
+                        onChange={(e) =>
+                          setCommentInputs({ ...commentInputs, [post.id]: e.target.value })
+                        }
+                        className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 border-none ring-0 p-0 text-zinc-900 dark:text-white"
+                      />
+                    </div>
+                    {(commentInputs[post.id] || "").trim() && (
+                      <button
+                        type="submit"
+                        className="text-blue-500 font-semibold text-sm hover:text-blue-400 cursor-pointer"
+                      >
+                        Опубликовать
+                      </button>
+                    )}
+                  </form>
+                ) : (
+                  <div className="border-t border-zinc-100 dark:border-zinc-900/60 px-3.5 py-3.5 flex items-center justify-center gap-2 text-zinc-450 dark:text-zinc-500">
+                    <MessageCircleOff className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-xs font-medium">Комментарии к этой публикации отключены</span>
                   </div>
-                  {(commentInputs[post.id] || "").trim() && (
-                    <button
-                      type="submit"
-                      className="text-blue-500 font-semibold text-sm hover:text-blue-400 cursor-pointer"
-                    >
-                      Опубликовать
-                    </button>
-                  )}
-                </form>
+                )}
               </article>
             ))
           )}
@@ -445,11 +500,7 @@ export default function HomeFeed() {
           {/* User Card */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-4">
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.username}
-                className="w-14 h-14 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
-              />
+              <Avatar src={currentUser.avatar} name={currentUser.username} className="w-14 h-14 border border-zinc-200 dark:border-zinc-800" />
               <div className="flex flex-col">
                 <span className="font-semibold text-sm hover:underline cursor-pointer leading-tight">
                   {currentUser.username}
@@ -475,11 +526,7 @@ export default function HomeFeed() {
             {suggestions.map((sug) => (
               <div key={sug.id} className="flex items-center justify-between">
                 <div className="flex items-center gap-3.5 min-w-0">
-                  <img
-                    src={sug.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop"}
-                    alt={sug.username}
-                    className="w-11 h-11 rounded-full object-cover border border-zinc-200 dark:border-zinc-800 flex-shrink-0"
-                  />
+                  <Avatar src={sug.avatar} name={sug.username} className="w-11 h-11 border border-zinc-200 dark:border-zinc-800" />
                   <div className="flex flex-col min-w-0">
                     <span className="font-semibold text-sm hover:underline cursor-pointer truncate leading-tight">
                       {sug.username}
@@ -520,81 +567,15 @@ export default function HomeFeed() {
 
       {/* ----------------- STORY MODAL OVERLAY ----------------- */}
       {activeStory && (
-        <div className="fixed inset-0 bg-black/95 z-55 flex items-center justify-center p-4 select-none">
-          {/* Close button */}
-          <button
-            onClick={() => setActiveStory(null)}
-            className="absolute top-4 right-4 text-white hover:text-zinc-300 p-2 z-55 cursor-pointer"
-          >
-            <X className="w-8 h-8" />
-          </button>
-
-          {/* Previous Story Arrow */}
-          <button
-            onClick={() => {
-              const currentIdx = stories.findIndex((s) => s.id === activeStory.id);
-              if (currentIdx > 0) {
-                handleViewStory(stories[currentIdx - 1]);
-              }
-            }}
-            disabled={stories.findIndex((s) => s.id === activeStory.id) === 0}
-            className="absolute left-4 p-2 text-white hover:text-zinc-300 disabled:opacity-20 cursor-pointer"
-          >
-            <ChevronLeft className="w-10 h-10" />
-          </button>
-
-          {/* Story Container */}
-          <div className="relative w-full max-w-md h-[80vh] rounded-xl overflow-hidden shadow-2xl flex flex-col bg-zinc-950">
-            {/* Progress bar (auto-advance) */}
-            <div className="absolute top-2 left-3 right-3 z-20 h-0.5 bg-white/30 rounded overflow-hidden">
-              <div key={activeStory.id} className="h-full bg-white origin-left animate-reel-progress" style={{ animationDuration: "5s" }} />
-            </div>
-
-            {/* Header info */}
-            <div className="absolute top-0 left-0 right-0 p-4 pt-5 bg-gradient-to-b from-black/80 to-transparent z-10 flex items-center gap-3">
-              <img
-                src={activeStory.avatar}
-                alt={activeStory.username}
-                className="w-9 h-9 rounded-full object-cover border border-white"
-              />
-              <span className="text-white font-semibold text-sm drop-shadow">{activeStory.username}</span>
-            </div>
-
-            {/* Main view */}
-            <img
-              src={activeStory.image}
-              alt="Story"
-              className="w-full h-full object-contain"
-            />
-
-            {/* Bottom action bar: reply + like */}
-            <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent z-10 flex items-center gap-3">
-              <div className="flex-1 border border-white/40 rounded-full px-4 py-2.5 text-white/80 text-sm select-none">
-                Ответить {activeStory.username}...
-              </div>
-              <button
-                onClick={() => dispatch(likeStory(activeStory.id))}
-                className="text-white hover:scale-110 active:scale-90 transition"
-              >
-                <Heart className="w-7 h-7" />
-              </button>
-            </div>
-          </div>
-
-          {/* Next Story Arrow */}
-          <button
-            onClick={() => {
-              const currentIdx = stories.findIndex((s) => s.id === activeStory.id);
-              if (currentIdx < stories.length - 1) {
-                handleViewStory(stories[currentIdx + 1]);
-              }
-            }}
-            disabled={stories.findIndex((s) => s.id === activeStory.id) === stories.length - 1}
-            className="absolute right-4 p-2 text-white hover:text-zinc-300 disabled:opacity-20 cursor-pointer"
-          >
-            <ChevronRight className="w-10 h-10" />
-          </button>
-        </div>
+        <StoryViewer
+          key={activeStory.id}
+          story={activeStory}
+          list={viewerList}
+          currentUserId={currentUser?.id}
+          onNavigate={(next) => handleViewStory(next, viewerSource)}
+          onClose={() => setActiveStoryId(null)}
+          onReport={(storyId) => setReportTarget({ type: "STORY", id: String(storyId) })}
+        />
       )}
 
       {/* ----------------- POST OPTIONS MENU ----------------- */}
@@ -613,6 +594,26 @@ export default function HomeFeed() {
                 className="py-3.5 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
               >
                 Удалить
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handleToggleComments(menuPost)}
+                disabled={commentsBusy}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-60"
+              >
+                {menuPost.allowComments ? "Выключить комментарии" : "Включить комментарии"}
+              </button>
+            )}
+            {!isOwnMenuPost && (
+              <button
+                onClick={() => {
+                  setReportTarget({ type: "POST", id: String(menuPost.id) });
+                  setMenuPostId(null);
+                }}
+                className="py-3.5 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Пожаловаться
               </button>
             )}
             {menuPost.userId && (
@@ -639,6 +640,9 @@ export default function HomeFeed() {
           </div>
         </div>
       )}
+
+      {/* ----------------- REPORT MODAL ----------------- */}
+      {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
     </div>
   );
 }

@@ -7,9 +7,63 @@ import { logout, updateProfile, updateAvatar, fetchMyProfile, updatePrivacy } fr
 import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
 import { api, getFullImageUrl } from "../services/api";
-import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff } from "lucide-react";
+import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone } from "lucide-react";
+import Avatar from "../components/Avatar";
 
-const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
+interface DeviceSession {
+  id: string;
+  ip: string;
+  device: string;
+  isMobile: boolean;
+  loggedInAt: string;
+  isCurrent: boolean;
+}
+
+/** Turn a raw user-agent into something a human can recognise. */
+const describeDevice = (ua: string): { label: string; isMobile: boolean } => {
+  if (!ua) return { label: "Неизвестное устройство", isMobile: false };
+  const isMobile = /Mobile|Android|iPhone|iPad/i.test(ua);
+  const browser =
+    /Edg/i.test(ua) ? "Edge" :
+    /OPR|Opera/i.test(ua) ? "Opera" :
+    /Chrome/i.test(ua) ? "Chrome" :
+    /Firefox/i.test(ua) ? "Firefox" :
+    /Safari/i.test(ua) ? "Safari" : null;
+  const os =
+    /Windows/i.test(ua) ? "Windows" :
+    /Android/i.test(ua) ? "Android" :
+    /iPhone|iPad|iOS/i.test(ua) ? "iOS" :
+    /Mac OS/i.test(ua) ? "macOS" :
+    /Linux/i.test(ua) ? "Linux" : null;
+
+  const label = [browser, os].filter(Boolean).join(" · ");
+  return { label: label || ua.slice(0, 40), isMobile };
+};
+
+const mapSession = (s: any): DeviceSession => {
+  const ua = s.userAgent || s.device || s.deviceInfo || s.browser || "";
+  const { label, isMobile } = describeDevice(ua);
+  return {
+    id: String(s.id ?? s.sessionId ?? ""),
+    ip: s.ipAddress || s.ip || "—",
+    device: s.deviceName || label,
+    isMobile,
+    loggedInAt: s.createdAt || s.loginAt || s.loggedInAt || s.lastActiveAt || "",
+    isCurrent: !!(s.isCurrent ?? s.isCurrentSession ?? s.current),
+  };
+};
+
+const formatSessionDate = (iso: string): string => {
+  if (!iso) return "Дата неизвестна";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Дата неизвестна";
+  return d.toLocaleString("ru-RU", {
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -34,10 +88,24 @@ export default function SettingsPage() {
   const [pwMessage, setPwMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   // Section navigation + privacy panel state
-  const [activeSection, setActiveSection] = useState<"profile" | "privacy">("profile");
+  const [activeSection, setActiveSection] = useState<"profile" | "privacy" | "closeFriends" | "sessions">("profile");
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [hiddenUsers, setHiddenUsers] = useState<any[]>([]);
+
+  // Login activity / device sessions
+  const [sessions, setSessions] = useState<DeviceSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [sessionBusy, setSessionBusy] = useState<Record<string, boolean>>({});
+
+  // Close friends
+  const [closeFriends, setCloseFriends] = useState<any[]>([]);
+  const [cfLoading, setCfLoading] = useState(false);
+  const [cfSearch, setCfSearch] = useState("");
+  const [cfResults, setCfResults] = useState<any[]>([]);
+  const [cfSearching, setCfSearching] = useState(false);
+  const [cfBusy, setCfBusy] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (activeSection !== "privacy") return;
@@ -48,6 +116,96 @@ export default function SettingsPage() {
       .then((list) => setHiddenUsers(list || []))
       .catch(() => setHiddenUsers([]));
   }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "closeFriends") return;
+    setCfLoading(true);
+    api.user.getCloseFriends()
+      .then((list) => setCloseFriends(list || []))
+      .catch(() => setCloseFriends([]))
+      .finally(() => setCfLoading(false));
+  }, [activeSection]);
+
+  // Debounced user search for adding close friends
+  useEffect(() => {
+    if (activeSection !== "closeFriends") return;
+    const q = cfSearch.trim();
+    if (!q) {
+      setCfResults([]);
+      setCfSearching(false);
+      return;
+    }
+    setCfSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const users = await api.user.getUsers({ userName: q });
+        setCfResults(users || []);
+      } catch {
+        setCfResults([]);
+      } finally {
+        setCfSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [cfSearch, activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "sessions") return;
+    setSessionsLoading(true);
+    setSessionsError(null);
+    api.account.getActiveSessions()
+      .then((list) => setSessions((list || []).map(mapSession)))
+      .catch((err) => {
+        setSessions([]);
+        setSessionsError(err?.message || "Не удалось загрузить список сеансов.");
+      })
+      .finally(() => setSessionsLoading(false));
+  }, [activeSection]);
+
+  const handleLogoutSession = async (sessionId: string) => {
+    if (sessionBusy[sessionId]) return;
+    if (!window.confirm("Завершить сеанс на этом устройстве?")) return;
+    setSessionBusy((b) => ({ ...b, [sessionId]: true }));
+    try {
+      await api.account.logoutSession(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    } catch (err) {
+      console.error("Failed to end session:", err);
+    } finally {
+      setSessionBusy((b) => ({ ...b, [sessionId]: false }));
+    }
+  };
+
+  const handleAddCloseFriend = async (user: any) => {
+    const uid = user.id || user.userId;
+    if (!uid || cfBusy[uid]) return;
+    setCfBusy((b) => ({ ...b, [uid]: true }));
+    try {
+      await api.user.addCloseFriends([uid]);
+      setCloseFriends((prev) => (prev.some((f) => (f.id || f.userId) === uid) ? prev : [...prev, user]));
+      setCfSearch("");
+      setCfResults([]);
+    } catch (err) {
+      console.error("Failed to add close friend:", err);
+    } finally {
+      setCfBusy((b) => ({ ...b, [uid]: false }));
+    }
+  };
+
+  const handleRemoveCloseFriend = async (userId: string) => {
+    if (cfBusy[userId]) return;
+    setCfBusy((b) => ({ ...b, [userId]: true }));
+    const snapshot = closeFriends;
+    setCloseFriends((prev) => prev.filter((f) => (f.id || f.userId) !== userId));
+    try {
+      await api.user.deleteCloseFriend(userId);
+    } catch (err) {
+      console.error("Failed to remove close friend:", err);
+      setCloseFriends(snapshot);
+    } finally {
+      setCfBusy((b) => ({ ...b, [userId]: false }));
+    }
+  };
 
   const handleTogglePrivate = async () => {
     if (!currentUser || privacyBusy) return;
@@ -172,6 +330,24 @@ export default function SettingsPage() {
           <Shield className="w-5 h-5" />
           <span>Конфиденциальность</span>
         </button>
+        <button
+          onClick={() => setActiveSection("closeFriends")}
+          className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
+            activeSection === "closeFriends" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+          }`}
+        >
+          <Star className="w-5 h-5 text-green-500 fill-green-500" />
+          <span>Близкие друзья</span>
+        </button>
+        <button
+          onClick={() => setActiveSection("sessions")}
+          className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
+            activeSection === "sessions" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+          }`}
+        >
+          <Monitor className="w-5 h-5" />
+          <span>Безопасность и входы</span>
+        </button>
         <button className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm text-left flex-shrink-0 cursor-pointer text-zinc-550 dark:text-zinc-400">
           <Bell className="w-5 h-5" />
           <span>Уведомления</span>
@@ -197,11 +373,7 @@ export default function SettingsPage() {
           
           {/* Picture preview change */}
           <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-zinc-150 dark:border-zinc-800">
-            <img
-              src={currentUser.avatar}
-              alt={currentUser.username}
-              className="w-14 h-14 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
-            />
+            <Avatar src={currentUser.avatar} name={currentUser.username} className="w-14 h-14 border border-zinc-200 dark:border-zinc-800" />
             <div className="flex flex-col items-start">
               <span className="font-bold text-sm">{currentUser.username}</span>
               <button
@@ -322,6 +494,195 @@ export default function SettingsPage() {
           </form>
         </div>
         </>
+        ) : activeSection === "closeFriends" ? (
+        <div className="max-w-lg flex flex-col gap-6">
+          <div>
+            <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+              <Star className="w-5 h-5 text-green-500 fill-green-500" /> Близкие друзья
+            </h2>
+            <p className="text-sm text-zinc-500">
+              Истории, помеченные зелёной звездой, увидят только люди из этого списка. Они не узнают, что находятся в нём.
+            </p>
+          </div>
+
+          {/* Search + add */}
+          <div className="flex flex-col gap-3">
+            <div className="relative flex items-center">
+              <Search className="absolute left-3 w-4 h-4 text-zinc-400" />
+              <input
+                type="text"
+                value={cfSearch}
+                onChange={(e) => setCfSearch(e.target.value)}
+                placeholder="Найти пользователя..."
+                className="w-full glass rounded-xl pl-10 pr-3 py-2.5 text-sm outline-none text-zinc-900 dark:text-white"
+              />
+            </div>
+
+            {cfSearch.trim() && (
+              <div className="flex flex-col gap-2 max-h-56 overflow-y-auto no-scrollbar">
+                {cfSearching ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full shimmer" />
+                      <div className="w-32 h-3 rounded-full shimmer" />
+                    </div>
+                  ))
+                ) : cfResults.length === 0 ? (
+                  <p className="text-sm text-zinc-450 py-2">Ничего не найдено.</p>
+                ) : (
+                  cfResults
+                    .filter((u) => (u.id || u.userId) !== currentUser.id)
+                    .map((u) => {
+                      const uid = u.id || u.userId;
+                      const already = closeFriends.some((f) => (f.id || f.userId) === uid);
+                      return (
+                        <div key={uid} className="flex items-center justify-between">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <Avatar
+                              src={getFullImageUrl(u.avatar || u.imagePath)}
+                              name={u.userName || u.username}
+                              className="w-10 h-10 border border-zinc-200 dark:border-zinc-800"
+                            />
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-semibold text-sm truncate">{u.userName || u.username}</span>
+                              <span className="text-xs text-zinc-450 truncate">{u.fullName || ""}</span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleAddCloseFriend(u)}
+                            disabled={already || cfBusy[uid]}
+                            className={`text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0 ml-2 cursor-pointer disabled:opacity-60 ${
+                              already ? "glass" : "bg-green-500 hover:bg-green-600 text-white"
+                            }`}
+                          >
+                            {already ? "Добавлен" : "Добавить"}
+                          </button>
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+            )}
+          </div>
+
+          <hr className="border-zinc-200 dark:border-zinc-800" />
+
+          {/* Current list */}
+          <div>
+            <h3 className="text-base font-bold mb-4">
+              Ваш список {closeFriends.length > 0 && <span className="text-zinc-450 font-normal">({closeFriends.length})</span>}
+            </h3>
+            {cfLoading ? (
+              <div className="flex flex-col gap-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full shimmer" />
+                    <div className="w-32 h-3 rounded-full shimmer" />
+                  </div>
+                ))}
+              </div>
+            ) : closeFriends.length === 0 ? (
+              <p className="text-sm text-zinc-450">Список пуст. Найдите пользователей выше, чтобы добавить их.</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {closeFriends.map((u) => {
+                  const uid = u.id || u.userId;
+                  return (
+                    <div key={uid} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="relative flex-shrink-0">
+                          <Avatar
+                            src={getFullImageUrl(u.avatar || u.imagePath)}
+                            name={u.userName || u.username}
+                            className="w-10 h-10 border-2 border-green-500"
+                          />
+                          <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-green-500 flex items-center justify-center border-2 border-[var(--background)]">
+                            <Star className="w-2 h-2 fill-white text-white" />
+                          </span>
+                        </div>
+                        <span className="font-semibold text-sm truncate">{u.userName || u.username}</span>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveCloseFriend(uid)}
+                        disabled={cfBusy[uid]}
+                        className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft cursor-pointer flex-shrink-0 ml-2 disabled:opacity-60"
+                      >
+                        Удалить
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        ) : activeSection === "sessions" ? (
+        <div className="max-w-lg flex flex-col gap-6">
+          <div>
+            <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+              <Monitor className="w-5 h-5" /> Безопасность и входы
+            </h2>
+            <p className="text-sm text-zinc-500">
+              Устройства, на которых сейчас выполнен вход в ваш аккаунт. Если вы не узнаёте устройство — завершите сеанс.
+            </p>
+          </div>
+
+          {sessionsLoading ? (
+            <div className="flex flex-col gap-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl shimmer" />
+                  <div className="flex flex-col gap-2">
+                    <div className="w-40 h-3 rounded-full shimmer" />
+                    <div className="w-24 h-2.5 rounded-full shimmer" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : sessionsError ? (
+            <p className="text-sm text-red-500">{sessionsError}</p>
+          ) : sessions.length === 0 ? (
+            <p className="text-sm text-zinc-450">Активных сеансов не найдено.</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {sessions.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center justify-between gap-3 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                      {s.isMobile ? <Smartphone className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="font-semibold text-sm truncate flex items-center gap-2">
+                        {s.device}
+                        {s.isCurrent && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400 flex-shrink-0">
+                            Текущий сеанс
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xs text-zinc-500 truncate">
+                        IP: {s.ip} · {formatSessionDate(s.loggedInAt)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {!s.isCurrent && (
+                    <button
+                      onClick={() => handleLogoutSession(s.id)}
+                      disabled={sessionBusy[s.id]}
+                      className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft text-red-500 cursor-pointer flex-shrink-0 disabled:opacity-60"
+                    >
+                      {sessionBusy[s.id] ? "..." : "Выйти"}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         ) : (
         <div className="max-w-lg flex flex-col gap-10">
           <div>
@@ -368,10 +729,10 @@ export default function SettingsPage() {
                   return (
                     <div key={uid} className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <img
-                          src={getFullImageUrl(u.avatar || u.imagePath) || DEFAULT_AVATAR}
-                          alt={u.userName || u.username}
-                          className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                        <Avatar
+                          src={getFullImageUrl(u.avatar || u.imagePath)}
+                          name={u.userName || u.username}
+                          className="w-10 h-10 border border-zinc-200 dark:border-zinc-800"
                         />
                         <span className="font-semibold text-sm">{u.userName || u.username}</span>
                       </div>
@@ -402,10 +763,10 @@ export default function SettingsPage() {
                   return (
                     <div key={uid} className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <img
-                          src={getFullImageUrl(u.avatar || u.imagePath) || DEFAULT_AVATAR}
-                          alt={u.userName || u.username}
-                          className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                        <Avatar
+                          src={getFullImageUrl(u.avatar || u.imagePath)}
+                          name={u.userName || u.username}
+                          className="w-10 h-10 border border-zinc-200 dark:border-zinc-800"
                         />
                         <span className="font-semibold text-sm">{u.userName || u.username}</span>
                       </div>

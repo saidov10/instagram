@@ -20,8 +20,6 @@ interface AuthState {
   isLoggedIn: boolean;
 }
 
-const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
-
 const initialState: AuthState = {
   currentUser: null,
   token: typeof window !== "undefined" ? getStoredToken() : null,
@@ -66,7 +64,7 @@ export const fetchMyProfile = createAsyncThunk(
         id: profile.id || profile.userId || "",
         username: profile.userName || profile.username || "user",
         name: profile.name || profile.fullName || "Instagram User",
-        avatar: getFullImageUrl(profile.avatar || profile.imagePath || profile.image) || DEFAULT_AVATAR,
+        avatar: getFullImageUrl(profile.avatar || profile.imagePath || profile.image),
         about: profile.about || "",
         gender: profile.gender || 0,
         isPrivate: !!profile.isPrivate,

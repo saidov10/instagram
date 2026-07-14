@@ -2014,6 +2014,597 @@
           }
         }
       }
+    },
+    "/Notification/get-notifications": {
+      "get": {
+        "tags": [
+          "Notification"
+        ],
+        "summary": "Get user notifications (paginated)",
+        "parameters": [
+          {
+            "name": "PageNumber",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "PageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Notification/mark-as-read": {
+      "put": {
+        "tags": [
+          "Notification"
+        ],
+        "summary": "Mark notification(s) as read",
+        "parameters": [
+          {
+            "name": "notificationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Notification/delete-notification/{id}": {
+      "delete": {
+        "tags": [
+          "Notification"
+        ],
+        "summary": "Delete notification by ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Post/add-reel": {
+      "post": {
+        "tags": [
+          "Post"
+        ],
+        "summary": "Add a new Reel (Video post with optional custom sound and cover)",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "caption": {
+                    "type": "string"
+                  },
+                  "audioId": {
+                    "type": "string"
+                  },
+                  "audioName": {
+                    "type": "string"
+                  },
+                  "audioArtist": {
+                    "type": "string"
+                  },
+                  "File": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The video file (.mp4)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Post/get-trending-reels": {
+      "get": {
+        "tags": [
+          "Post"
+        ],
+        "summary": "Get trending Reels feed (algorithmic recommendation based on views and likes)",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Post/save-audio/{audioId}": {
+      "post": {
+        "tags": [
+          "Post"
+        ],
+        "summary": "Save a Reel's audio track to favorites",
+        "parameters": [
+          {
+            "name": "audioId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "artist": {
+                    "type": "string"
+                  },
+                  "audioUrl": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Post/get-saved-audios": {
+      "get": {
+        "tags": [
+          "Post"
+        ],
+        "summary": "Get current user's saved audio tracks",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Story/get-archived-stories": {
+      "get": {
+        "tags": [
+          "Story"
+        ],
+        "summary": "Get list of user's past stories (older than 24 hours)",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Highlight/create-highlight": {
+      "post": {
+        "tags": [
+          "Highlight"
+        ],
+        "summary": "Create a new Highlight folder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "required": [
+                  "title",
+                  "storyIds"
+                ],
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "cover": {
+                    "type": "string"
+                  },
+                  "storyIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Highlight/update-highlight/{id}": {
+      "put": {
+        "tags": [
+          "Highlight"
+        ],
+        "summary": "Update an existing Highlight folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "cover": {
+                    "type": "string"
+                  },
+                  "storyIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Highlight/delete-highlight/{id}": {
+      "delete": {
+        "tags": [
+          "Highlight"
+        ],
+        "summary": "Delete a Highlight folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Highlight/get-user-highlights/{userId}": {
+      "get": {
+        "tags": [
+          "Highlight"
+        ],
+        "summary": "Get Highlight folders of a specific user",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/add-close-friends": {
+      "post": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Add users to your Close Friends list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "required": [
+                  "friendUserIds"
+                ],
+                "type": "object",
+                "properties": {
+                  "friendUserIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/delete-close-friend/{userId}": {
+      "delete": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Remove a user from your Close Friends list",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/get-close-friends": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get your Close Friends list",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Report/send-report": {
+      "post": {
+        "tags": [
+          "Report"
+        ],
+        "summary": "Report inappropriate user-generated content (post, comment, story, user)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "required": [
+                  "targetType",
+                  "targetId",
+                  "reason"
+                ],
+                "type": "object",
+                "properties": {
+                  "targetType": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "COMMENT",
+                      "STORY",
+                      "USER"
+                    ]
+                  },
+                  "targetId": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Post/toggle-comments/{postId}": {
+      "put": {
+        "tags": [
+          "Post"
+        ],
+        "summary": "Toggle comment section (enable/disable) for a specific post (author only)",
+        "parameters": [
+          {
+            "name": "postId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "allowComments",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Chat/initiate-call": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Initiate an audio or video call session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "required": [
+                  "chatId",
+                  "recipientId",
+                  "type"
+                ],
+                "type": "object",
+                "properties": {
+                  "chatId": {
+                    "type": "integer"
+                  },
+                  "recipientId": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "AUDIO",
+                      "VIDEO"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Chat/respond-to-call": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Respond to an active call session (Accept, Reject, End)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "required": [
+                  "callId",
+                  "status"
+                ],
+                "type": "object",
+                "properties": {
+                  "callId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ACCEPTED",
+                      "REJECTED",
+                      "ENDED"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Chat/get-active-call": {
+      "get": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Get the active call session for a specific chat",
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
     }
   },
   "components": {

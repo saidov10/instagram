@@ -3,10 +3,13 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useSelector } from "react-redux";
-import { Grid, Heart, MessageCircle, Lock, X, MoreHorizontal, EyeOff, Eye, Ban } from "lucide-react";
+import { Grid, Heart, MessageCircle, Lock, X, MoreHorizontal, EyeOff, Eye, Ban, Flag } from "lucide-react";
 import { RootState } from "../../store/store";
 import { api, getFullImageUrl, ApiError } from "../../services/api";
 import { ProfileSkeleton } from "../../components/SkeletonLoader";
+import Avatar from "../../components/Avatar";
+import Highlights from "../../components/Highlights";
+import ReportModal, { ReportTarget } from "../../components/ReportModal";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
@@ -46,11 +49,12 @@ export default function UserProfilePage() {
   const [forbidden, setForbidden] = useState(false);
   const [selectedPost, setSelectedPost] = useState<GridPost | null>(null);
 
-  // Options menu (block / hide stories)
+  // Options menu (block / hide stories / report)
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [isHidingStoriesFrom, setIsHidingStoriesFrom] = useState(false);
   const [optionsBusy, setOptionsBusy] = useState(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
 
   // If viewing your own profile, send to the editable /profile page
   useEffect(() => {
@@ -80,7 +84,7 @@ export default function UserProfilePage() {
         id: p.id || userId,
         userName: p.userName || p.username || "user",
         fullName: p.fullName || p.name || "",
-        avatar: getFullImageUrl(p.avatar || p.imagePath) || DEFAULT_AVATAR,
+        avatar: getFullImageUrl(p.avatar || p.imagePath),
         about: p.about || "",
         postsCount: p.postsCount ?? 0,
         followersCount: p.followersCount ?? 0,
@@ -244,11 +248,7 @@ export default function UserProfilePage() {
         <div className="relative w-36 h-36 flex-shrink-0">
           <div className="w-full h-full rounded-full p-[3px] gradient-ring animate-gradient shadow-soft-md">
             <div className="bg-background p-1 rounded-full w-full h-full">
-              <img
-                src={profile.avatar}
-                alt={profile.userName}
-                className="w-full h-full rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
-              />
+              <Avatar src={profile.avatar} name={profile.userName} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
             </div>
           </div>
         </div>
@@ -293,6 +293,17 @@ export default function UserProfilePage() {
                     </button>
                     <hr className="border-[var(--border)]" />
                     <button
+                      onClick={() => {
+                        setReportTarget({ type: "USER", id: userId! });
+                        setShowOptionsMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 p-3.5 text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition cursor-pointer text-left"
+                    >
+                      <Flag className="w-4.5 h-4.5" />
+                      Пожаловаться
+                    </button>
+                    <hr className="border-[var(--border)]" />
+                    <button
                       onClick={handleToggleBlock}
                       disabled={optionsBusy}
                       className="w-full flex items-center gap-3 p-3.5 text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition cursor-pointer text-left"
@@ -320,6 +331,11 @@ export default function UserProfilePage() {
           </div>
         </div>
       </header>
+
+      {/* ----------------- HIGHLIGHTS ----------------- */}
+      {!(profile.isPrivate && followState !== "following") && (
+        <Highlights userId={profile.id} isOwner={false} />
+      )}
 
       {/* ----------------- POSTS GRID ----------------- */}
       <div className="flex flex-col gap-6">
@@ -383,6 +399,9 @@ export default function UserProfilePage() {
           </div>
         </div>
       )}
+
+      {/* ----------------- REPORT MODAL ----------------- */}
+      {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Heart,
@@ -12,15 +13,29 @@ import {
   Volume2,
   VolumeX,
   X,
-  Smile
+  Smile,
+  Film,
+  Check,
+  Flag
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
-import { fetchReels, toggleLikePost, addComment, addPostFavorite } from "../store/slices/postsSlice";
+import {
+  fetchReels,
+  fetchSavedAudios,
+  saveAudio,
+  toggleLikePost,
+  addComment,
+  addPostFavorite,
+} from "../store/slices/postsSlice";
 import { useApp } from "../context/AppContext";
 import { getFullImageUrl } from "../services/api";
+import Avatar from "../components/Avatar";
+import ReportModal, { ReportTarget } from "../components/ReportModal";
+import HashtagText from "../components/HashtagText";
 
 interface ReelComment {
   id: number;
+  userId: string;
   username: string;
   avatar: string;
   text: string;
@@ -30,15 +45,20 @@ interface ReelComment {
 
 interface Reel {
   id: number;
+  userId: string;
   creator: string;
   avatar: string;
   media: string;
   caption: string;
-  musicName: string;
+  audioId: string;
+  audioName: string;
+  audioArtist: string;
+  audioUrl: string;
   likesCount: number;
   commentsCount: number;
   isLiked: boolean;
   isSaved: boolean;
+  isAudioSaved: boolean;
   comments: ReelComment[];
 }
 
@@ -46,66 +66,86 @@ const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf37
 
 export default function ReelsPage() {
   const dispatch = useDispatch<AppDispatch>();
+  const { setCreateOpen, setCreateType } = useApp();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
-  const { reels: backendReels, loading } = useSelector((state: RootState) => state.posts);
-  
+  const { reels: backendReels, savedAudios, loading } = useSelector((state: RootState) => state.posts);
+
   const [muted, setMuted] = useState(false);
   const [activeReelIndex, setActiveReelIndex] = useState(0);
   const [showComments, setShowComments] = useState(false);
   const [newComment, setNewComment] = useState("");
 
   const [reels, setReels] = useState<Reel[]>([]);
+  const [audioBusy, setAudioBusy] = useState(false);
+  const [showReelMenu, setShowReelMenu] = useState(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
 
   useEffect(() => {
     if (isLoggedIn) {
       dispatch(fetchReels({}));
+      dispatch(fetchSavedAudios());
     }
   }, [isLoggedIn, dispatch]);
 
   useEffect(() => {
-    if (backendReels && backendReels.length > 0) {
-      const formatted: Reel[] = backendReels.map((p: any) => ({
+    if (!backendReels || backendReels.length === 0) {
+      setReels([]);
+      return;
+    }
+    const savedAudioIds = new Set(savedAudios.map((a) => a.audioId));
+    const formatted: Reel[] = backendReels.map((p: any) => {
+      const audioId = String(p.audioId ?? p.audio?.id ?? "");
+      return {
         id: p.id || p.postId,
+        userId: p.userId || p.userProfileId || "",
         creator: p.userName || p.username || "creator",
-        avatar: getFullImageUrl(p.userAvatar || p.userImage) || DEFAULT_AVATAR,
-        media: getFullImageUrl(p.filePath || p.imagePath || (p.images && p.images[0]) || p.image) || "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
-        caption: p.content || p.title || "",
-        musicName: `Original Audio - ${p.userName || "creator"}`,
+        avatar: getFullImageUrl(p.userAvatar || p.userImage),
+        media: getFullImageUrl(p.filePath || p.imagePath || (p.images && p.images[0]) || p.image),
+        caption: p.content || p.title || p.caption || "",
+        audioId,
+        audioName: p.audioName || p.audio?.title || `Оригинальный звук`,
+        audioArtist: p.audioArtist || p.audio?.artist || p.userName || "",
+        audioUrl: getFullImageUrl(p.audioUrl || p.audio?.audioUrl),
         likesCount: typeof p.likeCount === "number" ? p.likeCount : (Array.isArray(p.likes) ? p.likes.length : 0),
         commentsCount: typeof p.commentCount === "number" ? p.commentCount : (p.comments?.length || 0),
         isLiked: !!p.isLiked,
         isSaved: !!p.isSaved,
+        isAudioSaved: !!audioId && savedAudioIds.has(audioId),
         comments: (p.comments || []).map((c: any) => ({
           id: c.id || c.commentId,
+          userId: c.userId || "",
           username: c.userName || c.username || "commenter",
-          avatar: getFullImageUrl(c.userAvatar) || DEFAULT_AVATAR,
+          avatar: getFullImageUrl(c.userAvatar),
           text: c.comment || c.text || "",
           likes: 0,
           time: "Just now",
         })),
-      }));
-      setReels(formatted);
-    } else {
-      // Fallback mocks if backend reels list is empty
-      setReels([
-        {
-          id: 101,
-          creator: "saidov.7",
-          avatar: DEFAULT_AVATAR,
-          media: "https://images.unsplash.com/photo-1502680390469-be75c86b636f?w=600&h=1000&fit=crop",
-          caption: "Epic views! #explore #surf #nature",
-          musicName: "Original Audio - saidov.7",
-          likesCount: 1530,
-          commentsCount: 2,
-          isLiked: false,
-          isSaved: false,
-          comments: [
-            { id: 1, username: "surfer_joe", avatar: DEFAULT_AVATAR, text: "Awesome capture!", likes: 10, time: "1h" }
-          ]
-        }
-      ]);
+      };
+    });
+    setReels(formatted);
+  }, [backendReels, savedAudios]);
+
+  const handleSaveAudio = async (reel: Reel) => {
+    if (!reel.audioId || reel.isAudioSaved || audioBusy) return;
+    setAudioBusy(true);
+    // Optimistic: flip the button immediately, revert if the request fails.
+    setReels((prev) => prev.map((r) => (r.audioId === reel.audioId ? { ...r, isAudioSaved: true } : r)));
+    try {
+      await dispatch(
+        saveAudio({
+          audioId: reel.audioId,
+          title: reel.audioName,
+          artist: reel.audioArtist,
+          audioUrl: reel.audioUrl,
+        })
+      ).unwrap();
+    } catch (err) {
+      console.error("Failed to save audio:", err);
+      setReels((prev) => prev.map((r) => (r.audioId === reel.audioId ? { ...r, isAudioSaved: false } : r)));
+    } finally {
+      setAudioBusy(false);
     }
-  }, [backendReels]);
+  };
 
   const currentReel = reels[activeReelIndex];
 
@@ -140,11 +180,13 @@ export default function ReelsPage() {
     dispatch(addComment({
       postId: currentReel.id,
       comment: newComment.trim(),
-      username: currentUser.username
+      username: currentUser.username,
+      userId: currentUser.id
     }));
 
     const newCommentObj: ReelComment = {
       id: Date.now(),
+      userId: currentUser.id,
       username: currentUser.username,
       avatar: currentUser.avatar,
       text: newComment.trim(),
@@ -177,10 +219,31 @@ export default function ReelsPage() {
     }
   };
 
-  if (!currentReel) {
+  if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center bg-zinc-950 text-white">
         <div className="w-8 h-8 border-4 border-t-transparent border-white rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!currentReel) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center bg-zinc-950 text-white px-6">
+        <div className="w-16 h-16 rounded-full border-2 border-white flex items-center justify-center">
+          <Film className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold">Reels пока нет</h2>
+        <p className="text-sm text-zinc-400 max-w-xs">Загрузите первое видео, и оно появится здесь.</p>
+        <button
+          onClick={() => {
+            setCreateType("reel");
+            setCreateOpen(true);
+          }}
+          className="btn-grad px-5 py-2.5 rounded-xl text-sm font-bold cursor-pointer"
+        >
+          Создать Reel
+        </button>
       </div>
     );
   }
@@ -245,30 +308,50 @@ export default function ReelsPage() {
           {/* Bottom/Left Overlay (Caption & details) */}
           <div className="absolute bottom-0 left-0 right-14 p-4 bg-gradient-to-t from-black/80 to-transparent text-white flex flex-col gap-2 z-10 pointer-events-auto">
             {/* User profile row */}
-            <div className="flex items-center gap-2">
-              <img
-                src={currentReel.avatar}
-                alt={currentReel.creator}
-                className="w-8 h-8 rounded-full border border-white object-cover"
-              />
+            <Link href={currentReel.userId ? `/u/${currentReel.userId}` : "#"} className="flex items-center gap-2 w-fit">
+              <Avatar src={currentReel.avatar} name={currentReel.creator} className="w-8 h-8 border border-white" />
               <span className="font-semibold text-sm hover:underline cursor-pointer">
                 {currentReel.creator}
               </span>
-            </div>
+            </Link>
 
             {/* Caption */}
             <p className="text-xs line-clamp-2 leading-relaxed opacity-90 select-text text-left">
-              {currentReel.caption}
+              <HashtagText text={currentReel.caption} linkClassName="text-white font-semibold" />
             </p>
 
-            {/* Music ticker */}
-            <div className="flex items-center gap-2 text-xs mt-1 bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 w-fit">
-              <Music className="w-3.5 h-3.5" />
-              <div className="overflow-hidden w-28 relative h-4">
-                <span className="absolute animate-marquee whitespace-nowrap font-medium">
-                  {currentReel.musicName}
-                </span>
+            {/* Audio track + save-audio */}
+            <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center gap-2 text-xs bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 min-w-0">
+                <Music className="w-3.5 h-3.5 flex-shrink-0" />
+                <div className="overflow-hidden w-28 relative h-4">
+                  <span className="absolute animate-marquee whitespace-nowrap font-medium">
+                    {currentReel.audioName}
+                    {currentReel.audioArtist ? ` · ${currentReel.audioArtist}` : ""}
+                  </span>
+                </div>
               </div>
+              {currentReel.audioId && (
+                <button
+                  onClick={() => handleSaveAudio(currentReel)}
+                  disabled={currentReel.isAudioSaved || audioBusy}
+                  className={`flex items-center gap-1.5 text-[11px] font-bold rounded-full py-1.5 px-3 backdrop-blur-sm transition cursor-pointer flex-shrink-0 disabled:cursor-default ${
+                    currentReel.isAudioSaved
+                      ? "bg-white/20 text-white"
+                      : "bg-white text-black hover:bg-white/90 active:scale-95"
+                  }`}
+                >
+                  {currentReel.isAudioSaved ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" /> Сохранён
+                    </>
+                  ) : (
+                    <>
+                      <Bookmark className="w-3.5 h-3.5" /> Сохранить звук
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
 
@@ -314,9 +397,31 @@ export default function ReelsPage() {
             </button>
 
             {/* Menu */}
-            <button className="bg-black/40 hover:bg-black/60 active:scale-90 transition p-2.5 rounded-full backdrop-blur-md">
-              <MoreVertical className="w-6 h-6 text-white" />
-            </button>
+            <div className="relative">
+              <button
+                onClick={() => setShowReelMenu((v) => !v)}
+                className="bg-black/40 hover:bg-black/60 active:scale-90 transition p-2.5 rounded-full backdrop-blur-md cursor-pointer"
+              >
+                <MoreVertical className="w-6 h-6 text-white" />
+              </button>
+              {showReelMenu && (
+                <div className="absolute bottom-full right-0 mb-2 w-48 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-20 animate-pop-in">
+                  {currentUser && currentReel.userId !== currentUser.id ? (
+                    <button
+                      onClick={() => {
+                        setReportTarget({ type: "POST", id: String(currentReel.id) });
+                        setShowReelMenu(false);
+                      }}
+                      className="w-full flex items-center gap-2.5 p-3.5 text-sm font-bold text-red-500 hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                    >
+                      <Flag className="w-4 h-4" /> Пожаловаться
+                    </button>
+                  ) : (
+                    <span className="block p-3.5 text-sm text-zinc-450 text-left">Это ваш Reel</span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
         </div>
@@ -349,13 +454,11 @@ export default function ReelsPage() {
                 currentReel.comments.map((comment) => (
                   <div key={comment.id} className="flex items-start justify-between text-sm">
                     <div className="flex items-start gap-3">
-                      <img
-                        src={comment.avatar}
-                        alt={comment.username}
-                        className="w-8 h-8 rounded-full object-cover border border-zinc-200"
-                      />
+                      <Link href={comment.userId ? `/u/${comment.userId}` : "#"}>
+                        <Avatar src={comment.avatar} name={comment.username} className="w-8 h-8 border border-zinc-200" />
+                      </Link>
                       <div className="flex flex-col">
-                        <span className="font-bold text-zinc-900 dark:text-white">{comment.username}</span>
+                        <Link href={comment.userId ? `/u/${comment.userId}` : "#"} className="font-bold text-zinc-900 dark:text-white hover:underline w-fit">{comment.username}</Link>
                         <p className="text-zinc-800 dark:text-zinc-200 leading-snug mt-0.5">{comment.text}</p>
                         <div className="flex gap-3 text-[11px] text-zinc-400 mt-1">
                           <span>{comment.time}</span>
@@ -396,6 +499,9 @@ export default function ReelsPage() {
           </div>
         </div>
       )}
+
+      {/* ----------------- REPORT MODAL ----------------- */}
+      {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
 
     </div>
   );

@@ -177,6 +177,18 @@ export const api = {
         method: "PUT",
       });
     },
+
+    async getActiveSessions(): Promise<any[]> {
+      const res = await request<any>("/Account/get-active-sessions");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async logoutSession(sessionId: string): Promise<any> {
+      return request("/Account/logout-session", {
+        method: "POST",
+        body: JSON.stringify({ sessionId }),
+      });
+    },
   },
 
   // --- USER PROFILE ENDPOINTS ---
@@ -328,6 +340,61 @@ export const api = {
         body: JSON.stringify(data),
       });
     },
+
+    async addReel(data: {
+      file: File;
+      caption?: string;
+      audioId?: string;
+      audioName?: string;
+      audioArtist?: string;
+    }): Promise<any> {
+      const formData = new FormData();
+      formData.append("File", data.file);
+      if (data.caption) formData.append("caption", data.caption);
+      if (data.audioId) formData.append("audioId", data.audioId);
+      if (data.audioName) formData.append("audioName", data.audioName);
+      if (data.audioArtist) formData.append("audioArtist", data.audioArtist);
+
+      return request("/Post/add-reel", {
+        method: "POST",
+        body: formData,
+      });
+    },
+
+    async getTrendingReels(): Promise<any[]> {
+      const res = await request<any>("/Post/get-trending-reels");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async saveAudio(audioId: string, data: { title?: string; artist?: string; audioUrl?: string }): Promise<any> {
+      return request(`/Post/save-audio/${encodeURIComponent(audioId)}`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async getSavedAudios(): Promise<any[]> {
+      const res = await request<any>("/Post/get-saved-audios");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async toggleComments(postId: number, allowComments: boolean): Promise<any> {
+      return request(`/Post/toggle-comments/${postId}?allowComments=${allowComments}`, {
+        method: "PUT",
+      });
+    },
+
+    async getByHashtag(hashtag: string): Promise<any[]> {
+      // The backend indexes tags without the leading '#'.
+      const tag = hashtag.replace(/^#/, "");
+      const res = await request<any>(`/Post/get-by-hashtag?hashtag=${encodeURIComponent(tag)}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async getTrendingHashtags(): Promise<any[]> {
+      const res = await request<any>("/Post/get-trending-hashtags");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
   },
 
   // --- STORY ENDPOINTS ---
@@ -347,19 +414,50 @@ export const api = {
       return Array.isArray(res) ? res : res?.data || [];
     },
 
-    async likeStory(storyId: number): Promise<any> {
-      return request(`/Story/LikeStory?storyId=${storyId}`, {
+    /** Toggles a like on a story. Pass `reaction` to attach a quick emoji instead of a plain heart. */
+    async likeStory(storyId: number, reaction?: string): Promise<any> {
+      return request("/Story/LikeStory", {
         method: "POST",
+        body: JSON.stringify({ storyId, reaction }),
       });
+    },
+
+    /** Vote on a POLL sticker (selectedOptionIndex) or answer a QUESTION sticker (textAnswer). */
+    async answerSticker(data: {
+      stickerId: number | string;
+      selectedOptionIndex?: number;
+      textAnswer?: string;
+    }): Promise<any> {
+      return request("/Story/answer-sticker", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+
+    /** Sticker statistics — the backend only exposes these to the story's author. */
+    async getStickerResults(stickerId: number | string): Promise<any> {
+      return request(`/Story/sticker-results/${encodeURIComponent(String(stickerId))}`);
     },
 
     async getStoryById(id: number): Promise<any> {
       return request(`/Story/GetStoryById?id=${id}`);
     },
 
-    async addStory(file: File, postId?: number): Promise<any> {
+    async addStory(
+      file: File,
+      postId?: number,
+      isForCloseFriends = false,
+      sticker?: { type: "POLL" | "QUESTION"; question: string; options?: string[] }
+    ): Promise<any> {
       const formData = new FormData();
       formData.append("Image", file);
+      formData.append("isForCloseFriends", String(isForCloseFriends));
+      if (sticker) {
+        formData.append("stickerType", sticker.type);
+        formData.append("stickerQuestion", sticker.question);
+        // A poll's options are a repeated field so the backend binds them as a string[].
+        (sticker.options || []).forEach((opt) => formData.append("stickerOptions", opt));
+      }
       const url = postId ? `/Story/AddStories?PostId=${postId}` : "/Story/AddStories";
       return request(url, {
         method: "POST",
@@ -395,6 +493,11 @@ export const api = {
       const res = await request<any>("/Story/get-hidden-users");
       return Array.isArray(res) ? res : res?.data || [];
     },
+
+    async getArchivedStories(): Promise<any[]> {
+      const res = await request<any>("/Story/get-archived-stories");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
   },
 
   // --- CHAT ENDPOINTS ---
@@ -414,11 +517,19 @@ export const api = {
       });
     },
 
+    async createGroupChat(name: string, participantIds: string[]): Promise<any> {
+      return request("/Chat/create-group-chat", {
+        method: "POST",
+        body: JSON.stringify({ name, participantIds }),
+      });
+    },
+
     async sendMessage(
       chatId: number,
       messageText?: string,
       file?: File,
-      voice?: { isVoice: true; durationMs: number }
+      voice?: { isVoice: true; durationMs: number },
+      replyToMessageId?: number
     ): Promise<any> {
       const formData = new FormData();
       formData.append("ChatId", String(chatId));
@@ -428,10 +539,20 @@ export const api = {
         formData.append("isVoice", "true");
         formData.append("durationMs", String(voice.durationMs));
       }
+      if (replyToMessageId != null) {
+        formData.append("replyToMessageId", String(replyToMessageId));
+      }
 
       return request("/Chat/send-message", {
         method: "PUT",
         body: formData,
+      });
+    },
+
+    async toggleVanishMode(chatId: number, isVanishMode: boolean): Promise<any> {
+      return request(`/Chat/toggle-vanish-mode/${chatId}`, {
+        method: "PUT",
+        body: JSON.stringify({ isVanishMode }),
       });
     },
 
@@ -458,6 +579,24 @@ export const api = {
       return request(`/Chat/delete-chat?chatId=${chatId}`, {
         method: "DELETE",
       });
+    },
+
+    async initiateCall(data: { chatId: number; recipientId: string; type: "AUDIO" | "VIDEO" }): Promise<any> {
+      return request("/Chat/initiate-call", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async respondToCall(data: { callId: string; status: "ACCEPTED" | "REJECTED" | "ENDED" }): Promise<any> {
+      return request("/Chat/respond-to-call", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async getActiveCall(chatId: number): Promise<any> {
+      return request(`/Chat/get-active-call?chatId=${chatId}`);
     },
   },
 
@@ -568,9 +707,19 @@ export const api = {
       return Array.isArray(res) ? res : res?.data || [];
     },
 
-    async addSearchHistory(text: string): Promise<any> {
-      return request(`/User/add-search-history?Text=${encodeURIComponent(text)}`, {
+    async updateActivity(): Promise<any> {
+      return request("/User/update-activity", {
+        method: "PUT",
+      });
+    },
+
+    /**
+     * Records a recent search: a visited profile (`searchedUserId`) or a raw query (`queryText`).
+     */
+    async addSearchHistory(data: { searchedUserId?: string; queryText?: string }): Promise<any> {
+      return request("/User/add-search-history", {
         method: "POST",
+        body: JSON.stringify(data),
       });
     },
 
@@ -636,6 +785,34 @@ export const api = {
       const res = await request<any>("/User/get-blocked-users");
       return Array.isArray(res) ? res : res?.data || [];
     },
+
+    async addCloseFriends(friendUserIds: string[]): Promise<any> {
+      return request("/User/add-close-friends", {
+        method: "POST",
+        body: JSON.stringify({ friendUserIds }),
+      });
+    },
+
+    async deleteCloseFriend(userId: string): Promise<any> {
+      return request(`/User/delete-close-friend/${userId}`, {
+        method: "DELETE",
+      });
+    },
+
+    async getCloseFriends(): Promise<any[]> {
+      const res = await request<any>("/User/get-close-friends");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+  },
+
+  // --- MUSIC ENDPOINTS ---
+  music: {
+    /** Searches the catalogue. Called without a query it returns the popular/recommended tracks. */
+    async search(query?: string): Promise<any[]> {
+      const q = query?.trim();
+      const res = await request<any>(`/Music/search${q ? `?query=${encodeURIComponent(q)}` : ""}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
   },
 
   // --- NOTES ENDPOINTS ---
@@ -658,6 +835,76 @@ export const api = {
     async deleteNote(): Promise<any> {
       return request("/User/delete-note", {
         method: "DELETE",
+      });
+    },
+  },
+
+  // --- NOTIFICATION ENDPOINTS ---
+  notification: {
+    async getNotifications(pageNumber = 1, pageSize = 20): Promise<any[]> {
+      const res = await request<any>(
+        `/Notification/get-notifications?PageNumber=${pageNumber}&PageSize=${pageSize}`
+      );
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async markAsRead(notificationId: string): Promise<any> {
+      return request(`/Notification/mark-as-read?notificationId=${encodeURIComponent(notificationId)}`, {
+        method: "PUT",
+      });
+    },
+
+    async markAllAsRead(): Promise<any> {
+      return request("/Notification/mark-as-read?all=true", {
+        method: "PUT",
+      });
+    },
+
+    async deleteNotification(id: string): Promise<any> {
+      return request(`/Notification/delete-notification/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    },
+  },
+
+  // --- HIGHLIGHT ENDPOINTS ---
+  highlight: {
+    async getUserHighlights(userId: string): Promise<any[]> {
+      const res = await request<any>(`/Highlight/get-user-highlights/${userId}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async createHighlight(data: { title: string; cover?: string; storyIds: number[] }): Promise<any> {
+      return request("/Highlight/create-highlight", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async updateHighlight(id: string, data: { title?: string; cover?: string; storyIds?: number[] }): Promise<any> {
+      return request(`/Highlight/update-highlight/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async deleteHighlight(id: string): Promise<any> {
+      return request(`/Highlight/delete-highlight/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    },
+  },
+
+  // --- REPORT ENDPOINTS ---
+  report: {
+    async sendReport(data: {
+      targetType: "POST" | "COMMENT" | "STORY" | "USER";
+      targetId: string;
+      reason: string;
+    }): Promise<any> {
+      return request("/Report/send-report", {
+        method: "POST",
+        body: JSON.stringify(data),
       });
     },
   },
