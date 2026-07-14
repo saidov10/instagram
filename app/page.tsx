@@ -20,15 +20,8 @@ import {
   toggleLikePost,
   addComment,
   addPostFavorite,
-  deletePost,
-  hydrateLocal
+  deletePost
 } from "./store/slices/postsSlice";
-import {
-  getSavedPosts,
-  toggleSavedPost,
-  getLocalComments,
-  addLocalComment
-} from "./services/localStore";
 import {
   fetchStories,
   viewStory,
@@ -88,18 +81,7 @@ export default function HomeFeed() {
 
   useEffect(() => {
     if (isLoggedIn) {
-      dispatch(fetchFollowingPosts({})).then((action) => {
-        if (fetchFollowingPosts.fulfilled.match(action) && currentUser) {
-          const loaded = action.payload as { id: number }[];
-          const savedIds = getSavedPosts(currentUser.id).map((p) => p.id);
-          const comments: Record<number, any[]> = {};
-          loaded.forEach((p) => {
-            const local = getLocalComments(p.id);
-            if (local.length) comments[p.id] = local;
-          });
-          dispatch(hydrateLocal({ savedIds, comments }));
-        }
-      });
+      dispatch(fetchFollowingPosts({}));
       dispatch(fetchStories());
 
       // Fetch suggestions
@@ -144,20 +126,6 @@ export default function HomeFeed() {
 
   const handleSave = (postId: number) => {
     dispatch(addPostFavorite(postId));
-    if (!currentUser) return;
-    const post = posts.find((p) => p.id === postId);
-    if (post) {
-      toggleSavedPost(currentUser.id, {
-        id: post.id,
-        userId: post.userId,
-        username: post.username,
-        avatar: post.avatar,
-        image: post.image,
-        caption: post.caption,
-        likes: post.likes,
-        time: post.time,
-      });
-    }
   };
 
   const handleAddComment = (postId: number, e: React.FormEvent) => {
@@ -167,7 +135,6 @@ export default function HomeFeed() {
 
     const comment = text.trim();
     dispatch(addComment({ postId, comment, username: currentUser.username }));
-    addLocalComment(postId, { id: Date.now(), username: currentUser.username, text: comment });
     setCommentInputs({ ...commentInputs, [postId]: "" });
   };
 
@@ -481,7 +448,7 @@ export default function HomeFeed() {
               <img
                 src={currentUser.avatar}
                 alt={currentUser.username}
-                className="w-[44px] h-[44px] rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                className="w-14 h-14 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
               />
               <div className="flex flex-col">
                 <span className="font-semibold text-sm hover:underline cursor-pointer leading-tight">
@@ -504,29 +471,27 @@ export default function HomeFeed() {
           </div>
 
           {/* Suggestion list */}
-          <div className="flex flex-col gap-4 mb-8">
+          <div className="flex flex-col gap-5 mb-8">
             {suggestions.map((sug) => (
               <div key={sug.id} className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3.5 min-w-0">
                   <img
                     src={sug.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop"}
                     alt={sug.username}
-                    className="w-8 h-8 rounded-full object-cover border border-zinc-100 dark:border-zinc-900"
+                    className="w-11 h-11 rounded-full object-cover border border-zinc-200 dark:border-zinc-800 flex-shrink-0"
                   />
-                  <div className="flex flex-col max-w-[180px]">
-                    <span className="font-bold text-sm hover:underline cursor-pointer truncate leading-none">
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-semibold text-sm hover:underline cursor-pointer truncate leading-tight">
                       {sug.username}
                     </span>
-                    <div className="flex items-center gap-1 mt-1 truncate">
-                      <span className="text-zinc-400 text-xs truncate leading-none">
-                        {sug.subtitle}
-                      </span>
-                    </div>
+                    <span className="text-zinc-450 dark:text-zinc-500 text-xs truncate leading-tight mt-0.5">
+                      {sug.subtitle}
+                    </span>
                   </div>
                 </div>
                 <button
                   onClick={() => handleFollowSuggestion(sug.id)}
-                  className={`font-bold text-xs transition duration-150 cursor-pointer ${
+                  className={`font-semibold text-xs transition duration-150 cursor-pointer flex-shrink-0 ml-2 ${
                     sug.followed
                       ? "text-zinc-400 hover:text-white"
                       : "text-blue-500 hover:text-blue-400"

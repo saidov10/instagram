@@ -27,6 +27,7 @@ interface PostsState {
   posts: Post[];
   reels: any[];
   myPosts: Post[];
+  savedPosts: Post[];
   loading: boolean;
   error: string | null;
 }
@@ -35,19 +36,15 @@ const initialState: PostsState = {
   posts: [],
   reels: [],
   myPosts: [],
+  savedPosts: [],
   loading: false,
   error: null,
 };
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
-const formatBackendPost = (p: any, currentUserId = ""): Post => {
-  // Backend returns `likes` as an array of user ids that liked the post.
-  const likeArray: string[] = Array.isArray(p.likes) ? p.likes : [];
-  const likeCount = typeof p.likeCount === "number" ? p.likeCount : likeArray.length;
-  const isLiked = currentUserId
-    ? likeArray.includes(currentUserId)
-    : p.isLikedByCurrentUser || p.isLiked || false;
+export const formatBackendPost = (p: any): Post => {
+  const likeCount = typeof p.likeCount === "number" ? p.likeCount : (Array.isArray(p.likes) ? p.likes.length : 0);
 
   return {
     id: p.id || p.postId,
@@ -59,8 +56,9 @@ const formatBackendPost = (p: any, currentUserId = ""): Post => {
     caption: p.content || p.title || "",
     likes: likeCount,
     time: p.createAt ? new Date(p.createAt).toLocaleDateString() : "Just now",
-    isLiked,
-    isSaved: p.isSavedByCurrentUser || p.isSaved || false,
+    // Backend now returns these directly on the post object, based on the JWT-authenticated user.
+    isLiked: !!p.isLiked,
+    isSaved: !!p.isSaved,
     comments: (p.comments || []).map((c: any) => ({
       id: c.id || c.commentId,
       username: c.userName || c.username || "commenter",
@@ -70,16 +68,10 @@ const formatBackendPost = (p: any, currentUserId = ""): Post => {
 };
 
 // Async Thunks
-const currentIdFrom = (getState: () => unknown): string => {
-  const state = getState() as { auth?: { currentUser?: { id?: string } } };
-  return state.auth?.currentUser?.id || "";
-};
-
 export const fetchFollowingPosts = createAsyncThunk(
   "posts/fetchFollowing",
-  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { getState, rejectWithValue }) => {
+  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { rejectWithValue }) => {
     try {
-      const myId = currentIdFrom(getState);
       // Default to getFollowingPost if logged in, fallback to getPosts
       let list;
       try {
@@ -87,7 +79,7 @@ export const fetchFollowingPosts = createAsyncThunk(
       } catch {
         list = await api.post.getPosts(params);
       }
-      return list.map((p) => formatBackendPost(p, myId));
+      return list.map(formatBackendPost);
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load posts.");
     }
@@ -96,11 +88,10 @@ export const fetchFollowingPosts = createAsyncThunk(
 
 export const fetchPosts = createAsyncThunk(
   "posts/fetchAll",
-  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { getState, rejectWithValue }) => {
+  async (params: { userId?: string; pageNumber?: number; pageSize?: number } = {}, { rejectWithValue }) => {
     try {
-      const myId = currentIdFrom(getState);
       const list = await api.post.getPosts(params);
-      return list.map((p) => formatBackendPost(p, myId));
+      return list.map(formatBackendPost);
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load posts.");
     }
@@ -109,13 +100,25 @@ export const fetchPosts = createAsyncThunk(
 
 export const fetchMyPosts = createAsyncThunk(
   "posts/fetchMy",
-  async (_, { getState, rejectWithValue }) => {
+  async (_, { rejectWithValue }) => {
     try {
-      const myId = currentIdFrom(getState);
       const list = await api.post.getMyPosts();
-      return list.map((p) => formatBackendPost(p, myId));
+      return list.map(formatBackendPost);
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load my posts.");
+    }
+  }
+);
+
+export const fetchPostFavorites = createAsyncThunk(
+  "posts/fetchFavorites",
+  async (params: { pageNumber?: number; pageSize?: number } = {}, { rejectWithValue }) => {
+    try {
+      const res = await api.profile.getPostFavorites(params.pageNumber, params.pageSize);
+      const list = Array.isArray(res) ? res : res?.data || [];
+      return list.map(formatBackendPost);
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to load saved posts.");
     }
   }
 );
@@ -199,23 +202,7 @@ export const addPostFavorite = createAsyncThunk(
 const postsSlice = createSlice({
   name: "posts",
   initialState,
-  reducers: {
-    // Merge locally-persisted saved state + comments into loaded posts.
-    hydrateLocal(
-      state,
-      action: PayloadAction<{ savedIds: number[]; comments: Record<number, Comment[]> }>
-    ) {
-      const { savedIds, comments } = action.payload;
-      const apply = (list: Post[]) => {
-        list.forEach((p) => {
-          p.isSaved = savedIds.includes(p.id);
-          if (comments[p.id]) p.comments = comments[p.id];
-        });
-      };
-      apply(state.posts);
-      apply(state.myPosts);
-    },
-  },
+  reducers: {},
   extraReducers: (builder) => {
     builder
       // Fetch Following Posts
@@ -247,56 +234,53 @@ const postsSlice = createSlice({
         state.reels = action.payload;
       })
 
+      // Fetch Saved (Favorite) Posts
+      .addCase(fetchPostFavorites.fulfilled, (state, action: PayloadAction<Post[]>) => {
+        state.savedPosts = action.payload;
+      })
+
       // Local mutations to speed up user response
       // Toggle Like
       .addCase(toggleLikePost.fulfilled, (state, action: PayloadAction<number>) => {
-        const post = state.posts.find((p) => p.id === action.payload);
-        if (post) {
-          post.isLiked = !post.isLiked;
-          post.likes = post.isLiked ? post.likes + 1 : post.likes - 1;
-        }
-        const myPost = state.myPosts.find((p) => p.id === action.payload);
-        if (myPost) {
-          myPost.isLiked = !myPost.isLiked;
-          myPost.likes = myPost.isLiked ? myPost.likes + 1 : myPost.likes - 1;
-        }
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === action.payload);
+          if (post) {
+            post.isLiked = !post.isLiked;
+            post.likes = post.isLiked ? post.likes + 1 : post.likes - 1;
+          }
+        });
       })
 
       // Add Comment
       .addCase(addComment.fulfilled, (state, action) => {
-        const post = state.posts.find((p) => p.id === action.payload.postId);
-        if (post) {
-          post.comments.push({
-            id: Date.now(),
-            username: action.payload.username,
-            text: action.payload.comment,
-          });
-        }
-        const myPost = state.myPosts.find((p) => p.id === action.payload.postId);
-        if (myPost) {
-          myPost.comments.push({
-            id: Date.now(),
-            username: action.payload.username,
-            text: action.payload.comment,
-          });
-        }
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === action.payload.postId);
+          if (post) {
+            post.comments.push({
+              id: Date.now(),
+              username: action.payload.username,
+              text: action.payload.comment,
+            });
+          }
+        });
       })
 
-      // Add Post Favorite
+      // Add Post Favorite (backend toggles saved/unsaved)
       .addCase(addPostFavorite.fulfilled, (state, action: PayloadAction<number>) => {
-        const post = state.posts.find((p) => p.id === action.payload);
-        if (post) {
-          post.isSaved = !post.isSaved;
-        }
+        [state.posts, state.myPosts].forEach((list) => {
+          const post = list.find((p) => p.id === action.payload);
+          if (post) post.isSaved = !post.isSaved;
+        });
+        state.savedPosts = state.savedPosts.filter((p) => p.id !== action.payload);
       })
 
       // Delete Post
       .addCase(deletePost.fulfilled, (state, action: PayloadAction<number>) => {
         state.posts = state.posts.filter((p) => p.id !== action.payload);
         state.myPosts = state.myPosts.filter((p) => p.id !== action.payload);
+        state.savedPosts = state.savedPosts.filter((p) => p.id !== action.payload);
       });
   },
 });
 
-export const { hydrateLocal } = postsSlice.actions;
 export default postsSlice.reducer;

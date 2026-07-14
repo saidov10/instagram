@@ -8,6 +8,7 @@ export interface UserState {
   avatar: string;
   about: string;
   gender: number;
+  isPrivate: boolean;
 }
 
 interface AuthState {
@@ -68,9 +69,22 @@ export const fetchMyProfile = createAsyncThunk(
         avatar: getFullImageUrl(profile.avatar || profile.imagePath || profile.image) || DEFAULT_AVATAR,
         about: profile.about || "",
         gender: profile.gender || 0,
+        isPrivate: !!profile.isPrivate,
       };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load profile.");
+    }
+  }
+);
+
+export const updatePrivacy = createAsyncThunk(
+  "auth/updatePrivacy",
+  async (isPrivate: boolean, { rejectWithValue }) => {
+    try {
+      await api.profile.updatePrivacy(isPrivate);
+      return isPrivate;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to update privacy.");
     }
   }
 );
@@ -184,6 +198,13 @@ const authSlice = createSlice({
         if (state.currentUser) {
           state.currentUser.about = action.meta.arg.about ?? state.currentUser.about;
           state.currentUser.gender = action.meta.arg.gender ?? state.currentUser.gender;
+        }
+      })
+
+      // Update Privacy
+      .addCase(updatePrivacy.fulfilled, (state, action: PayloadAction<boolean>) => {
+        if (state.currentUser) {
+          state.currentUser.isPrivate = action.payload;
         }
       });
   },

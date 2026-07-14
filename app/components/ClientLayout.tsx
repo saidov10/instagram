@@ -98,13 +98,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   }, [searchQuery, showSearchPanel]);
 
   const handleFollowToggle = async (user: any) => {
-    const isCurrentlyFollowing = followingList.some((s: any) => s.id === user.id || s.userName === user.userName);
+    const uid = user.id || user.userId;
+    const isCurrentlyFollowing = followingList.some((s: any) => s.id === uid || s.userName === user.userName);
     try {
       if (isCurrentlyFollowing) {
-        await api.following.unfollow(user.userName);
-        setFollowingList(prev => prev.filter(s => s.userName !== user.userName && s.id !== user.id));
+        await api.following.unfollow(uid);
+        setFollowingList(prev => prev.filter(s => s.userName !== user.userName && s.id !== uid));
       } else {
-        await api.following.follow(user.userName);
+        await api.following.follow(uid);
         setFollowingList(prev => [...prev, user]);
       }
     } catch (err) {
@@ -270,7 +271,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const userAvatar = currentUser?.avatar || DEFAULT_AVATAR;
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row text-black dark:text-white transition-colors duration-200">
+    <div className="h-screen flex flex-col md:flex-row text-black dark:text-white transition-colors duration-200">
 
       {/* ----------------- DESKTOP & TABLET SIDEBAR ----------------- */}
       <aside className={`hidden md:flex flex-col glass h-screen sticky top-0 z-40 transition-all duration-300 ${showSearchPanel || showNotifPanel ? "w-[72px]" : "w-[72px] xl:w-64"} p-3 justify-between`} style={{ borderRight: "1px solid var(--border)" }}>

@@ -3,9 +3,9 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useSelector } from "react-redux";
-import { Grid, Heart, MessageCircle, Lock, X } from "lucide-react";
+import { Grid, Heart, MessageCircle, Lock, X, MoreHorizontal, EyeOff, Eye, Ban } from "lucide-react";
 import { RootState } from "../../store/store";
-import { api, getFullImageUrl } from "../../services/api";
+import { api, getFullImageUrl, ApiError } from "../../services/api";
 import { ProfileSkeleton } from "../../components/SkeletonLoader";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
@@ -19,7 +19,10 @@ interface PublicProfile {
   postsCount: number;
   followersCount: number;
   followingCount: number;
+  isPrivate: boolean;
 }
+
+type FollowState = "none" | "following" | "pending";
 
 interface GridPost {
   id: number;
@@ -36,11 +39,18 @@ export default function UserProfilePage() {
 
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [posts, setPosts] = useState<GridPost[]>([]);
-  const [isFollowing, setIsFollowing] = useState(false);
+  const [followState, setFollowState] = useState<FollowState>("none");
   const [followBusy, setFollowBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
   const [selectedPost, setSelectedPost] = useState<GridPost | null>(null);
+
+  // Options menu (block / hide stories)
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [isHidingStoriesFrom, setIsHidingStoriesFrom] = useState(false);
+  const [optionsBusy, setOptionsBusy] = useState(false);
 
   // If viewing your own profile, send to the editable /profile page
   useEffect(() => {
@@ -53,12 +63,19 @@ export default function UserProfilePage() {
     if (!userId) return;
     setLoading(true);
     setNotFound(false);
+    setForbidden(false);
     try {
-      const p = await api.profile.getUserProfileById(userId);
+      const [p, blockedList] = await Promise.all([
+        api.profile.getUserProfileById(userId),
+        api.user.getBlockedUsers().catch(() => []),
+      ]);
       if (!p) {
         setNotFound(true);
         return;
       }
+      setIsBlocked((blockedList || []).some((b: any) => (b.id || b.userId) === userId));
+
+      const isPrivate = !!p.isPrivate;
       setProfile({
         id: p.id || userId,
         userName: p.userName || p.username || "user",
@@ -68,32 +85,45 @@ export default function UserProfilePage() {
         postsCount: p.postsCount ?? 0,
         followersCount: p.followersCount ?? 0,
         followingCount: p.followingCount ?? 0,
+        isPrivate,
       });
 
-      const myId = currentUser?.id;
-      const [rawPosts, mySubs] = await Promise.all([
-        api.post.getPosts({ userId }).catch(() => []),
-        // The is-follow endpoint is unreliable server-side; derive from our own
-        // subscriptions list, which is authoritative.
-        myId ? api.following.getSubscriptions(myId).catch(() => []) : Promise.resolve([]),
-      ]);
+      const followStatus = await api.profile.getIsFollowUserProfileById(userId).catch(() => false);
+      setFollowState(followStatus ? "following" : "none");
 
-      setPosts(
-        (rawPosts || []).map((rp: any) => ({
-          id: rp.id || rp.postId,
-          image: getFullImageUrl((rp.images && rp.images[0]) || rp.filePath || rp.imagePath || rp.image) || DEFAULT_AVATAR,
-          likes: typeof rp.likeCount === "number" ? rp.likeCount : (rp.likes?.length || 0),
-          comments: rp.commentCount || 0,
-        }))
-      );
-      setIsFollowing((mySubs || []).some((s: any) => (s.id || s.userId) === userId));
+      // Gate the posts grid for private accounts you don't yet follow.
+      if (isPrivate && !followStatus) {
+        setPosts([]);
+      } else {
+        const rawPosts = await api.post.getPosts({ userId }).catch(() => []);
+        setPosts(
+          (rawPosts || []).map((rp: any) => ({
+            id: rp.id || rp.postId,
+            image: getFullImageUrl((rp.images && rp.images[0]) || rp.filePath || rp.imagePath || rp.image) || DEFAULT_AVATAR,
+            likes: typeof rp.likeCount === "number" ? rp.likeCount : (rp.likes?.length || 0),
+            comments: rp.commentCount || 0,
+          }))
+        );
+      }
     } catch (err) {
       console.error(err);
-      setNotFound(true);
+      if (err instanceof ApiError && err.status === 403) {
+        setForbidden(true);
+      } else {
+        setNotFound(true);
+      }
     } finally {
       setLoading(false);
     }
   }, [userId, currentUser?.id]);
+
+  // Load hide-stories-from status separately (not fatal if it fails).
+  useEffect(() => {
+    if (!userId) return;
+    api.story.getHiddenUsers()
+      .then((list) => setIsHidingStoriesFrom((list || []).some((u: any) => (u.id || u.userId) === userId)))
+      .catch(() => {});
+  }, [userId]);
 
   useEffect(() => {
     loadProfile();
@@ -102,25 +132,26 @@ export default function UserProfilePage() {
   const handleFollow = async () => {
     if (!userId || followBusy) return;
     setFollowBusy(true);
-    // Optimistic update
-    const wasFollowing = isFollowing;
-    setIsFollowing(!wasFollowing);
-    setProfile((prev) =>
-      prev ? { ...prev, followersCount: prev.followersCount + (wasFollowing ? -1 : 1) } : prev
-    );
+    const prevState = followState;
     try {
-      if (wasFollowing) {
+      if (prevState === "following" || prevState === "pending") {
+        setFollowState("none");
+        if (prevState === "following") {
+          setProfile((prev) => (prev ? { ...prev, followersCount: prev.followersCount - 1 } : prev));
+        }
         await api.following.unfollow(userId);
       } else {
-        await api.following.follow(userId);
+        const res = await api.following.follow(userId);
+        const status = typeof res === "string" ? res : res?.status;
+        const pending = profile?.isPrivate && String(status || "").toUpperCase() !== "FOLLOWING";
+        setFollowState(pending ? "pending" : "following");
+        if (!pending) {
+          setProfile((prev) => (prev ? { ...prev, followersCount: prev.followersCount + 1 } : prev));
+        }
       }
     } catch (err) {
       console.error(err);
-      // Revert on failure
-      setIsFollowing(wasFollowing);
-      setProfile((prev) =>
-        prev ? { ...prev, followersCount: prev.followersCount + (wasFollowing ? 1 : -1) } : prev
-      );
+      setFollowState(prevState);
     } finally {
       setFollowBusy(false);
     }
@@ -136,7 +167,59 @@ export default function UserProfilePage() {
     router.push("/direct/inbox");
   };
 
+  const handleToggleBlock = async () => {
+    if (!userId || optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      if (isBlocked) {
+        await api.user.unblockUser(userId);
+        setIsBlocked(false);
+      } else {
+        await api.user.blockUser(userId);
+        setIsBlocked(true);
+      }
+    } catch (err) {
+      console.error("Failed to toggle block:", err);
+    } finally {
+      setOptionsBusy(false);
+      setShowOptionsMenu(false);
+    }
+  };
+
+  const handleToggleHideStories = async () => {
+    if (!userId || optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      if (isHidingStoriesFrom) {
+        await api.story.unhideStoryFrom(userId);
+        setIsHidingStoriesFrom(false);
+      } else {
+        await api.story.hideStoryFrom(userId);
+        setIsHidingStoriesFrom(true);
+      }
+    } catch (err) {
+      console.error("Failed to toggle hide stories:", err);
+    } finally {
+      setOptionsBusy(false);
+      setShowOptionsMenu(false);
+    }
+  };
+
   if (loading) return <ProfileSkeleton />;
+
+  if (forbidden) {
+    return (
+      <div className="w-full max-w-[935px] mx-auto px-4 py-20 flex flex-col items-center gap-4 text-center bg-white dark:bg-black text-black dark:text-white">
+        <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+          <Ban className="w-7 h-7" />
+        </div>
+        <h2 className="text-xl font-bold">Профиль недоступен</h2>
+        <button onClick={() => router.push("/")} className="text-blue-500 font-bold text-sm hover:text-blue-400 cursor-pointer">
+          Вернуться на главную
+        </button>
+      </div>
+    );
+  }
 
   if (notFound || !profile) {
     return (
@@ -173,17 +256,17 @@ export default function UserProfilePage() {
         <div className="flex-1 flex flex-col gap-5 w-full text-left">
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="text-xl font-normal">{profile.userName}</h2>
-            <div className="flex gap-2 text-sm font-semibold">
+            <div className="flex gap-2 text-sm font-semibold items-center">
               <button
                 onClick={handleFollow}
                 disabled={followBusy}
                 className={`px-6 py-2 rounded-xl transition cursor-pointer disabled:opacity-60 press ${
-                  isFollowing
+                  followState !== "none"
                     ? "glass hover:shadow-soft text-black dark:text-white"
                     : "btn-grad"
                 }`}
               >
-                {isFollowing ? "Вы подписаны" : "Подписаться"}
+                {followState === "following" ? "Вы подписаны" : followState === "pending" ? "Запрошено" : "Подписаться"}
               </button>
               <button
                 onClick={handleMessage}
@@ -191,6 +274,35 @@ export default function UserProfilePage() {
               >
                 Написать
               </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowOptionsMenu((v) => !v)}
+                  className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition cursor-pointer"
+                >
+                  <MoreHorizontal className="w-5 h-5" />
+                </button>
+                {showOptionsMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-64 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-20 animate-pop-in">
+                    <button
+                      onClick={handleToggleHideStories}
+                      disabled={optionsBusy}
+                      className="w-full flex items-center gap-3 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                    >
+                      {isHidingStoriesFrom ? <Eye className="w-4.5 h-4.5" /> : <EyeOff className="w-4.5 h-4.5" />}
+                      {isHidingStoriesFrom ? "Показать мои истории" : "Скрыть мои истории от этого пользователя"}
+                    </button>
+                    <hr className="border-[var(--border)]" />
+                    <button
+                      onClick={handleToggleBlock}
+                      disabled={optionsBusy}
+                      className="w-full flex items-center gap-3 p-3.5 text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition cursor-pointer text-left"
+                    >
+                      <Ban className="w-4.5 h-4.5" />
+                      {isBlocked ? "Разблокировать" : "Заблокировать"}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -218,7 +330,15 @@ export default function UserProfilePage() {
           </div>
         </div>
 
-        {posts.length === 0 ? (
+        {profile.isPrivate && followState !== "following" ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center gap-4">
+            <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+              <Lock className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold">Это закрытый аккаунт</h3>
+            <p className="text-sm text-zinc-500 max-w-xs">Подпишитесь, чтобы видеть публикации.</p>
+          </div>
+        ) : posts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center gap-4">
             <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
               <Grid className="w-8 h-8" />

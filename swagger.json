@@ -302,6 +302,7 @@
         "tags": [
           "Chat"
         ],
+        "summary": "Send a message (supports text, media file, and voice messages)",
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -321,18 +322,15 @@
                   "File": {
                     "type": "string",
                     "format": "binary"
+                  },
+                  "isVoice": {
+                    "type": "boolean",
+                    "description": "Set to true if sending a voice message"
+                  },
+                  "durationMs": {
+                    "type": "integer",
+                    "description": "Duration of voice message in milliseconds"
                   }
-                }
-              },
-              "encoding": {
-                "ChatId": {
-                  "style": "form"
-                },
-                "MessageText": {
-                  "style": "form"
-                },
-                "File": {
-                  "style": "form"
                 }
               }
             }
@@ -751,6 +749,30 @@
           {
             "name": "PageSize",
             "in": "query",
+            "style": "form",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Post/get-comments": {
+      "get": {
+        "tags": [
+          "Post"
+        ],
+        "parameters": [
+          {
+            "name": "postId",
+            "in": "query",
+            "required": true,
             "style": "form",
             "schema": {
               "type": "integer",
@@ -1563,7 +1585,7 @@
         ],
         "parameters": [
           {
-            "name": "id",
+            "name": "userId",
             "in": "query",
             "style": "form",
             "schema": {
@@ -1711,6 +1733,280 @@
       "delete": {
         "tags": [
           "UserProfile"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/add-note": {
+      "post": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Add a text note with optional music track",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 60
+                  },
+                  "musicTrack": {
+                    "type": "object",
+                    "properties": {
+                      "audioUrl": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "artist": {
+                        "type": "string"
+                      },
+                      "durationMs": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/get-notes": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get active notes of followed users and self",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/delete-note": {
+      "delete": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Delete the current user's note",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/block-user": {
+      "post": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Block a user",
+        "parameters": [
+          {
+            "name": "blockedUserId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/unblock-user": {
+      "delete": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Unblock a user",
+        "parameters": [
+          {
+            "name": "blockedUserId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/User/get-blocked-users": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get list of blocked users",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Story/hide-story-from": {
+      "post": {
+        "tags": [
+          "Story"
+        ],
+        "summary": "Hide stories from a specific user",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Story/unhide-story-from": {
+      "delete": {
+        "tags": [
+          "Story"
+        ],
+        "summary": "Unhide stories from a specific user",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/Story/get-hidden-users": {
+      "get": {
+        "tags": [
+          "Story"
+        ],
+        "summary": "Get list of users you hid stories from",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/UserProfile/update-privacy": {
+      "put": {
+        "tags": [
+          "UserProfile"
+        ],
+        "summary": "Update account privacy status (private/public)",
+        "parameters": [
+          {
+            "name": "isPrivate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/FollowingRelationShip/get-pending-requests": {
+      "get": {
+        "tags": [
+          "FollowingRelationShip"
+        ],
+        "summary": "Get pending follow requests",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/FollowingRelationShip/accept-follow-request": {
+      "put": {
+        "tags": [
+          "FollowingRelationShip"
+        ],
+        "summary": "Accept follow request",
+        "parameters": [
+          {
+            "name": "followerId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/FollowingRelationShip/reject-follow-request": {
+      "put": {
+        "tags": [
+          "FollowingRelationShip"
+        ],
+        "summary": "Reject follow request",
+        "parameters": [
+          {
+            "name": "followerId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {

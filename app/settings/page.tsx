@@ -1,13 +1,15 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useDispatch, useSelector } from "react-redux";
-import { logout, updateProfile, updateAvatar, fetchMyProfile } from "../store/slices/authSlice";
+import { logout, updateProfile, updateAvatar, fetchMyProfile, updatePrivacy } from "../store/slices/authSlice";
 import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
-import { api } from "../services/api";
-import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock } from "lucide-react";
+import { api, getFullImageUrl } from "../services/api";
+import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff } from "lucide-react";
+
+const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -30,6 +32,52 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pwLoading, setPwLoading] = useState(false);
   const [pwMessage, setPwMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // Section navigation + privacy panel state
+  const [activeSection, setActiveSection] = useState<"profile" | "privacy">("profile");
+  const [privacyBusy, setPrivacyBusy] = useState(false);
+  const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
+  const [hiddenUsers, setHiddenUsers] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (activeSection !== "privacy") return;
+    api.user.getBlockedUsers()
+      .then((list) => setBlockedUsers(list || []))
+      .catch(() => setBlockedUsers([]));
+    api.story.getHiddenUsers()
+      .then((list) => setHiddenUsers(list || []))
+      .catch(() => setHiddenUsers([]));
+  }, [activeSection]);
+
+  const handleTogglePrivate = async () => {
+    if (!currentUser || privacyBusy) return;
+    setPrivacyBusy(true);
+    try {
+      await dispatch(updatePrivacy(!currentUser.isPrivate)).unwrap();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setPrivacyBusy(false);
+    }
+  };
+
+  const handleUnblock = async (userId: string) => {
+    try {
+      await api.user.unblockUser(userId);
+      setBlockedUsers((prev) => prev.filter((u) => (u.id || u.userId) !== userId));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUnhide = async (userId: string) => {
+    try {
+      await api.story.unhideStoryFrom(userId);
+      setHiddenUsers((prev) => prev.filter((u) => (u.id || u.userId) !== userId));
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +150,12 @@ export default function SettingsPage() {
       
       {/* ----------------- SIDE MENU ----------------- */}
       <div className="w-full md:w-64 flex flex-row md:flex-col border-b md:border-b-0 md:border-r border-zinc-200 dark:border-zinc-800 gap-1 overflow-x-auto no-scrollbar pb-4 md:pb-0 md:pr-4">
-        <button className="flex items-center gap-3 px-4 py-3 rounded-xl glass font-semibold text-sm text-left flex-shrink-0 cursor-pointer">
+        <button
+          onClick={() => setActiveSection("profile")}
+          className={`flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-sm text-left flex-shrink-0 cursor-pointer ${
+            activeSection === "profile" ? "glass" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400 font-normal"
+          }`}
+        >
           <User className="w-5 h-5 stroke-[1.8px]" />
           <span>Редактировать профиль</span>
         </button>
@@ -110,7 +163,12 @@ export default function SettingsPage() {
           {theme === "dark" ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5" />}
           <span>Сменить тему ({theme === "dark" ? "Светлая" : "Темная"})</span>
         </button>
-        <button className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm text-left flex-shrink-0 cursor-pointer text-zinc-550 dark:text-zinc-400">
+        <button
+          onClick={() => setActiveSection("privacy")}
+          className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
+            activeSection === "privacy" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+          }`}
+        >
           <Shield className="w-5 h-5" />
           <span>Конфиденциальность</span>
         </button>
@@ -131,8 +189,10 @@ export default function SettingsPage() {
 
       {/* ----------------- FORM WORKSPACE ----------------- */}
       <div className="flex-1 md:pl-10 text-left">
+        {activeSection === "profile" ? (
+        <>
         <h2 className="text-xl font-bold mb-8">Редактировать профиль</h2>
-        
+
         <form onSubmit={handleSave} className="flex flex-col gap-6 max-w-lg">
           
           {/* Picture preview change */}
@@ -261,6 +321,108 @@ export default function SettingsPage() {
             </div>
           </form>
         </div>
+        </>
+        ) : (
+        <div className="max-w-lg flex flex-col gap-10">
+          <div>
+            <h2 className="text-xl font-bold mb-8">Конфиденциальность</h2>
+
+            {/* Private account toggle */}
+            <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+              <div className="flex items-start gap-3">
+                <Lock className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div className="flex flex-col">
+                  <span className="font-semibold text-sm">Закрытый аккаунт</span>
+                  <span className="text-xs text-zinc-500 mt-0.5 max-w-xs">
+                    Если аккаунт закрыт, только одобренные вами подписчики смогут видеть ваши публикации.
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={handleTogglePrivate}
+                disabled={privacyBusy}
+                className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
+                  currentUser.isPrivate ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                    currentUser.isPrivate ? "translate-x-5.5" : "translate-x-0.5"
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          {/* Blocked accounts */}
+          <div>
+            <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+              <Ban className="w-4.5 h-4.5" /> Заблокированные аккаунты
+            </h3>
+            {blockedUsers.length === 0 ? (
+              <p className="text-sm text-zinc-450">У вас нет заблокированных пользователей.</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {blockedUsers.map((u) => {
+                  const uid = u.id || u.userId;
+                  return (
+                    <div key={uid} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={getFullImageUrl(u.avatar || u.imagePath) || DEFAULT_AVATAR}
+                          alt={u.userName || u.username}
+                          className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                        />
+                        <span className="font-semibold text-sm">{u.userName || u.username}</span>
+                      </div>
+                      <button
+                        onClick={() => handleUnblock(uid)}
+                        className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft cursor-pointer"
+                      >
+                        Разблокировать
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Hidden stories */}
+          <div>
+            <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+              <EyeOff className="w-4.5 h-4.5" /> Скрыли истории от...
+            </h3>
+            {hiddenUsers.length === 0 ? (
+              <p className="text-sm text-zinc-450">Вы не скрывали истории ни от кого.</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {hiddenUsers.map((u) => {
+                  const uid = u.id || u.userId;
+                  return (
+                    <div key={uid} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={getFullImageUrl(u.avatar || u.imagePath) || DEFAULT_AVATAR}
+                          alt={u.userName || u.username}
+                          className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                        />
+                        <span className="font-semibold text-sm">{u.userName || u.username}</span>
+                      </div>
+                      <button
+                        onClick={() => handleUnhide(uid)}
+                        className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft cursor-pointer"
+                      >
+                        Показать снова
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        )}
       </div>
 
     </div>

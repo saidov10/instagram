@@ -8,6 +8,9 @@ export interface Message {
   image?: string;
   time: string;
   reaction?: string;
+  isVoice?: boolean;
+  voiceUrl?: string;
+  durationMs?: number;
 }
 
 export interface Chat {
@@ -37,6 +40,12 @@ const initialState: ChatsState = {
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
+// Fallback id generator for optimistic messages when the backend response omits one.
+// Negative & monotonically decreasing so it can never collide with a real (positive) backend id
+// or with another optimistic message sent in the same millisecond.
+let localMessageIdSeq = -1;
+const nextLocalMessageId = () => localMessageIdSeq--;
+
 const formatBackendChat = (c: any, currentUserId: string): Chat => {
   // Backend returns the other participant as `otherUser`.
   const receiver = c.otherUser || c.users?.find((u: any) => u.id !== currentUserId) || c.user || {};
@@ -47,9 +56,12 @@ const formatBackendChat = (c: any, currentUserId: string): Chat => {
     id: m.id || m.messageId,
     sender: (m.senderId || m.senderUserId) === currentUserId ? "me" : "them",
     text: m.messageText || m.text || "",
-    image: getFullImageUrl(m.filePath || m.imagePath) || null,
+    image: m.isVoice ? null : getFullImageUrl(m.filePath || m.imagePath) || null,
     time: m.createAt ? new Date(m.createAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just now",
     reaction: m.reactions?.[m.reactions.length - 1]?.reaction || m.reaction || null,
+    isVoice: !!m.isVoice,
+    voiceUrl: m.isVoice ? getFullImageUrl(m.filePath || m.imagePath) || undefined : undefined,
+    durationMs: m.durationMs,
   }));
 
   return {
@@ -106,20 +118,40 @@ export const startNewChat = createAsyncThunk(
 export const sendMessage = createAsyncThunk(
   "chats/sendMessage",
   async (
-    { chatId, messageText, file, currentUserId }: { chatId: number; messageText?: string; file?: File; currentUserId: string },
+    {
+      chatId,
+      messageText,
+      file,
+      voice,
+      currentUserId,
+    }: {
+      chatId: number;
+      messageText?: string;
+      file?: File;
+      voice?: { durationMs: number };
+      currentUserId: string;
+    },
     { rejectWithValue }
   ) => {
     try {
-      const message = await api.chat.sendMessage(chatId, messageText, file);
+      const message = await api.chat.sendMessage(
+        chatId,
+        messageText,
+        file,
+        voice ? { isVoice: true, durationMs: voice.durationMs } : undefined
+      );
       // Re-map response
       return {
         chatId,
         message: {
-          id: message.id || message.messageId || Date.now(),
+          id: message.id || message.messageId || nextLocalMessageId(),
           sender: "me" as const,
           text: messageText || "",
-          image: message.filePath || message.imagePath || null,
+          image: voice ? null : (message.filePath || message.imagePath || null),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isVoice: !!voice,
+          voiceUrl: voice ? (getFullImageUrl(message.filePath || message.imagePath) || (file ? URL.createObjectURL(file) : undefined)) : undefined,
+          durationMs: voice?.durationMs,
         },
       };
     } catch (err: any) {

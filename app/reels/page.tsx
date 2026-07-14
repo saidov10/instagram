@@ -73,8 +73,8 @@ export default function ReelsPage() {
         musicName: `Original Audio - ${p.userName || "creator"}`,
         likesCount: typeof p.likeCount === "number" ? p.likeCount : (Array.isArray(p.likes) ? p.likes.length : 0),
         commentsCount: typeof p.commentCount === "number" ? p.commentCount : (p.comments?.length || 0),
-        isLiked: Array.isArray(p.likes) && currentUser ? p.likes.includes(currentUser.id) : (p.isLikedByCurrentUser || p.isLiked || false),
-        isSaved: p.isSavedByCurrentUser || p.isSaved || false,
+        isLiked: !!p.isLiked,
+        isSaved: !!p.isSaved,
         comments: (p.comments || []).map((c: any) => ({
           id: c.id || c.commentId,
           username: c.userName || c.username || "commenter",

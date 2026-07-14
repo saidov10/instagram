@@ -204,6 +204,12 @@ export const api = {
       return request(`/UserProfile/get-post-favorites?PageNumber=${pageNumber}&PageSize=${pageSize}`);
     },
 
+    async updatePrivacy(isPrivate: boolean): Promise<any> {
+      return request(`/UserProfile/update-privacy?isPrivate=${isPrivate}`, {
+        method: "PUT",
+      });
+    },
+
     async updateUserImageProfile(file: File): Promise<any> {
       const formData = new FormData();
       formData.append("imageFile", file);
@@ -372,6 +378,23 @@ export const api = {
         method: "POST",
       });
     },
+
+    async hideStoryFrom(userId: string): Promise<any> {
+      return request(`/Story/hide-story-from?userId=${userId}`, {
+        method: "POST",
+      });
+    },
+
+    async unhideStoryFrom(userId: string): Promise<any> {
+      return request(`/Story/unhide-story-from?userId=${userId}`, {
+        method: "DELETE",
+      });
+    },
+
+    async getHiddenUsers(): Promise<any[]> {
+      const res = await request<any>("/Story/get-hidden-users");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
   },
 
   // --- CHAT ENDPOINTS ---
@@ -391,11 +414,20 @@ export const api = {
       });
     },
 
-    async sendMessage(chatId: number, messageText?: string, file?: File): Promise<any> {
+    async sendMessage(
+      chatId: number,
+      messageText?: string,
+      file?: File,
+      voice?: { isVoice: true; durationMs: number }
+    ): Promise<any> {
       const formData = new FormData();
       formData.append("ChatId", String(chatId));
       if (messageText) formData.append("MessageText", messageText);
       if (file) formData.append("File", file);
+      if (voice) {
+        formData.append("isVoice", "true");
+        formData.append("durationMs", String(voice.durationMs));
+      }
 
       return request("/Chat/send-message", {
         method: "PUT",
@@ -450,6 +482,23 @@ export const api = {
     async unfollow(followingUserId: string): Promise<any> {
       return request(`/FollowingRelationShip/delete-following-relation-ship?followingUserId=${followingUserId}`, {
         method: "DELETE",
+      });
+    },
+
+    async getPendingRequests(): Promise<any[]> {
+      const res = await request<any>("/FollowingRelationShip/get-pending-requests");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async acceptFollowRequest(followerId: string): Promise<any> {
+      return request(`/FollowingRelationShip/accept-follow-request?followerId=${followerId}`, {
+        method: "PUT",
+      });
+    },
+
+    async rejectFollowRequest(followerId: string): Promise<any> {
+      return request(`/FollowingRelationShip/reject-follow-request?followerId=${followerId}`, {
+        method: "PUT",
       });
     },
   },
@@ -567,6 +616,47 @@ export const api = {
 
     async deleteUser(userId: string): Promise<any> {
       return request(`/User/delete-user?userId=${userId}`, {
+        method: "DELETE",
+      });
+    },
+
+    async blockUser(blockedUserId: string): Promise<any> {
+      return request(`/User/block-user?blockedUserId=${blockedUserId}`, {
+        method: "POST",
+      });
+    },
+
+    async unblockUser(blockedUserId: string): Promise<any> {
+      return request(`/User/unblock-user?blockedUserId=${blockedUserId}`, {
+        method: "DELETE",
+      });
+    },
+
+    async getBlockedUsers(): Promise<any[]> {
+      const res = await request<any>("/User/get-blocked-users");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+  },
+
+  // --- NOTES ENDPOINTS ---
+  note: {
+    async addNote(data: {
+      text: string;
+      musicTrack?: { audioUrl: string; title: string; artist: string; durationMs: number };
+    }): Promise<any> {
+      return request("/User/add-note", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async getNotes(): Promise<any[]> {
+      const res = await request<any>("/User/get-notes");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async deleteNote(): Promise<any> {
+      return request("/User/delete-note", {
         method: "DELETE",
       });
     },

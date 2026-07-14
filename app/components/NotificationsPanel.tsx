@@ -15,6 +15,11 @@ interface FollowerNotif {
   avatar: string;
   following: boolean;
 }
+interface PendingRequest {
+  userId: string;
+  username: string;
+  avatar: string;
+}
 interface LikeNotif {
   key: string;
   userId: string;
@@ -29,17 +34,30 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
   const [loading, setLoading] = useState(true);
   const [followers, setFollowers] = useState<FollowerNotif[]>([]);
   const [likes, setLikes] = useState<LikeNotif[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     if (!currentUser) return;
     setLoading(true);
     try {
-      const [myPosts, subscribers, subscriptions] = await Promise.all([
+      const [myPosts, subscribers, subscriptions, pending] = await Promise.all([
         api.post.getMyPosts().catch(() => []),
         api.following.getSubscribers(currentUser.id).catch(() => []),
         api.following.getSubscriptions(currentUser.id).catch(() => []),
+        api.following.getPendingRequests().catch(() => []),
       ]);
+
+      setPendingRequests(
+        (pending || []).map((r: any) => {
+          const author = r.user || r.follower || r;
+          return {
+            userId: author.id || author.userId || r.followerId || "",
+            username: author.userName || author.username || "user",
+            avatar: getFullImageUrl(author.avatar || author.imagePath) || DEFAULT_AVATAR,
+          };
+        })
+      );
 
       const followingIds = new Set((subscriptions || []).map((s: any) => s.id || s.userId));
 
@@ -122,7 +140,21 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
     }
   };
 
-  const isEmpty = !loading && followers.length === 0 && likes.length === 0;
+  const respondToRequest = async (userId: string, accept: boolean) => {
+    if (!userId || busy[`req-${userId}`]) return;
+    setBusy((b) => ({ ...b, [`req-${userId}`]: true }));
+    try {
+      if (accept) await api.following.acceptFollowRequest(userId);
+      else await api.following.rejectFollowRequest(userId);
+      setPendingRequests((prev) => prev.filter((r) => r.userId !== userId));
+    } catch (err) {
+      console.error("Failed to respond to follow request:", err);
+    } finally {
+      setBusy((b) => ({ ...b, [`req-${userId}`]: false }));
+    }
+  };
+
+  const isEmpty = !loading && followers.length === 0 && likes.length === 0 && pendingRequests.length === 0;
 
   return (
     <div className="fixed inset-0 z-50 md:inset-auto md:z-30 flex flex-col w-full md:w-96 glass-strong md:glass h-screen md:sticky md:top-0 animate-in slide-in-from-left duration-300">
@@ -157,6 +189,41 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
           </div>
         ) : (
           <div className="flex flex-col gap-6">
+            {pendingRequests.length > 0 && (
+              <section>
+                <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2 px-2">Запросы на подписку</h3>
+                <div className="flex flex-col">
+                  {pendingRequests.map((r) => (
+                    <div key={r.userId} className="flex items-center gap-3 p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition">
+                      <Link href={`/u/${r.userId}`} onClick={onClose} className="flex items-center gap-3 flex-1 min-w-0">
+                        <img src={r.avatar} alt={r.username} className="w-11 h-11 rounded-full object-cover border border-[var(--border)]" />
+                        <p className="text-sm min-w-0">
+                          <span className="font-semibold">{r.username}</span>
+                          <span className="text-zinc-500"> хочет подписаться на вас</span>
+                        </p>
+                      </Link>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          onClick={() => respondToRequest(r.userId, true)}
+                          disabled={busy[`req-${r.userId}`]}
+                          className="text-xs font-bold px-3 py-1.5 rounded-lg btn-grad press cursor-pointer disabled:opacity-60"
+                        >
+                          Подтвердить
+                        </button>
+                        <button
+                          onClick={() => respondToRequest(r.userId, false)}
+                          disabled={busy[`req-${r.userId}`]}
+                          className="text-xs font-bold px-3 py-1.5 rounded-lg glass press cursor-pointer disabled:opacity-60"
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {followers.length > 0 && (
               <section>
                 <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2 px-2">Новые подписчики</h3>

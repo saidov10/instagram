@@ -18,7 +18,11 @@ import {
   SmilePlus,
   StickyNote,
   Pin,
-  Trash2
+  Trash2,
+  Music,
+  Play,
+  Pause,
+  Mic
 } from "lucide-react";
 import { AppDispatch, RootState } from "../../store/store";
 import {
@@ -61,6 +65,82 @@ const EMOJIS = [
 // Gradient "stickers" (sent as a message) — no external deps
 const STICKERS = ["💖", "🔥", "🎉", "😂", "😍", "👑", "🚀", "🌟", "🍕", "☕", "🐱", "🐶"];
 
+// Demo music tracks for attaching to a note (stub picker; freely licensed sample audio)
+const DEMO_TRACKS = [
+  { title: "Night Drive", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" },
+  { title: "Sunny Days", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" },
+  { title: "City Lights", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" },
+  { title: "Slow Motion", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3" },
+];
+
+interface UserNote {
+  id: number | string;
+  userId: string;
+  username: string;
+  avatar: string;
+  text: string;
+  musicTrack?: { audioUrl: string; title: string; artist: string; durationMs: number } | null;
+  isMine: boolean;
+}
+
+function VoiceMessageBubble({ url, durationMs, isMe }: { url?: string; durationMs: number; isMe: boolean }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+
+  const toggle = () => {
+    if (!audioRef.current) return;
+    if (playing) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play().catch(() => {});
+    }
+    setPlaying((p) => !p);
+  };
+
+  const handleTimeUpdate = () => {
+    if (!audioRef.current || !audioRef.current.duration) return;
+    setProgress(audioRef.current.currentTime / audioRef.current.duration);
+  };
+
+  const shownSeconds = playing || progress > 0 ? Math.round(totalSeconds * (1 - progress)) : totalSeconds;
+
+  return (
+    <div className={`flex items-center gap-2.5 rounded-2xl px-3.5 py-2.5 min-w-[190px] shadow-soft ${isMe ? "btn-grad rounded-br-md" : "glass rounded-bl-md"}`}>
+      <button
+        onClick={toggle}
+        className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer ${isMe ? "bg-white/25" : "bg-black/10 dark:bg-white/15"}`}
+      >
+        {playing ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current ml-0.5" />}
+      </button>
+      <div className="flex-1 flex items-center gap-0.5 h-6">
+        {Array.from({ length: 24 }).map((_, i) => {
+          const barActive = i / 24 <= progress;
+          return (
+            <span
+              key={i}
+              className={`w-[3px] rounded-full transition-colors ${barActive ? (isMe ? "bg-white" : "bg-[var(--accent-2)]") : isMe ? "bg-white/35" : "bg-zinc-400/50 dark:bg-zinc-600"}`}
+              style={{ height: `${20 + Math.abs(Math.sin(i * 1.7)) * 60}%` }}
+            />
+          );
+        })}
+      </div>
+      <span className="text-[10px] font-medium tabular-nums flex-shrink-0">0:{String(shownSeconds).padStart(2, "0")}</span>
+      {url && (
+        <audio
+          ref={audioRef}
+          src={url}
+          onTimeUpdate={handleTimeUpdate}
+          onEnded={() => { setPlaying(false); setProgress(0); }}
+          className="hidden"
+        />
+      )}
+    </div>
+  );
+}
+
 export default function InboxPage() {
   const dispatch = useDispatch<AppDispatch>();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
@@ -77,6 +157,14 @@ export default function InboxPage() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [reactionMsgId, setReactionMsgId] = useState<number | null>(null);
 
+  // Voice message recording
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+
   // Chat notes (local, per-user)
   const [showNotes, setShowNotes] = useState(false);
   const [notes, setNotes] = useState<ChatNote[]>([]);
@@ -84,6 +172,15 @@ export default function InboxPage() {
   const [noteColor, setNoteColor] = useState(NOTE_COLORS[0]);
   const [noteSearch, setNoteSearch] = useState("");
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
+
+  // Status notes (Instagram-style, backend-backed)
+  const [userNotes, setUserNotes] = useState<UserNote[]>([]);
+  const [showCreateNoteModal, setShowCreateNoteModal] = useState(false);
+  const [newNoteText, setNewNoteText] = useState("");
+  const [newNoteTrack, setNewNoteTrack] = useState<typeof DEMO_TRACKS[number] | null>(null);
+  const [viewingNote, setViewingNote] = useState<UserNote | null>(null);
+  const noteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [noteAudioPlaying, setNoteAudioPlaying] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -169,6 +266,84 @@ export default function InboxPage() {
     }
   }, [isLoggedIn, currentUser, dispatch]);
 
+  // ---- Status notes (Instagram-style "Notes") ----
+  const refreshNotes = () => {
+    if (!currentUser) return;
+    api.note.getNotes()
+      .then((list) => {
+        const formatted: UserNote[] = (list || []).map((n: any) => {
+          const author = n.user || n.author || n.userProfile || {};
+          const uid = author.id || author.userId || n.userId || "";
+          return {
+            id: n.id || n.noteId,
+            userId: uid,
+            username: author.userName || author.username || n.userName || "user",
+            avatar: (author.avatar || author.imagePath) || DEFAULT_AVATAR,
+            text: n.text || "",
+            musicTrack: n.musicTrack || null,
+            isMine: uid === currentUser.id,
+          };
+        });
+        setUserNotes(formatted);
+      })
+      .catch(() => setUserNotes([]));
+  };
+
+  useEffect(() => {
+    if (isLoggedIn && currentUser) refreshNotes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn, currentUser?.id]);
+
+  const myNote = userNotes.find((n) => n.isMine) || null;
+  const friendNotes = userNotes.filter((n) => !n.isMine);
+
+  const handleCreateNote = async () => {
+    if (!newNoteText.trim()) return;
+    try {
+      await api.note.addNote({
+        text: newNoteText.trim().slice(0, 60),
+        musicTrack: newNoteTrack ? { ...newNoteTrack, durationMs: 30000 } : undefined,
+      });
+      setShowCreateNoteModal(false);
+      setNewNoteText("");
+      setNewNoteTrack(null);
+      refreshNotes();
+    } catch (err) {
+      console.error("Failed to create note:", err);
+    }
+  };
+
+  const handleDeleteNote = async () => {
+    try {
+      await api.note.deleteNote();
+      setShowCreateNoteModal(false);
+      refreshNotes();
+    } catch (err) {
+      console.error("Failed to delete note:", err);
+    }
+  };
+
+  const openNoteViewer = (note: UserNote) => {
+    setViewingNote(note);
+    setNoteAudioPlaying(!!note.musicTrack);
+  };
+
+  useEffect(() => {
+    if (viewingNote?.musicTrack && noteAudioRef.current) {
+      noteAudioRef.current.play().catch(() => {});
+    }
+  }, [viewingNote]);
+
+  const toggleNoteAudio = () => {
+    if (!noteAudioRef.current) return;
+    if (noteAudioPlaying) {
+      noteAudioRef.current.pause();
+    } else {
+      noteAudioRef.current.play().catch(() => {});
+    }
+    setNoteAudioPlaying((p) => !p);
+  };
+
   // Fetch full messages when selecting a chat
   const handleSelectChat = (id: number) => {
     setSelectedChatId(id);
@@ -209,6 +384,77 @@ export default function InboxPage() {
       }));
     }
   };
+
+  // ---- Voice message recording ----
+  const clearRecordingTimer = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  };
+
+  const startRecording = async () => {
+    if (!selectedChatId || !currentUser || isRecording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+    }
+  };
+
+  const stopRecordingStream = () => {
+    recordingStreamRef.current?.getTracks().forEach((t) => t.stop());
+    recordingStreamRef.current = null;
+    clearRecordingTimer();
+    setIsRecording(false);
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.stop();
+    }
+    audioChunksRef.current = [];
+    stopRecordingStream();
+  };
+
+  const finishRecording = () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
+    const durationMs = recordingSeconds * 1000;
+    mediaRecorderRef.current.onstop = () => {
+      const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+      audioChunksRef.current = [];
+      if (selectedChatId && currentUser && blob.size > 0) {
+        const file = new File([blob], `voice-${Date.now()}.webm`, { type: "audio/webm" });
+        dispatch(sendMessage({
+          chatId: selectedChatId,
+          file,
+          voice: { durationMs: Math.max(1000, durationMs) },
+          currentUserId: currentUser.id,
+        }));
+      }
+    };
+    mediaRecorderRef.current.stop();
+    stopRecordingStream();
+  };
+
+  useEffect(() => {
+    return () => {
+      clearRecordingTimer();
+      recordingStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
 
   const handleSearchUsers = async (text: string) => {
     setUserSearchText(text);
@@ -289,6 +535,61 @@ export default function InboxPage() {
               className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg pl-10 pr-4 py-2 text-sm text-zinc-900 dark:text-white"
             />
           </div>
+        </div>
+
+        {/* Status Notes strip */}
+        <div className="flex gap-4 px-5 pb-4 overflow-x-auto no-scrollbar">
+          {currentUser && (
+            <button
+              onClick={() => {
+                setNewNoteText(myNote?.text || "");
+                setNewNoteTrack(null);
+                setShowCreateNoteModal(true);
+              }}
+              className="flex flex-col items-center gap-1 flex-shrink-0 cursor-pointer group"
+            >
+              <div className="relative">
+                {myNote && (
+                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 glass-strong rounded-2xl rounded-bl-sm px-2.5 py-1 whitespace-nowrap max-w-[110px] truncate text-[11px] font-medium shadow-soft">
+                    {myNote.text}
+                  </div>
+                )}
+                <img
+                  src={currentUser.avatar || DEFAULT_AVATAR}
+                  alt="Your note"
+                  className="w-12 h-12 rounded-full object-cover border-2 border-zinc-200 dark:border-zinc-800 group-hover:scale-105 transition"
+                />
+                <div className="absolute bottom-0 right-0 w-4.5 h-4.5 bg-blue-500 rounded-full border-2 border-white dark:border-black flex items-center justify-center text-white text-[10px] font-bold">
+                  {myNote ? <Edit className="w-2.5 h-2.5" /> : "+"}
+                </div>
+              </div>
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-400 max-w-[64px] truncate">Заметка</span>
+            </button>
+          )}
+          {friendNotes.map((note) => (
+            <button
+              key={note.id}
+              onClick={() => openNoteViewer(note)}
+              className="flex flex-col items-center gap-1 flex-shrink-0 cursor-pointer group"
+            >
+              <div className="relative">
+                <div className="absolute -top-7 left-1/2 -translate-x-1/2 glass-strong rounded-2xl rounded-bl-sm px-2.5 py-1 whitespace-nowrap max-w-[110px] truncate text-[11px] font-medium shadow-soft">
+                  {note.text}
+                </div>
+                <img
+                  src={note.avatar || DEFAULT_AVATAR}
+                  alt={note.username}
+                  className="w-12 h-12 rounded-full object-cover border-2 border-transparent group-hover:scale-105 transition gradient-ring p-[2px]"
+                />
+                {note.musicTrack && (
+                  <div className="absolute bottom-0 right-0 w-4.5 h-4.5 bg-black rounded-full border-2 border-white dark:border-black flex items-center justify-center">
+                    <Music className="w-2.5 h-2.5 text-white" />
+                  </div>
+                )}
+              </div>
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-400 max-w-[64px] truncate">{note.username}</span>
+            </button>
+          ))}
         </div>
 
         {/* Sub-tabs */}
@@ -426,7 +727,9 @@ export default function InboxPage() {
                     )}
                     <div className="flex flex-col gap-1 text-left min-w-0">
                       <div className="relative">
-                        {msg.image ? (
+                        {msg.isVoice ? (
+                          <VoiceMessageBubble url={msg.voiceUrl} durationMs={msg.durationMs || 0} isMe={isMe} />
+                        ) : msg.image ? (
                           <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-soft">
                             <img src={msg.image} alt="Attachment" className="max-w-full h-auto object-cover max-h-60" />
                           </div>
@@ -521,6 +824,41 @@ export default function InboxPage() {
                   </div>
                 </div>
               )}
+              {isRecording ? (
+                <div className="flex items-center gap-4 glass rounded-full px-4 py-2.5 shadow-soft">
+                  <button
+                    type="button"
+                    onClick={cancelRecording}
+                    className="text-red-500 hover:text-red-400 cursor-pointer flex-shrink-0"
+                    title="Отменить"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                  <div className="flex-1 flex items-center gap-0.5 h-6 overflow-hidden">
+                    {Array.from({ length: 40 }).map((_, i) => (
+                      <span
+                        key={i}
+                        className="w-[3px] rounded-full bg-red-500 flex-shrink-0 animate-pulse"
+                        style={{
+                          height: `${20 + Math.abs(Math.sin((i + recordingSeconds * 3) * 1.3)) * 70}%`,
+                          animationDelay: `${i * 30}ms`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-xs font-semibold tabular-nums text-red-500 flex-shrink-0">
+                    0:{String(recordingSeconds).padStart(2, "0")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={finishRecording}
+                    className="w-9 h-9 rounded-full btn-grad flex items-center justify-center flex-shrink-0 cursor-pointer"
+                    title="Отправить"
+                  >
+                    <Send className="w-4 h-4 text-white" />
+                  </button>
+                </div>
+              ) : (
               <div className="flex items-center gap-4 glass rounded-full px-4 py-2.5 shadow-soft">
                 <button
                   type="button"
@@ -536,7 +874,7 @@ export default function InboxPage() {
                   onChange={(e) => setInputText(e.target.value)}
                   className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 text-zinc-900 dark:text-white"
                 />
-                
+
                 {inputText.trim() ? (
                   <button type="submit" className="text-blue-500 font-semibold text-sm hover:text-blue-650 px-1 animate-in fade-in duration-200 cursor-pointer">
                     Отправить
@@ -560,9 +898,13 @@ export default function InboxPage() {
                     <button type="button" onClick={handleSendHeart} className="hover:text-red-500 hover:scale-105 active:scale-95 transition cursor-pointer">
                       <Heart className="w-5 h-5" />
                     </button>
+                    <button type="button" onClick={startRecording} className="hover:text-[var(--accent-2)] hover:scale-105 active:scale-95 transition cursor-pointer">
+                      <Mic className="w-5 h-5" />
+                    </button>
                   </div>
                 )}
               </div>
+              )}
             </form>
           </>
         ) : (
@@ -678,6 +1020,120 @@ export default function InboxPage() {
                 ))
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- CREATE / EDIT STATUS NOTE MODAL ----------------- */}
+      {showCreateNoteModal && currentUser && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowCreateNoteModal(false)}>
+          <div
+            className="glass-strong rounded-3xl overflow-hidden shadow-soft-lg w-full max-w-sm flex flex-col animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
+              <h3 className="font-bold text-base">Заметка</h3>
+              <button onClick={() => setShowCreateNoteModal(false)} className="hover:opacity-75 cursor-pointer">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-5 flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <img src={currentUser.avatar || DEFAULT_AVATAR} alt="" className="w-10 h-10 rounded-full object-cover" />
+                <div className="flex-1 relative">
+                  <textarea
+                    autoFocus
+                    rows={2}
+                    maxLength={60}
+                    value={newNoteText}
+                    onChange={(e) => setNewNoteText(e.target.value.slice(0, 60))}
+                    placeholder="Поделитесь мыслями..."
+                    className="w-full glass rounded-2xl px-3.5 py-2.5 text-sm resize-none outline-none text-zinc-900 dark:text-white"
+                  />
+                  <span className="absolute bottom-1.5 right-3 text-[10px] text-zinc-400">{newNoteText.length}/60</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 flex items-center gap-1.5">
+                  <Music className="w-3.5 h-3.5" /> Музыка (опционально)
+                </span>
+                <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto no-scrollbar">
+                  {DEMO_TRACKS.map((t) => (
+                    <button
+                      key={t.audioUrl}
+                      onClick={() => setNewNoteTrack(newNoteTrack?.audioUrl === t.audioUrl ? null : t)}
+                      className={`flex items-center gap-3 p-2 rounded-xl text-left transition cursor-pointer ${
+                        newNoteTrack?.audioUrl === t.audioUrl ? "btn-grad text-white" : "glass hover:shadow-soft"
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${newNoteTrack?.audioUrl === t.audioUrl ? "bg-white/20" : "bg-zinc-200 dark:bg-zinc-800"}`}>
+                        <Music className="w-4 h-4" />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-xs font-semibold truncate">{t.title}</span>
+                        <span className={`text-[10px] truncate ${newNoteTrack?.audioUrl === t.audioUrl ? "text-white/80" : "text-zinc-450"}`}>{t.artist}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {myNote && (
+                  <button
+                    onClick={handleDeleteNote}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-bold text-red-500 glass hover:shadow-soft cursor-pointer"
+                  >
+                    Удалить заметку
+                  </button>
+                )}
+                <button
+                  onClick={handleCreateNote}
+                  disabled={!newNoteText.trim()}
+                  className="flex-1 btn-grad py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
+                >
+                  Поделиться
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- VIEW STATUS NOTE MODAL ----------------- */}
+      {viewingNote && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => { setViewingNote(null); noteAudioRef.current?.pause(); }}
+        >
+          <div className="glass-strong rounded-3xl shadow-soft-lg w-full max-w-xs flex flex-col items-center gap-4 p-6 animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <img src={viewingNote.avatar || DEFAULT_AVATAR} alt={viewingNote.username} className="w-16 h-16 rounded-full object-cover border-2 border-zinc-200 dark:border-zinc-800" />
+            <span className="font-bold text-sm">{viewingNote.username}</span>
+            <div className="glass rounded-2xl rounded-bl-sm px-4 py-3 text-sm text-center max-w-full break-words">
+              {viewingNote.text}
+            </div>
+            {viewingNote.musicTrack && (
+              <div className="flex items-center gap-3 w-full glass rounded-2xl p-3">
+                <button
+                  onClick={toggleNoteAudio}
+                  className="w-9 h-9 rounded-full btn-grad flex items-center justify-center flex-shrink-0 cursor-pointer"
+                >
+                  {noteAudioPlaying ? <Pause className="w-4 h-4 text-white fill-white" /> : <Play className="w-4 h-4 text-white fill-white ml-0.5" />}
+                </button>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-semibold truncate">{viewingNote.musicTrack.title}</span>
+                  <span className="text-[10px] text-zinc-450 truncate">{viewingNote.musicTrack.artist}</span>
+                </div>
+                <audio
+                  ref={noteAudioRef}
+                  src={viewingNote.musicTrack.audioUrl}
+                  onEnded={() => setNoteAudioPlaying(false)}
+                  className="hidden"
+                />
+              </div>
+            )}
           </div>
         </div>
       )}
