@@ -1,9 +1,10 @@
 /**
  * API Service Client for Instagram Backend
- * Base URL: https://instaback-cw0j.onrender.com
+ * Base URL is configured via NEXT_PUBLIC_API_URL (see .env.local).
  */
 
-const BASE_URL = "http://localhost:5000";
+const BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? "https://instaback-cw0j.onrender.com";
 
 export class ApiError extends Error {
   status: number;

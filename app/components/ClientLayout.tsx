@@ -74,15 +74,20 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     initAuth();
   }, [dispatch]);
 
+  // Routes reachable without being logged in — they render without sidebar/navs.
+  const isPublicRoute =
+    pathname === "/login" ||
+    pathname === "/accounts/emailsignup" ||
+    pathname.startsWith("/accounts/password/reset");
+
   // Redirect to login if not logged in
   React.useEffect(() => {
-    if (isInitialized && !isLoggedIn && pathname !== "/login" && pathname !== "/accounts/emailsignup") {
+    if (isInitialized && !isLoggedIn && !isPublicRoute) {
       router.push("/login");
     }
-  }, [isInitialized, isLoggedIn, pathname, router]);
+  }, [isInitialized, isLoggedIn, isPublicRoute, router]);
 
-  // If on login or signup pages, just show content without sidebar/navs
-  if (pathname === "/login" || pathname === "/accounts/emailsignup") {
+  if (isPublicRoute) {
     return <>{children}</>;
   }
 

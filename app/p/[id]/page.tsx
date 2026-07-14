@@ -2,7 +2,6 @@
 
 import React, { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useApp } from "../../context/AppContext";
 import {
   ArrowLeft,
   Heart,
@@ -13,11 +12,84 @@ import {
   Smile,
 } from "lucide-react";
 
+interface Comment {
+  username: string;
+  text: string;
+}
+
+interface Post {
+  id: number;
+  username: string;
+  avatar: string;
+  location: string;
+  image: string;
+  caption: string;
+  likes: number;
+  time: string;
+  isLiked: boolean;
+  isSaved: boolean;
+  comments: Comment[];
+}
+
+const CURRENT_USERNAME = "saaidov.7";
+
+const INITIAL_POSTS: Post[] = [
+  {
+    id: 1,
+    username: "traveler_joe",
+    avatar:
+      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&h=100&fit=crop",
+    location: "Swiss Alps, Switzerland",
+    image:
+      "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=800&h=800&fit=crop",
+    caption:
+      "Morning views from the cabin. Unbelievable feeling being surrounded by these peaks!",
+    likes: 1243,
+    time: "2 часа назад",
+    isLiked: false,
+    isSaved: false,
+    comments: [
+      { username: "nature_explorer", text: "Wow, this looks breath-taking!" },
+      { username: "alice_wonder", text: "Adding this to my bucket list!" },
+    ],
+  },
+  {
+    id: 2,
+    username: "foodie_chef",
+    avatar:
+      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop",
+    location: "Tokyo, Japan",
+    image:
+      "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&h=800&fit=crop",
+    caption: "Crafting the perfect bowl of Tonkotsu Ramen.",
+    likes: 890,
+    time: "5 часов назад",
+    isLiked: false,
+    isSaved: false,
+    comments: [{ username: "tokyo_eats", text: "Best ramen in town." }],
+  },
+  {
+    id: 3,
+    username: "creative_mind",
+    avatar:
+      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop",
+    location: "Design Studio, New York",
+    image:
+      "https://images.unsplash.com/photo-1513364776144-60967b0f800f?w=800&h=800&fit=crop",
+    caption: "Experimenting with acrylic painting today.",
+    likes: 412,
+    time: "1 день назад",
+    isLiked: false,
+    isSaved: false,
+    comments: [{ username: "brush_strokes", text: "Love the texture!" }],
+  },
+];
+
 export default function PostDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { posts, setPosts, currentUser } = useApp();
 
+  const [posts, setPosts] = useState<Post[]>(INITIAL_POSTS);
   const [commentText, setCommentText] = useState("");
 
   const post = posts.find((p) => String(p.id) === id);
@@ -64,10 +136,7 @@ export default function PostDetailPage() {
         p.id === post.id
           ? {
               ...p,
-              comments: [
-                ...p.comments,
-                { username: currentUser.username, text },
-              ],
+              comments: [...p.comments, { username: CURRENT_USERNAME, text }],
             }
           : p
       )

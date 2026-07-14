@@ -159,7 +159,7 @@ export default function LoginPage() {
 
           {/* Forgot Password Link */}
           <a
-            href="#"
+            href="/accounts/password/reset"
             className="text-white hover:underline text-sm font-semibold text-center mt-1.5 transition"
           >
             Forgot password?
