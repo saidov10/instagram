@@ -209,6 +209,8 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     }
   };
 
+
+  
   const handleShare = async () => {
     if (!imageFile) return;
     setIsUploading(true);
