@@ -9,7 +9,7 @@ import { logout, initializeToken, fetchMyProfile } from "../store/slices/authSli
 import { createPost } from "../store/slices/postsSlice";
 import { createStory } from "../store/slices/storiesSlice";
 import { AppDispatch, RootState } from "../store/store";
-import { getStoredToken } from "../services/api";
+import { getStoredToken, api, getFullImageUrl } from "../services/api";
 import {
   Home,
   Search,
@@ -56,6 +56,64 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
   // Search overlay (for desktop sidebar)
   const [showSearchPanel, setShowSearchPanel] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [followingList, setFollowingList] = useState<any[]>([]);
+
+  // Load subscriptions when search panel opens to know follow status
+  React.useEffect(() => {
+    if (showSearchPanel && currentUser) {
+      api.following.getSubscriptions(currentUser.id)
+        .then((subs) => setFollowingList(subs || []))
+        .catch(err => console.error(err));
+    }
+  }, [showSearchPanel, currentUser]);
+
+  const handleSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+
+    if (!value.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const users = await api.user.getUsers({ userName: value });
+      setSearchResults(users || []);
+    } catch (err) {
+      console.error("Search failed:", err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleFollowToggle = async (user: any) => {
+    const isCurrentlyFollowing = followingList.some((s: any) => s.id === user.id || s.userName === user.userName);
+    try {
+      if (isCurrentlyFollowing) {
+        await api.following.unfollow(user.userName);
+        setFollowingList(prev => prev.filter(s => s.userName !== user.userName && s.id !== user.id));
+      } else {
+        await api.following.follow(user.userName);
+        setFollowingList(prev => [...prev, user]);
+      }
+    } catch (err) {
+      console.error("Failed to toggle follow status:", err);
+    }
+  };
+
+  const handleMessageUser = async (userId: string) => {
+    try {
+      await api.chat.createChat(userId);
+      setShowSearchPanel(false);
+      router.push("/direct/inbox");
+    } catch (err) {
+      console.error("Failed to start chat:", err);
+    }
+  };
 
   // Handle token & profile initialization on mount
   React.useEffect(() => {
@@ -330,7 +388,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         <div className="hidden md:flex flex-col w-96 bg-white dark:bg-black border-r border-zinc-200 dark:border-zinc-800 h-screen sticky top-0 z-30 p-6 animate-in slide-in-from-left duration-300">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold">Поиск</h2>
-            <button onClick={() => setShowSearchPanel(false)} className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full cursor-pointer">
+            <button
+              onClick={() => {
+                setShowSearchPanel(false);
+                setSearchQuery("");
+                setSearchResults([]);
+              }}
+              className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full cursor-pointer text-zinc-900 dark:text-zinc-100"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -338,12 +403,64 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
             <input
               type="text"
               placeholder="Поиск"
-              className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg px-4 py-2.5 text-sm"
+              value={searchQuery}
+              onChange={handleSearchChange}
+              className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-650"
             />
           </div>
           <hr className="border-zinc-200 dark:border-zinc-800 mb-4" />
-          <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-650">
-            <span className="text-sm font-medium">Нет недавних запросов.</span>
+          <div className="flex-1 flex flex-col overflow-y-auto no-scrollbar gap-4">
+            {isSearching ? (
+              <div className="flex-1 flex items-center justify-center text-sm text-zinc-400 dark:text-zinc-550">
+                Загрузка...
+              </div>
+            ) : searchResults.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-550 select-none">
+                <span className="text-sm font-medium">
+                  {searchQuery.trim() ? "Пользователи не найдены." : "Нет недавних запросов."}
+                </span>
+              </div>
+            ) : (
+              searchResults.map((user) => {
+                const isCurrentlyFollowing = followingList.some((s: any) => s.id === user.id || s.userName === user.userName);
+                const isSelf = currentUser?.id === user.id;
+                return (
+                  <div key={user.id} className="flex items-center justify-between py-1.5">
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={getFullImageUrl(user.avatar) || DEFAULT_AVATAR}
+                        alt={user.userName}
+                        className="w-11 h-11 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                      />
+                      <div className="flex flex-col text-left">
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{user.userName}</span>
+                        <span className="text-xs text-zinc-400 dark:text-zinc-500">{user.fullName}</span>
+                      </div>
+                    </div>
+                    {!isSelf && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleMessageUser(user.id)}
+                          className="bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-900 dark:text-zinc-100 transition cursor-pointer"
+                        >
+                          Написать
+                        </button>
+                        <button
+                          onClick={() => handleFollowToggle(user)}
+                          className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                            isCurrentlyFollowing
+                              ? "bg-zinc-100 dark:bg-zinc-800 hover:bg-red-50 dark:hover:bg-red-950/30 text-red-650 dark:text-red-400 border border-zinc-200 dark:border-zinc-700"
+                              : "bg-blue-500 hover:bg-blue-600 text-white"
+                          }`}
+                        >
+                          {isCurrentlyFollowing ? "Подписки" : "Подписаться"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}
