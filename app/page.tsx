@@ -27,7 +27,7 @@ import {
   likeStory,
   Story
 } from "./store/slices/storiesSlice";
-import { api } from "./services/api";
+import { api, getFullImageUrl } from "./services/api";
 import { PostSkeleton, StoriesSkeleton } from "./components/SkeletonLoader";
 import { useApp } from "./context/AppContext";
 
@@ -68,7 +68,7 @@ export default function HomeFeed() {
           const formatted = users.map((u: any, idx: number) => ({
             id: u.id || u.userId || idx,
             username: u.userName || u.username || "user",
-            avatar: u.avatar || u.imagePath || "",
+            avatar: getFullImageUrl(u.avatar || u.imagePath) || "",
             subtitle: u.about || "Suggested for you",
             followed: false
           }));

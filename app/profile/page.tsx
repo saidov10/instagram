@@ -17,7 +17,7 @@ import {
 import { AppDispatch, RootState } from "../store/store";
 import { fetchMyProfile } from "../store/slices/authSlice";
 import { fetchMyPosts, toggleLikePost, addComment, addPostFavorite } from "../store/slices/postsSlice";
-import { api } from "../services/api";
+import { api, getFullImageUrl } from "../services/api";
 import { ProfileSkeleton } from "../components/SkeletonLoader";
 import { useApp } from "../context/AppContext";
 
@@ -54,7 +54,7 @@ export default function ProfilePage() {
             id: s.id || s.userId,
             username: s.userName || s.username || "follower",
             name: s.name || s.fullName || "User",
-            avatar: s.avatar || s.imagePath || "",
+            avatar: getFullImageUrl(s.avatar || s.imagePath) || "",
             following: true
           })));
 
@@ -63,7 +63,7 @@ export default function ProfilePage() {
             id: s.id || s.userId,
             username: s.userName || s.username || "following",
             name: s.name || s.fullName || "User",
-            avatar: s.avatar || s.imagePath || "",
+            avatar: getFullImageUrl(s.avatar || s.imagePath) || "",
             following: true
           })));
         } catch (err) {
@@ -106,7 +106,7 @@ export default function ProfilePage() {
           id: s.id || s.userId,
           username: s.userName || s.username || "following",
           name: s.name || s.fullName || "User",
-          avatar: s.avatar || s.imagePath || "",
+          avatar: getFullImageUrl(s.avatar || s.imagePath) || "",
           following: true
         })));
       }

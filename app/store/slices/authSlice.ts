@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
-import { api, getStoredToken, setStoredToken } from "../../services/api";
+import { api, getStoredToken, setStoredToken, getFullImageUrl } from "../../services/api";
 
 export interface UserState {
   id: string;
@@ -65,7 +65,7 @@ export const fetchMyProfile = createAsyncThunk(
         id: profile.id || profile.userId || "",
         username: profile.userName || profile.username || "user",
         name: profile.name || profile.fullName || "Instagram User",
-        avatar: profile.avatar || profile.imagePath || profile.image || DEFAULT_AVATAR,
+        avatar: getFullImageUrl(profile.avatar || profile.imagePath || profile.image) || DEFAULT_AVATAR,
         about: profile.about || "",
         gender: profile.gender || 0,
       };

@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
-import { api } from "../../services/api";
+import { api, getFullImageUrl } from "../../services/api";
 
 export interface Message {
   id: number;
@@ -47,7 +47,7 @@ const formatBackendChat = (c: any, currentUserId: string): Chat => {
     id: m.id || m.messageId,
     sender: m.senderUserId === currentUserId ? "me" : "them",
     text: m.messageText || m.text || "",
-    image: m.filePath || m.imagePath || null,
+    image: getFullImageUrl(m.filePath || m.imagePath) || null,
     time: m.createAt ? new Date(m.createAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just now",
     reaction: m.reactions?.[0]?.reaction || m.reaction || null,
   }));
@@ -56,7 +56,7 @@ const formatBackendChat = (c: any, currentUserId: string): Chat => {
     id: c.id || c.chatId,
     username: receiver.userName || receiver.username || "direct_user",
     name: receiver.name || receiver.fullName || "Direct Conversation",
-    avatar: receiver.avatar || receiver.imagePath || DEFAULT_AVATAR,
+    avatar: getFullImageUrl(receiver.avatar || receiver.imagePath) || DEFAULT_AVATAR,
     active: receiver.isActive || false,
     activeStatus: receiver.isActive ? "В сети" : "Был(-а) в сети недавно",
     unread: c.isUnread || false,

@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
-import { api } from "../../services/api";
+import { api, getFullImageUrl } from "../../services/api";
 export interface Comment {
   id: number;
   username: string;
@@ -43,9 +43,9 @@ const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf37
 const formatBackendPost = (p: any): Post => ({
   id: p.id || p.postId,
   username: p.userName || p.username || "user",
-  avatar: p.userAvatar || p.userImage || DEFAULT_AVATAR,
+  avatar: getFullImageUrl(p.userAvatar || p.userImage) || DEFAULT_AVATAR,
   location: p.locationName || p.location || "",
-  image: p.filePath || p.imagePath || p.image || DEFAULT_AVATAR,
+  image: getFullImageUrl(p.filePath || p.imagePath || (p.images && p.images[0]) || p.image) || DEFAULT_AVATAR,
   caption: p.content || p.title || "",
   likes: p.likeCount || p.likes || 0,
   time: p.createAt ? new Date(p.createAt).toLocaleDateString() : "Just now",
