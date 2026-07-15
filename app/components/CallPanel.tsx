@@ -48,6 +48,39 @@ export function mapCall(raw: any): CallSession | null {
 /** App ID comes from the backend's call payload when it supplies one, else from env. */
 export const ENV_APP_ID = process.env.NEXT_PUBLIC_AGORA_APP_ID || "";
 
+const CHUNK_RELOAD_KEY = "agora-chunk-reloaded";
+
+/**
+ * Loads the Agora SDK lazily (it touches browser globals, so it must not run during SSR).
+ *
+ * The SDK lives in its own JS chunk. After a dev rebuild or a new deploy, a tab that's
+ * still holding the old bundle asks for a chunk hash that no longer exists → "Failed to
+ * load chunk". We retry a couple of times (covers a slow/transient fetch), then, if it's
+ * genuinely a stale-chunk error, force a single page reload to pull the fresh chunk map.
+ * A sessionStorage flag stops that reload from looping.
+ */
+async function loadAgoraRTC(retries = 2): Promise<any> {
+  try {
+    const mod = (await import("agora-rtc-sdk-ng")).default;
+    if (typeof window !== "undefined") sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+    return mod;
+  } catch (err: any) {
+    if (retries > 0) {
+      await new Promise((r) => setTimeout(r, 500));
+      return loadAgoraRTC(retries - 1);
+    }
+    const isChunkError =
+      err?.name === "ChunkLoadError" || /loading chunk|failed to load chunk/i.test(err?.message || "");
+    if (isChunkError && typeof window !== "undefined" && !sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
+      sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+      window.location.reload();
+      // Hang so the caller doesn't surface an error before the reload takes effect.
+      return new Promise<never>(() => {});
+    }
+    throw err;
+  }
+}
+
 type Phase = "outgoing" | "incoming" | "connected";
 
 interface CallPanelProps {
@@ -140,8 +173,9 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
       setJoining(true);
       setError(null);
       try {
-        // Loaded lazily: the SDK touches browser globals and must not run during SSR.
-        const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
+        // Loaded lazily (with stale-chunk recovery): the SDK touches browser globals
+        // and must not run during SSR.
+        const AgoraRTC = await loadAgoraRTC();
         if (cancelled) return;
 
         const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
