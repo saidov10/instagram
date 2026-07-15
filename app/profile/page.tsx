@@ -13,26 +13,37 @@ import {
   Settings,
   Plus,
   X,
-  Smile
+  Smile,
+  Music,
+  Trash2,
+  Pencil
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import { fetchMyProfile } from "../store/slices/authSlice";
-import { fetchMyPosts, fetchPostFavorites, toggleLikePost, addPostFavorite, addComment } from "../store/slices/postsSlice";
+import {
+  fetchMyPosts,
+  fetchPostFavorites,
+  fetchSavedAudios,
+  toggleLikePost,
+  addPostFavorite,
+  addComment,
+  deletePost,
+} from "../store/slices/postsSlice";
 import { api, getFullImageUrl } from "../services/api";
 import { ProfileSkeleton } from "../components/SkeletonLoader";
 import { useApp } from "../context/AppContext";
 import { Bookmark as BookmarkIcon } from "lucide-react";
-
-const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
+import Avatar from "../components/Avatar";
+import Highlights from "../components/Highlights";
 
 export default function ProfilePage() {
   const router = useRouter();
   const dispatch = useDispatch<AppDispatch>();
   const { setCreateOpen } = useApp();
   const { currentUser, profileLoading, isLoggedIn } = useSelector((state: RootState) => state.auth);
-  const { myPosts, savedPosts } = useSelector((state: RootState) => state.posts);
+  const { myPosts, savedPosts, savedAudios } = useSelector((state: RootState) => state.posts);
 
-  const [activeTab, setActiveTab] = useState<"posts" | "reels" | "saved" | "tagged">("posts");
+  const [activeTab, setActiveTab] = useState<"posts" | "saved" | "audios">("posts");
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
   const [newComment, setNewComment] = useState("");
 
@@ -48,6 +59,7 @@ export default function ProfilePage() {
     if (isLoggedIn && currentUser) {
       dispatch(fetchMyPosts());
       dispatch(fetchPostFavorites({}));
+      dispatch(fetchSavedAudios());
 
       // Fetch followers & following
       const loadRelations = async () => {
@@ -90,13 +102,24 @@ export default function ProfilePage() {
     if (!selectedPost || !newComment.trim() || !currentUser) return;
 
     const comment = newComment.trim();
-    dispatch(addComment({ postId: selectedPost.id, comment, username: currentUser.username }));
+    dispatch(addComment({ postId: selectedPost.id, comment, username: currentUser.username, userId: currentUser.id }));
     setNewComment("");
   };
 
   const handleUnsave = (postId: number) => {
     dispatch(addPostFavorite(postId));
     setSelectedPostId(null);
+  };
+
+  const handleDeletePost = async (postId: number) => {
+    if (window.confirm("Вы уверены, что хотите удалить эту публикацию?")) {
+      try {
+        await dispatch(deletePost(postId)).unwrap();
+        setSelectedPostId(null);
+      } catch (err) {
+        console.error("Failed to delete post:", err);
+      }
+    }
   };
 
   const handleFollowToggle = async (userId: string, isFollowing: boolean, username: string) => {
@@ -135,11 +158,7 @@ export default function ProfilePage() {
         <div className="relative w-36 h-36 flex-shrink-0 cursor-pointer group">
           <div className="w-full h-full rounded-full p-[3px] gradient-ring animate-gradient shadow-soft-md">
             <div className="bg-background p-1 rounded-full w-full h-full">
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.username}
-                className="w-full h-full rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
-              />
+              <Avatar src={currentUser.avatar} name={currentUser.username} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
             </div>
           </div>
         </div>
@@ -188,6 +207,9 @@ export default function ProfilePage() {
         </div>
       </header>
 
+      {/* ----------------- HIGHLIGHTS ----------------- */}
+      <Highlights userId={currentUser.id} isOwner />
+
       {/* ----------------- TABS SECTION ----------------- */}
       <div className="flex flex-col gap-6">
         {/* Tab Headers */}
@@ -213,6 +235,17 @@ export default function ProfilePage() {
           >
             <Bookmark className="w-4 h-4" />
             <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Сохранено</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("audios")}
+            className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
+              activeTab === "audios"
+                ? "border-black dark:border-white text-black dark:text-white"
+                : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
+            }`}
+          >
+            <Music className="w-4 h-4" />
+            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Звуки</span>
           </button>
         </div>
 
@@ -292,6 +325,37 @@ export default function ProfilePage() {
             </div>
           )
         )}
+
+        {activeTab === "audios" && (
+          savedAudios.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-4">
+              <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                <Music className="w-8 h-8" />
+              </div>
+              <h3 className="text-2xl font-bold">Сохранённых звуков нет</h3>
+              <p className="text-sm text-zinc-400 max-w-xs">
+                Нажмите «Сохранить звук» под любым Reel — дорожка появится здесь.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3 max-w-2xl mx-auto w-full">
+              {savedAudios.map((audio) => (
+                <div key={audio.audioId} className="flex items-center gap-4 glass rounded-2xl p-3.5 shadow-soft">
+                  <div className="w-12 h-12 rounded-xl btn-grad flex items-center justify-center flex-shrink-0">
+                    <Music className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="flex flex-col min-w-0 flex-1 text-left">
+                    <span className="font-semibold text-sm truncate">{audio.title}</span>
+                    <span className="text-xs text-zinc-450 truncate">{audio.artist || "Неизвестный исполнитель"}</span>
+                  </div>
+                  {audio.audioUrl && (
+                    <audio src={audio.audioUrl} controls className="h-9 max-w-[220px] flex-shrink-0" />
+                  )}
+                </div>
+              ))}
+            </div>
+          )
+        )}
       </div>
 
       {/* ----------------- FOLLOWERS MODAL ----------------- */}
@@ -310,15 +374,20 @@ export default function ProfilePage() {
                 <p className="text-zinc-500 text-sm text-center py-8">Нет подписчиков.</p>
               ) : (
                 followers.map((user) => (
-                  <div key={user.id} className="flex items-center justify-between">
+                  <Link
+                    key={user.id}
+                    href={`/u/${user.id}`}
+                    onClick={() => setShowFollowersList(false)}
+                    className="flex items-center justify-between hover:opacity-80 transition"
+                  >
                     <div className="flex items-center gap-3">
-                      <img src={user.avatar || DEFAULT_AVATAR} alt={user.username} className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-800" />
+                      <Avatar src={user.avatar} name={user.username} className="w-10 h-10 border border-zinc-200 dark:border-zinc-800" />
                       <div className="flex flex-col text-left">
                         <span className="font-bold text-sm leading-none">{user.username}</span>
                         <span className="text-xs text-zinc-400 leading-none mt-1">{user.name}</span>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                 ))
               )}
             </div>
@@ -342,16 +411,25 @@ export default function ProfilePage() {
                 <p className="text-zinc-500 text-sm text-center py-8">Нет подписок.</p>
               ) : (
                 following.map((user) => (
-                  <div key={user.id} className="flex items-center justify-between">
+                  <Link
+                    key={user.id}
+                    href={`/u/${user.id}`}
+                    onClick={() => setShowFollowingList(false)}
+                    className="flex items-center justify-between hover:opacity-80 transition"
+                  >
                     <div className="flex items-center gap-3">
-                      <img src={user.avatar || DEFAULT_AVATAR} alt={user.username} className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-800" />
+                      <Avatar src={user.avatar} name={user.username} className="w-10 h-10 border border-zinc-200 dark:border-zinc-800" />
                       <div className="flex flex-col text-left">
                         <span className="font-bold text-sm leading-none">{user.username}</span>
                         <span className="text-xs text-zinc-400 leading-none mt-1">{user.name}</span>
                       </div>
                     </div>
                     <button
-                      onClick={() => handleFollowToggle(user.id, user.following, user.username)}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleFollowToggle(user.id, user.following, user.username);
+                      }}
                       className={`text-xs font-bold px-4 py-1.5 rounded-lg border transition ${
                         user.following
                           ? "bg-transparent text-zinc-500 border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800"
@@ -360,7 +438,7 @@ export default function ProfilePage() {
                     >
                       {user.following ? "Подписки" : "Подписаться"}
                     </button>
-                  </div>
+                  </Link>
                 ))
               )}
             </div>
@@ -389,17 +467,23 @@ export default function ProfilePage() {
             <div className="w-full md:w-[380px] flex flex-col border-t md:border-t-0 md:border-l border-zinc-200 dark:border-zinc-800 h-[40vh] md:h-auto">
               {/* Header profile */}
               <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
-                <img src={selectedPost.avatar} alt="Avatar" className="w-8 h-8 rounded-full object-cover border border-zinc-200" />
-                <span className="font-bold text-sm">{selectedPost.username}</span>
+                <Link href={selectedPost.userId ? `/u/${selectedPost.userId}` : "#"} className="flex items-center gap-3">
+                  <Avatar src={selectedPost.avatar} name={selectedPost.username} className="w-8 h-8 border border-zinc-200" />
+                  <span className="font-bold text-sm">{selectedPost.username}</span>
+                </Link>
               </div>
 
               {/* Comments Scroller */}
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 text-left">
                 {/* Caption as first comment */}
                 <div className="flex items-start gap-3 text-sm">
-                  <img src={selectedPost.avatar} alt="Avatar" className="w-8 h-8 rounded-full object-cover" />
+                  <Link href={selectedPost.userId ? `/u/${selectedPost.userId}` : "#"}>
+                    <Avatar src={selectedPost.avatar} name={selectedPost.username} className="w-8 h-8 border border-zinc-200" />
+                  </Link>
                   <p className="leading-snug">
-                    <span className="font-bold mr-2 hover:underline cursor-pointer">{selectedPost.username}</span>
+                    <Link href={selectedPost.userId ? `/u/${selectedPost.userId}` : "#"} className="font-bold mr-2 hover:underline cursor-pointer">
+                      {selectedPost.username}
+                    </Link>
                     {selectedPost.caption}
                   </p>
                 </div>
@@ -407,13 +491,13 @@ export default function ProfilePage() {
                 <hr className="border-zinc-150 dark:border-zinc-800" />
 
                 {/* Other Comments */}
-                {selectedPost.comments.map((comment: any, index: number) => (
+                {selectedPost.comments.map((comment, index: number) => (
                   <div key={index} className="flex items-start gap-3 text-sm">
-                    <div className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center font-bold text-xs uppercase border border-zinc-200">
-                      {comment.username.charAt(0)}
-                    </div>
+                    <Link href={comment.userId ? `/u/${comment.userId}` : "#"}>
+                      <Avatar name={comment.username} className="w-8 h-8 border border-zinc-200" />
+                    </Link>
                     <p className="leading-snug">
-                      <span className="font-bold mr-2 hover:underline cursor-pointer">{comment.username}</span>
+                      <Link href={comment.userId ? `/u/${comment.userId}` : "#"} className="font-bold mr-2 hover:underline cursor-pointer">{comment.username}</Link>
                       {comment.text}
                     </p>
                   </div>
@@ -428,7 +512,15 @@ export default function ProfilePage() {
                       <Heart className={`w-6 h-6 ${selectedPost.isLiked ? "text-red-500 fill-red-500" : "text-black dark:text-white"}`} />
                     </button>
                   </div>
-                  {isSelectedFromSaved && (
+                  {!isSelectedFromSaved ? (
+                    <button
+                      onClick={() => handleDeletePost(selectedPost.id)}
+                      className="text-xs font-bold text-red-500 hover:text-red-400 cursor-pointer flex items-center gap-1.5"
+                      title="Удалить публикацию"
+                    >
+                      <Trash2 className="w-4 h-4" /> Удалить
+                    </button>
+                  ) : (
                     <button
                       onClick={() => handleUnsave(selectedPost.id)}
                       className="text-xs font-bold text-red-500 hover:text-red-400 cursor-pointer flex items-center gap-1"

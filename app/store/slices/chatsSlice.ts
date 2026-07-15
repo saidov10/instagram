@@ -1,6 +1,14 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import { api, getFullImageUrl } from "../../services/api";
 
+/** Quoted original shown above a threaded reply. */
+export interface ReplyPreview {
+  id: number;
+  senderId: string;
+  senderName: string;
+  messageText: string;
+}
+
 export interface Message {
   id: number;
   sender: "me" | "them";
@@ -11,17 +19,34 @@ export interface Message {
   isVoice?: boolean;
   voiceUrl?: string;
   durationMs?: number;
+  /** Present when this message is a reply to another one. */
+  replyTo?: ReplyPreview | null;
+  /** Author display info — only meaningful in group chats. */
+  senderName?: string;
+  senderAvatar?: string;
+}
+
+export interface GroupInfo {
+  name: string;
+  avatar: string;
+  adminIds: string[];
+  participantsCount: number;
 }
 
 export interface Chat {
   id: number;
+  /** The other participant's user id — needed to place a call into this chat. Empty for groups. */
+  otherUserId: string;
   username: string;
   name: string;
   avatar: string;
-  active: boolean;
-  activeStatus: string;
   unread: boolean;
   messages: Message[];
+  /** ISO timestamp of the other user's last activity ping. Null for groups. */
+  lastSeenAt: string | null;
+  isGroup: boolean;
+  groupInfo: GroupInfo | null;
+  isVanishMode: boolean;
 }
 
 interface ChatsState {
@@ -38,17 +63,38 @@ const initialState: ChatsState = {
   error: null,
 };
 
-const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
-
 // Fallback id generator for optimistic messages when the backend response omits one.
 // Negative & monotonically decreasing so it can never collide with a real (positive) backend id
 // or with another optimistic message sent in the same millisecond.
 let localMessageIdSeq = -1;
 const nextLocalMessageId = () => localMessageIdSeq--;
 
+const formatReplyTo = (raw: any): ReplyPreview | null => {
+  if (!raw) return null;
+  const id = raw.id ?? raw.messageId;
+  if (id == null) return null;
+  return {
+    id,
+    senderId: raw.senderId || raw.senderUserId || "",
+    senderName: raw.senderName || raw.userName || "Пользователь",
+    messageText: raw.messageText || raw.text || "",
+  };
+};
+
 const formatBackendChat = (c: any, currentUserId: string): Chat => {
-  // Backend returns the other participant as `otherUser`.
+  // Groups carry `groupInfo` instead of `otherUser`.
+  const isGroup = !!c.isGroup;
+  const rawGroup = c.groupInfo || {};
   const receiver = c.otherUser || c.users?.find((u: any) => u.id !== currentUserId) || c.user || {};
+
+  const groupInfo: GroupInfo | null = isGroup
+    ? {
+        name: rawGroup.name || "Группа",
+        avatar: getFullImageUrl(rawGroup.avatar),
+        adminIds: rawGroup.adminIds || [],
+        participantsCount: rawGroup.participantsCount || 0,
+      }
+    : null;
 
   // Format messages (backend field is `senderId`)
   const rawMsgs = c.messages || [];
@@ -62,17 +108,23 @@ const formatBackendChat = (c: any, currentUserId: string): Chat => {
     isVoice: !!m.isVoice,
     voiceUrl: m.isVoice ? getFullImageUrl(m.filePath || m.imagePath) || undefined : undefined,
     durationMs: m.durationMs,
+    replyTo: formatReplyTo(m.replyTo),
+    senderName: m.senderName || m.userName || undefined,
+    senderAvatar: getFullImageUrl(m.senderAvatar || m.userAvatar) || undefined,
   }));
 
   return {
     id: c.id || c.chatId,
-    username: receiver.userName || receiver.username || "direct_user",
-    name: receiver.name || receiver.fullName || "Direct Conversation",
-    avatar: getFullImageUrl(receiver.avatar || receiver.imagePath) || DEFAULT_AVATAR,
-    active: receiver.isActive || false,
-    activeStatus: receiver.isActive ? "В сети" : "Был(-а) в сети недавно",
+    otherUserId: isGroup ? "" : receiver.id || receiver.userId || "",
+    username: isGroup ? groupInfo!.name : receiver.userName || receiver.username || "direct_user",
+    name: isGroup ? groupInfo!.name : receiver.name || receiver.fullName || "Direct Conversation",
+    avatar: isGroup ? groupInfo!.avatar : getFullImageUrl(receiver.avatar || receiver.imagePath),
     unread: c.isUnread || false,
     messages,
+    lastSeenAt: isGroup ? null : receiver.lastSeenAt || null,
+    isGroup,
+    groupInfo,
+    isVanishMode: !!c.isVanishMode,
   };
 };
 
@@ -123,12 +175,14 @@ export const sendMessage = createAsyncThunk(
       messageText,
       file,
       voice,
-      currentUserId,
+      replyTo,
     }: {
       chatId: number;
       messageText?: string;
       file?: File;
       voice?: { durationMs: number };
+      /** The message being replied to; its id is sent to the backend. */
+      replyTo?: ReplyPreview | null;
       currentUserId: string;
     },
     { rejectWithValue }
@@ -138,7 +192,8 @@ export const sendMessage = createAsyncThunk(
         chatId,
         messageText,
         file,
-        voice ? { isVoice: true, durationMs: voice.durationMs } : undefined
+        voice ? { isVoice: true, durationMs: voice.durationMs } : undefined,
+        replyTo?.id
       );
       // Re-map response
       return {
@@ -152,10 +207,42 @@ export const sendMessage = createAsyncThunk(
           isVoice: !!voice,
           voiceUrl: voice ? (getFullImageUrl(message.filePath || message.imagePath) || (file ? URL.createObjectURL(file) : undefined)) : undefined,
           durationMs: voice?.durationMs,
+          // Prefer the server's echo, but fall back to the local preview so the
+          // quote renders immediately instead of after the next refetch.
+          replyTo: formatReplyTo(message.replyTo) || replyTo || null,
         },
       };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to send message.");
+    }
+  }
+);
+
+export const startNewGroupChat = createAsyncThunk(
+  "chats/createGroup",
+  async (
+    { name, participantIds, currentUserId }: { name: string; participantIds: string[]; currentUserId: string },
+    { dispatch, rejectWithValue }
+  ) => {
+    try {
+      const newChat = await api.chat.createGroupChat(name, participantIds);
+      const formatted = formatBackendChat(newChat, currentUserId);
+      dispatch(fetchChats(currentUserId));
+      return formatted;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to create group chat.");
+    }
+  }
+);
+
+export const toggleVanishMode = createAsyncThunk(
+  "chats/toggleVanishMode",
+  async ({ chatId, isVanishMode }: { chatId: number; isVanishMode: boolean }, { rejectWithValue }) => {
+    try {
+      await api.chat.toggleVanishMode(chatId, isVanishMode);
+      return { chatId, isVanishMode };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle vanish mode.");
     }
   }
 );
@@ -239,6 +326,24 @@ const chatsSlice = createSlice({
         if (!state.chats.some((c) => c.id === action.payload.id)) {
           state.chats.push(action.payload);
         }
+      })
+
+      // Create Group Chat
+      .addCase(startNewGroupChat.fulfilled, (state, action: PayloadAction<Chat>) => {
+        state.activeChat = action.payload;
+        if (!state.chats.some((c) => c.id === action.payload.id)) {
+          state.chats.push(action.payload);
+        }
+      })
+
+      // Vanish mode
+      .addCase(toggleVanishMode.fulfilled, (state, action) => {
+        const { chatId, isVanishMode } = action.payload;
+        if (state.activeChat && state.activeChat.id === chatId) {
+          state.activeChat.isVanishMode = isVanishMode;
+        }
+        const chat = state.chats.find((c) => c.id === chatId);
+        if (chat) chat.isVanishMode = isVanishMode;
       })
 
       // Send Message Local updates

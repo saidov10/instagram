@@ -3,50 +3,103 @@
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useSelector } from "react-redux";
-import { Heart, UserPlus, X, Bell } from "lucide-react";
+import { Heart, MessageCircle, UserPlus, UserCheck, X, Bell, CheckCheck } from "lucide-react";
 import { RootState } from "../store/store";
 import { api, getFullImageUrl } from "../services/api";
+import Avatar from "./Avatar";
 
-const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
+type NotificationType = "LIKE" | "COMMENT" | "FOLLOW" | "FOLLOW_REQUEST" | "FOLLOW_ACCEPT";
 
-interface FollowerNotif {
-  userId: string;
-  username: string;
-  avatar: string;
-  following: boolean;
+interface AppNotification {
+  id: string;
+  type: NotificationType;
+  senderId: string;
+  senderName: string;
+  senderAvatar: string;
+  postId?: number;
+  postImage?: string;
+  text?: string;
+  isRead: boolean;
+  createdAt?: string;
 }
+
 interface PendingRequest {
   userId: string;
   username: string;
   avatar: string;
 }
-interface LikeNotif {
-  key: string;
-  userId: string;
-  username: string;
-  avatar: string;
-  postId: number;
-  postImage: string;
+
+const TYPE_TEXT: Record<NotificationType, string> = {
+  LIKE: "оценил(-а) вашу публикацию",
+  COMMENT: "прокомментировал(-а) вашу публикацию",
+  FOLLOW: "подписался(-ась) на вас",
+  FOLLOW_REQUEST: "хочет подписаться на вас",
+  FOLLOW_ACCEPT: "принял(-а) ваш запрос на подписку",
+};
+
+function TypeBadge({ type }: { type: NotificationType }) {
+  const config: Record<NotificationType, { bg: string; icon: React.ReactNode }> = {
+    LIKE: { bg: "bg-red-500", icon: <Heart className="w-2.5 h-2.5 text-white fill-white" /> },
+    COMMENT: { bg: "bg-blue-500", icon: <MessageCircle className="w-2.5 h-2.5 text-white fill-white" /> },
+    FOLLOW: { bg: "bg-violet-500", icon: <UserPlus className="w-2.5 h-2.5 text-white" /> },
+    FOLLOW_REQUEST: { bg: "bg-amber-500", icon: <UserPlus className="w-2.5 h-2.5 text-white" /> },
+    FOLLOW_ACCEPT: { bg: "bg-emerald-500", icon: <UserCheck className="w-2.5 h-2.5 text-white" /> },
+  };
+  const { bg, icon } = config[type];
+  return (
+    <span className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full ${bg} flex items-center justify-center border-2 border-[var(--background)]`}>
+      {icon}
+    </span>
+  );
+}
+
+/** Normalizes the many shapes the backend may use for a notification's sender/post. */
+function mapNotification(n: any): AppNotification {
+  const sender = n.sender || n.fromUser || n.user || n.actor || {};
+  const rawType = String(n.type || n.notificationType || "FOLLOW").toUpperCase().replace(/[\s-]/g, "_");
+  const type = (["LIKE", "COMMENT", "FOLLOW", "FOLLOW_REQUEST", "FOLLOW_ACCEPT"].includes(rawType)
+    ? rawType
+    : "FOLLOW") as NotificationType;
+
+  return {
+    id: String(n.id ?? n.notificationId ?? ""),
+    type,
+    senderId: sender.id || sender.userId || n.senderId || n.fromUserId || "",
+    senderName: sender.userName || sender.username || n.senderName || n.userName || "user",
+    senderAvatar: getFullImageUrl(sender.avatar || sender.imagePath || n.senderAvatar),
+    postId: n.postId ?? n.post?.id,
+    postImage: getFullImageUrl(
+      n.postImage || n.post?.images?.[0] || n.post?.filePath || n.post?.imagePath || n.postPreview
+    ),
+    text: n.text || n.message || n.comment,
+    isRead: !!(n.isRead ?? n.read ?? n.seen),
+    createdAt: n.createAt || n.createdAt,
+  };
 }
 
 export default function NotificationsPanel({ onClose }: { onClose: () => void }) {
   const { currentUser } = useSelector((state: RootState) => state.auth);
   const [loading, setLoading] = useState(true);
-  const [followers, setFollowers] = useState<FollowerNotif[]>([]);
-  const [likes, setLikes] = useState<LikeNotif[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     if (!currentUser) return;
     setLoading(true);
+    setError(null);
     try {
-      const [myPosts, subscribers, subscriptions, pending] = await Promise.all([
-        api.post.getMyPosts().catch(() => []),
-        api.following.getSubscribers(currentUser.id).catch(() => []),
-        api.following.getSubscriptions(currentUser.id).catch(() => []),
+      const [rawNotifs, pending] = await Promise.all([
+        api.notification.getNotifications(1, 30),
         api.following.getPendingRequests().catch(() => []),
       ]);
+
+      // FOLLOW_REQUEST notifications are dropped here: the pending-requests list below is the
+      // authoritative, actionable source for them (it carries accept/reject).
+      setNotifications(
+        (rawNotifs || []).map(mapNotification).filter((n) => n.type !== "FOLLOW_REQUEST" && n.id)
+      );
 
       setPendingRequests(
         (pending || []).map((r: any) => {
@@ -54,69 +107,13 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
           return {
             userId: author.id || author.userId || r.followerId || "",
             username: author.userName || author.username || "user",
-            avatar: getFullImageUrl(author.avatar || author.imagePath) || DEFAULT_AVATAR,
+            avatar: getFullImageUrl(author.avatar || author.imagePath),
           };
         })
       );
-
-      const followingIds = new Set((subscriptions || []).map((s: any) => s.id || s.userId));
-
-      // ---- New followers ----
-      setFollowers(
-        (subscribers || []).map((s: any) => {
-          const uid = s.id || s.userId || "";
-          return {
-            userId: uid,
-            username: s.userName || s.username || "user",
-            avatar: getFullImageUrl(s.avatar || s.imagePath) || DEFAULT_AVATAR,
-            following: followingIds.has(uid),
-          };
-        })
-      );
-
-      // ---- Likes on my posts (posts carry `likes: [userId]`) ----
-      // Collect unique likers (excluding myself), keep the post they liked.
-      const seen = new Set<string>();
-      const likerToPost: { userId: string; postId: number; postImage: string }[] = [];
-      for (const p of myPosts || []) {
-        const arr: string[] = Array.isArray(p.likes) ? p.likes : [];
-        const img = getFullImageUrl((p.images && p.images[0]) || p.filePath || p.image) || DEFAULT_AVATAR;
-        for (const uid of arr) {
-          if (uid === currentUser.id) continue;
-          const k = `${uid}-${p.id}`;
-          if (seen.has(k)) continue;
-          seen.add(k);
-          likerToPost.push({ userId: uid, postId: p.id || p.postId, postImage: img });
-        }
-      }
-
-      // Resolve liker profiles (cap to keep it snappy on the slow backend)
-      const capped = likerToPost.slice(0, 15);
-      const cache: Record<string, { username: string; avatar: string }> = {};
-      await Promise.all(
-        Array.from(new Set(capped.map((l) => l.userId))).map(async (uid) => {
-          try {
-            const prof = await api.profile.getUserProfileById(uid);
-            cache[uid] = {
-              username: prof?.userName || "user",
-              avatar: getFullImageUrl(prof?.avatar) || DEFAULT_AVATAR,
-            };
-          } catch {
-            cache[uid] = { username: "user", avatar: DEFAULT_AVATAR };
-          }
-        })
-      );
-
-      setLikes(
-        capped.map((l) => ({
-          key: `${l.userId}-${l.postId}`,
-          userId: l.userId,
-          username: cache[l.userId]?.username || "user",
-          avatar: cache[l.userId]?.avatar || DEFAULT_AVATAR,
-          postId: l.postId,
-          postImage: l.postImage,
-        }))
-      );
+    } catch (err: any) {
+      console.error("Failed to load notifications:", err);
+      setError(err?.message || "Не удалось загрузить уведомления.");
     } finally {
       setLoading(false);
     }
@@ -126,17 +123,47 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
     load();
   }, [load]);
 
-  const followBack = async (n: FollowerNotif) => {
-    if (!n.userId || busy[n.userId]) return;
-    setBusy((b) => ({ ...b, [n.userId]: true }));
-    setFollowers((prev) => prev.map((f) => (f.userId === n.userId ? { ...f, following: !f.following } : f)));
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
+
+  const handleMarkAllRead = async () => {
+    if (unreadCount === 0 || busy.markAll) return;
+    setBusy((b) => ({ ...b, markAll: true }));
+    const snapshot = notifications;
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
     try {
-      if (n.following) await api.following.unfollow(n.userId);
-      else await api.following.follow(n.userId);
-    } catch {
-      setFollowers((prev) => prev.map((f) => (f.userId === n.userId ? { ...f, following: n.following } : f)));
+      await api.notification.markAllAsRead();
+    } catch (err) {
+      console.error("Failed to mark all as read:", err);
+      setNotifications(snapshot);
     } finally {
-      setBusy((b) => ({ ...b, [n.userId]: false }));
+      setBusy((b) => ({ ...b, markAll: false }));
+    }
+  };
+
+  const handleMarkRead = async (id: string) => {
+    const target = notifications.find((n) => n.id === id);
+    if (!target || target.isRead) return;
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+    try {
+      await api.notification.markAsRead(id);
+    } catch (err) {
+      console.error("Failed to mark as read:", err);
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: false } : n)));
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (busy[id]) return;
+    setBusy((b) => ({ ...b, [id]: true }));
+    const snapshot = notifications;
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    try {
+      await api.notification.deleteNotification(id);
+    } catch (err) {
+      console.error("Failed to delete notification:", err);
+      setNotifications(snapshot);
+    } finally {
+      setBusy((b) => ({ ...b, [id]: false }));
     }
   };
 
@@ -154,15 +181,28 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
     }
   };
 
-  const isEmpty = !loading && followers.length === 0 && likes.length === 0 && pendingRequests.length === 0;
+  const isEmpty = !loading && !error && notifications.length === 0 && pendingRequests.length === 0;
 
   return (
     <div className="fixed inset-0 z-50 md:inset-auto md:z-30 flex flex-col w-full md:w-96 glass-strong md:glass h-screen md:sticky md:top-0 animate-in slide-in-from-left duration-300">
       <div className="flex justify-between items-center p-6 pb-4">
         <h2 className="text-2xl font-bold">Уведомления</h2>
-        <button onClick={onClose} className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded-full cursor-pointer">
-          <X className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1">
+          {unreadCount > 0 && (
+            <button
+              onClick={handleMarkAllRead}
+              disabled={busy.markAll}
+              title="Пометить все как прочитанные"
+              className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg glass press cursor-pointer disabled:opacity-60"
+            >
+              <CheckCheck className="w-4 h-4" />
+              Всё прочитано
+            </button>
+          )}
+          <button onClick={onClose} className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded-full cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-6 no-scrollbar">
@@ -179,16 +219,27 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
               </div>
             ))}
           </div>
+        ) : error ? (
+          <div className="h-full flex flex-col items-center justify-center text-center text-zinc-400 gap-3 py-10">
+            <div className="w-16 h-16 rounded-full glass flex items-center justify-center">
+              <Bell className="w-7 h-7 stroke-[1.4px]" />
+            </div>
+            <span className="text-sm font-medium">{error}</span>
+            <button onClick={load} className="text-blue-500 font-bold text-sm hover:text-blue-400 cursor-pointer">
+              Повторить
+            </button>
+          </div>
         ) : isEmpty ? (
           <div className="h-full flex flex-col items-center justify-center text-center text-zinc-400 gap-3 py-10">
             <div className="w-16 h-16 rounded-full glass flex items-center justify-center">
               <Bell className="w-7 h-7 stroke-[1.4px]" />
             </div>
             <span className="text-sm font-medium">Пока нет уведомлений.</span>
-            <span className="text-xs max-w-[220px]">Лайки на ваших публикациях и новые подписчики появятся здесь.</span>
+            <span className="text-xs max-w-[220px]">Лайки, комментарии и новые подписчики появятся здесь.</span>
           </div>
         ) : (
           <div className="flex flex-col gap-6">
+            {/* ---- Follow requests (actionable) ---- */}
             {pendingRequests.length > 0 && (
               <section>
                 <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2 px-2">Запросы на подписку</h3>
@@ -196,10 +247,10 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
                   {pendingRequests.map((r) => (
                     <div key={r.userId} className="flex items-center gap-3 p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition">
                       <Link href={`/u/${r.userId}`} onClick={onClose} className="flex items-center gap-3 flex-1 min-w-0">
-                        <img src={r.avatar} alt={r.username} className="w-11 h-11 rounded-full object-cover border border-[var(--border)]" />
+                        <Avatar src={r.avatar} name={r.username} className="w-11 h-11 border border-[var(--border)]" />
                         <p className="text-sm min-w-0">
                           <span className="font-semibold">{r.username}</span>
-                          <span className="text-zinc-500"> хочет подписаться на вас</span>
+                          <span className="text-zinc-500"> {TYPE_TEXT.FOLLOW_REQUEST}</span>
                         </p>
                       </Link>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -224,55 +275,55 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
               </section>
             )}
 
-            {followers.length > 0 && (
+            {/* ---- Everything else ---- */}
+            {notifications.length > 0 && (
               <section>
-                <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2 px-2">Новые подписчики</h3>
+                <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2 px-2">Все уведомления</h3>
                 <div className="flex flex-col">
-                  {followers.map((n) => (
-                    <div key={n.userId} className="flex items-center gap-3 p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition">
-                      <Link href={`/u/${n.userId}`} onClick={onClose} className="flex items-center gap-3 flex-1 min-w-0">
-                        <img src={n.avatar} alt={n.username} className="w-11 h-11 rounded-full object-cover border border-[var(--border)]" />
-                        <p className="text-sm min-w-0">
-                          <span className="font-semibold">{n.username}</span>
-                          <span className="text-zinc-500"> подписался(-ась) на вас</span>
-                        </p>
-                      </Link>
-                      <button
-                        onClick={() => followBack(n)}
-                        disabled={busy[n.userId]}
-                        className={`text-xs font-bold px-3.5 py-1.5 rounded-lg press cursor-pointer disabled:opacity-60 ${
-                          n.following ? "glass" : "btn-grad"
-                        }`}
-                      >
-                        {n.following ? "Вы подписаны" : "Подписаться"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
+                  {notifications.map((n) => (
+                    <div
+                      key={n.id}
+                      onClick={() => handleMarkRead(n.id)}
+                      className={`group flex items-center gap-3 p-2 rounded-xl transition cursor-pointer ${
+                        n.isRead ? "hover:bg-black/5 dark:hover:bg-white/5" : "bg-blue-500/8 hover:bg-blue-500/12"
+                      }`}
+                    >
+                      {/* Unread dot */}
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.isRead ? "bg-transparent" : "bg-blue-500"}`} />
 
-            {likes.length > 0 && (
-              <section>
-                <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2 px-2">Отметки «Нравится»</h3>
-                <div className="flex flex-col">
-                  {likes.map((n) => (
-                    <div key={n.key} className="flex items-center gap-3 p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition">
-                      <Link href={`/u/${n.userId}`} onClick={onClose} className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="relative">
-                          <img src={n.avatar} alt={n.username} className="w-11 h-11 rounded-full object-cover border border-[var(--border)]" />
-                          <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-red-500 flex items-center justify-center border-2 border-[var(--background)]">
-                            <Heart className="w-2.5 h-2.5 text-white fill-white" />
-                          </span>
+                      <Link
+                        href={n.senderId ? `/u/${n.senderId}` : "#"}
+                        onClick={onClose}
+                        className="flex items-center gap-3 flex-1 min-w-0"
+                      >
+                        <div className="relative flex-shrink-0">
+                          <Avatar src={n.senderAvatar} name={n.senderName} className="w-11 h-11 border border-[var(--border)]" />
+                          <TypeBadge type={n.type} />
                         </div>
                         <p className="text-sm min-w-0">
-                          <span className="font-semibold">{n.username}</span>
-                          <span className="text-zinc-500"> оценил(-а) вашу публикацию</span>
+                          <span className="font-semibold">{n.senderName}</span>
+                          <span className="text-zinc-500"> {TYPE_TEXT[n.type]}</span>
+                          {n.type === "COMMENT" && n.text && (
+                            <span className="block text-xs text-zinc-400 truncate mt-0.5">«{n.text}»</span>
+                          )}
                         </p>
                       </Link>
+
                       {n.postImage && (
-                        <img src={n.postImage} alt="post" className="w-11 h-11 rounded-lg object-cover shadow-soft" />
+                        <img src={n.postImage} alt="post" className="w-11 h-11 rounded-lg object-cover shadow-soft flex-shrink-0" />
                       )}
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(n.id);
+                        }}
+                        disabled={busy[n.id]}
+                        title="Удалить уведомление"
+                        className="p-1.5 rounded-full opacity-0 group-hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 transition cursor-pointer flex-shrink-0 disabled:opacity-40"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
                     </div>
                   ))}
                 </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Send,
@@ -22,7 +23,11 @@ import {
   Music,
   Play,
   Pause,
-  Mic
+  Mic,
+  Users,
+  Reply,
+  Ghost,
+  Check
 } from "lucide-react";
 import { AppDispatch, RootState } from "../../store/store";
 import {
@@ -33,12 +38,17 @@ import {
   reactToMessage,
   deleteMessage,
   deleteChat,
-  startNewChat
+  startNewChat,
+  startNewGroupChat,
+  toggleVanishMode,
+  ReplyPreview,
 } from "../../store/slices/chatsSlice";
-import { api } from "../../services/api";
+import { api, getFullImageUrl } from "../../services/api";
 import { ChatsListSkeleton } from "../../components/SkeletonLoader";
-
-const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
+import Avatar from "../../components/Avatar";
+import CallPanel, { CallSession, CallType, mapCall, ENV_APP_ID } from "../../components/CallPanel";
+import { isOnline, formatLastSeen } from "../../lib/presence";
+import MusicPicker, { MusicTrack } from "../../components/MusicPicker";
 
 interface ChatNote {
   id: number;
@@ -64,14 +74,6 @@ const EMOJIS = [
 
 // Gradient "stickers" (sent as a message) — no external deps
 const STICKERS = ["💖", "🔥", "🎉", "😂", "😍", "👑", "🚀", "🌟", "🍕", "☕", "🐱", "🐶"];
-
-// Demo music tracks for attaching to a note (stub picker; freely licensed sample audio)
-const DEMO_TRACKS = [
-  { title: "Night Drive", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" },
-  { title: "Sunny Days", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" },
-  { title: "City Lights", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" },
-  { title: "Slow Motion", artist: "SoundHelix", audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3" },
-];
 
 interface UserNote {
   id: number | string;
@@ -141,6 +143,40 @@ function VoiceMessageBubble({ url, durationMs, isMe }: { url?: string; durationM
   );
 }
 
+/** 1 участник / 2 участника / 5 участников */
+function participantsLabel(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${count} участник`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${count} участника`;
+  return `${count} участников`;
+}
+
+/** Avatar for a chat row/header: groups without a photo get a group glyph, not a person silhouette. */
+function ChatAvatar({
+  isGroup,
+  avatar,
+  name,
+  className = "w-10 h-10",
+}: {
+  isGroup: boolean;
+  avatar?: string;
+  name?: string;
+  className?: string;
+}) {
+  if (isGroup && !avatar) {
+    return (
+      <div
+        className={`${className} rounded-full flex-shrink-0 flex items-center justify-center btn-grad text-white`}
+        title={name}
+      >
+        <Users className="w-1/2 h-1/2" />
+      </div>
+    );
+  }
+  return <Avatar src={avatar} name={name} className={className} />;
+}
+
 export default function InboxPage() {
   const dispatch = useDispatch<AppDispatch>();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
@@ -153,9 +189,39 @@ export default function InboxPage() {
   const [searchUsersResults, setSearchUsersResults] = useState<any[]>([]);
   const [userSearchText, setUserSearchText] = useState("");
 
+  // Group creation (inside the same "new message" modal)
+  const [createMode, setCreateMode] = useState<"direct" | "group">("direct");
+  const [groupName, setGroupName] = useState("");
+  const [groupMembers, setGroupMembers] = useState<any[]>([]);
+  const [groupBusy, setGroupBusy] = useState(false);
+
+  // Threaded replies
+  const [replyTo, setReplyTo] = useState<ReplyPreview | null>(null);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<number | null>(null);
+  const messageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+
+  // Vanish mode
+  const [vanishBusy, setVanishBusy] = useState(false);
+  const touchStartY = useRef<number | null>(null);
+
+  // Ticks so "был(-а) в сети N минут назад" stays truthful without a refetch.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
   // Emoji / sticker picker + reactions
   const [showEmoji, setShowEmoji] = useState(false);
   const [reactionMsgId, setReactionMsgId] = useState<number | null>(null);
+
+  // Calls (Agora)
+  const [call, setCall] = useState<CallSession | null>(null);
+  const [callPhase, setCallPhase] = useState<"outgoing" | "incoming" | "connected" | null>(null);
+  const [callBusy, setCallBusy] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
+  // Calls we already dismissed, so polling doesn't resurrect the incoming modal.
+  const handledCallIds = useRef<Set<string>>(new Set());
 
   // Voice message recording
   const [isRecording, setIsRecording] = useState(false);
@@ -177,7 +243,8 @@ export default function InboxPage() {
   const [userNotes, setUserNotes] = useState<UserNote[]>([]);
   const [showCreateNoteModal, setShowCreateNoteModal] = useState(false);
   const [newNoteText, setNewNoteText] = useState("");
-  const [newNoteTrack, setNewNoteTrack] = useState<typeof DEMO_TRACKS[number] | null>(null);
+  const [newNoteTrack, setNewNoteTrack] = useState<MusicTrack | null>(null);
+  const [showMusicPicker, setShowMusicPicker] = useState(false);
   const [viewingNote, setViewingNote] = useState<UserNote | null>(null);
   const noteAudioRef = useRef<HTMLAudioElement | null>(null);
   const [noteAudioPlaying, setNoteAudioPlaying] = useState(false);
@@ -278,7 +345,7 @@ export default function InboxPage() {
             id: n.id || n.noteId,
             userId: uid,
             username: author.userName || author.username || n.userName || "user",
-            avatar: (author.avatar || author.imagePath) || DEFAULT_AVATAR,
+            avatar: getFullImageUrl(author.avatar || author.imagePath),
             text: n.text || "",
             musicTrack: n.musicTrack || null,
             isMine: uid === currentUser.id,
@@ -302,7 +369,16 @@ export default function InboxPage() {
     try {
       await api.note.addNote({
         text: newNoteText.trim().slice(0, 60),
-        musicTrack: newNoteTrack ? { ...newNoteTrack, durationMs: 30000 } : undefined,
+        // Send exactly the shape the note API documents — the picker's extra fields
+        // (id, cover) aren't part of it.
+        musicTrack: newNoteTrack
+          ? {
+              audioUrl: newNoteTrack.audioUrl,
+              title: newNoteTrack.title,
+              artist: newNoteTrack.artist,
+              durationMs: newNoteTrack.durationMs,
+            }
+          : undefined,
       });
       setShowCreateNoteModal(false);
       setNewNoteText("");
@@ -347,11 +423,152 @@ export default function InboxPage() {
   // Fetch full messages when selecting a chat
   const handleSelectChat = (id: number) => {
     setSelectedChatId(id);
+    setReplyTo(null);
     dispatch(selectChat(id));
     if (currentUser) {
       dispatch(fetchChatById({ chatId: id, currentUserId: currentUser.id }));
     }
   };
+
+  // ---- Calls ----
+  const handleStartCall = async (type: CallType) => {
+    if (!activeChat || !currentUser || callBusy || call) return;
+    if (!activeChat.otherUserId) {
+      setCallError("В этом чате нет собеседника для звонка.");
+      return;
+    }
+    setCallBusy(true);
+    setCallError(null);
+    try {
+      const raw = await api.chat.initiateCall({
+        chatId: activeChat.id,
+        recipientId: activeChat.otherUserId,
+        type,
+      });
+      const session = mapCall(raw);
+      if (!session) throw new Error("Бэкенд не вернул данные звонка.");
+
+      // Without an Agora App ID nothing can connect. Bail out here rather than ringing the
+      // other side and stranding them in a call that could never join a channel.
+      if (!session.appId && !ENV_APP_ID) {
+        api.chat.respondToCall({ callId: session.callId, status: "ENDED" }).catch(() => {});
+        setCallError(
+          "Звонки не настроены: нет Agora App ID. Укажите NEXT_PUBLIC_AGORA_APP_ID в .env.local или верните appId из /Chat/initiate-call."
+        );
+        return;
+      }
+
+      handledCallIds.current.add(session.callId);
+      setCall(session);
+      setCallPhase("outgoing");
+    } catch (err: any) {
+      console.error("Failed to initiate call:", err);
+      setCallError(err?.message || "Не удалось начать звонок.");
+    } finally {
+      setCallBusy(false);
+    }
+  };
+
+  const closeCall = () => {
+    if (call) handledCallIds.current.add(call.callId);
+    setCall(null);
+    setCallPhase(null);
+  };
+
+  // Mirror the call into a ref so the poller below can read it without restarting its interval.
+  const callRef = useRef<CallSession | null>(null);
+  useEffect(() => {
+    callRef.current = call;
+  }, [call]);
+
+  // `chats` gets a fresh identity on every message, so keying the poller off the array itself would
+  // restart its interval constantly. Key off the set of chat ids and read the rest through a ref.
+  const chatsRef = useRef(chats);
+  useEffect(() => {
+    chatsRef.current = chats;
+  });
+  const pollableChatsKey = chats.filter((c) => !c.isGroup).map((c) => c.id).join(",");
+
+  // Poll for call state.
+  //
+  // While a call is up we only watch that one chat. While idle we sweep every 1:1 chat,
+  // because the backend exposes ringing calls per-chat: polling just the *open* thread meant an
+  // incoming call was invisible unless the recipient happened to already have that exact chat
+  // selected — which is why calls appeared not to work at all.
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let cancelled = false;
+
+    const applyActiveSession = (session: CallSession | null) => {
+      if (!session) {
+        // The call disappeared server-side: the peer rejected or hung up.
+        setCall((prev) => {
+          if (!prev) return prev;
+          handledCallIds.current.add(prev.callId);
+          setCallPhase(null);
+          return null;
+        });
+        return;
+      }
+
+      if (session.status === "ACCEPTED") {
+        // Both sides move into the connected phase (the caller learns it here).
+        setCall((prev) => (prev && prev.callId === session.callId ? { ...prev, ...session } : prev));
+        setCallPhase((prev) => (prev && prev !== "connected" ? "connected" : prev));
+        return;
+      }
+
+      if (session.status === "REJECTED" || session.status === "ENDED") {
+        handledCallIds.current.add(session.callId);
+        setCall(null);
+        setCallPhase(null);
+      }
+    };
+
+    const poll = async () => {
+      const current = callRef.current;
+
+      // A call is in flight — track only its chat.
+      if (current) {
+        try {
+          const session = mapCall(await api.chat.getActiveCall(current.chatId));
+          if (!cancelled) applyActiveSession(session);
+        } catch {
+          /* transient failure — keep the call up and retry on the next tick */
+        }
+        return;
+      }
+
+      // Idle — look for anyone ringing us. Groups can't host calls, so skip them.
+      const candidates = chatsRef.current.filter((c) => !c.isGroup).slice(0, 20);
+      for (const chat of candidates) {
+        if (cancelled || callRef.current) return;
+        try {
+          const session = mapCall(await api.chat.getActiveCall(chat.id));
+          if (cancelled || !session) continue;
+          if (
+            session.status === "RINGING" &&
+            session.recipientId === currentUser.id &&
+            !handledCallIds.current.has(session.callId)
+          ) {
+            setCall(session);
+            setCallPhase("incoming");
+            return;
+          }
+        } catch {
+          /* no active call in this chat */
+        }
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [currentUser, pollableChatsKey]);
 
   const handleSendMessage = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -360,9 +577,11 @@ export default function InboxPage() {
     dispatch(sendMessage({
       chatId: selectedChatId,
       messageText: inputText.trim(),
+      replyTo,
       currentUserId: currentUser.id
     }));
     setInputText("");
+    setReplyTo(null);
   };
 
   const handleSendHeart = () => {
@@ -470,14 +689,21 @@ export default function InboxPage() {
     }
   };
 
+  const closeCreateModal = () => {
+    setShowCreateChatModal(false);
+    setUserSearchText("");
+    setSearchUsersResults([]);
+    setCreateMode("direct");
+    setGroupName("");
+    setGroupMembers([]);
+  };
+
   const handleCreateChat = async (receiverUserId: string) => {
     if (!currentUser) return;
     try {
       const action = await dispatch(startNewChat({ receiverUserId, currentUserId: currentUser.id }));
       if (startNewChat.fulfilled.match(action)) {
-        setShowCreateChatModal(false);
-        setUserSearchText("");
-        setSearchUsersResults([]);
+        closeCreateModal();
         // Load chat ID
         const newChat = action.payload;
         setSelectedChatId(newChat.id);
@@ -485,6 +711,87 @@ export default function InboxPage() {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const toggleGroupMember = (user: any) => {
+    const uid = user.id || user.userId;
+    setGroupMembers((prev) =>
+      prev.some((u) => (u.id || u.userId) === uid)
+        ? prev.filter((u) => (u.id || u.userId) !== uid)
+        : [...prev, user]
+    );
+  };
+
+  const handleCreateGroup = async () => {
+    if (!currentUser || groupBusy) return;
+    const name = groupName.trim();
+    const participantIds = groupMembers.map((u) => u.id || u.userId).filter(Boolean);
+    if (!name || participantIds.length < 2) return;
+
+    setGroupBusy(true);
+    try {
+      const action = await dispatch(startNewGroupChat({ name, participantIds, currentUserId: currentUser.id }));
+      if (startNewGroupChat.fulfilled.match(action)) {
+        closeCreateModal();
+        setSelectedChatId(action.payload.id);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  // ---- Threaded replies ----
+  const startReply = (msg: { id: number; text?: string; senderName?: string; sender: "me" | "them" }) => {
+    setReplyTo({
+      id: msg.id,
+      senderId: msg.sender === "me" ? currentUser?.id || "" : activeChat?.otherUserId || "",
+      senderName:
+        msg.sender === "me"
+          ? currentUser?.username || "Вы"
+          : msg.senderName || activeChat?.username || "Пользователь",
+      messageText: msg.text || "Вложение",
+    });
+  };
+
+  const scrollToMessage = (messageId: number) => {
+    const el = messageRefs.current[messageId];
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedMsgId(messageId);
+    setTimeout(() => setHighlightedMsgId((id) => (id === messageId ? null : id)), 1500);
+  };
+
+  // ---- Vanish mode ----
+  const handleToggleVanish = async () => {
+    if (!activeChat || !currentUser || vanishBusy) return;
+    const next = !activeChat.isVanishMode;
+    setVanishBusy(true);
+    try {
+      await dispatch(toggleVanishMode({ chatId: activeChat.id, isVanishMode: next })).unwrap();
+      // The backend wipes already-read messages on read; refetch so the thread
+      // reflects what actually survives server-side rather than a stale copy.
+      dispatch(fetchChatById({ chatId: activeChat.id, currentUserId: currentUser.id }));
+    } catch (e) {
+      console.error("Failed to toggle vanish mode:", e);
+    } finally {
+      setVanishBusy(false);
+    }
+  };
+
+  // Swipe up inside the thread toggles vanish mode (Instagram's gesture).
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0]?.clientY ?? null;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const startY = touchStartY.current;
+    touchStartY.current = null;
+    if (startY == null) return;
+    const endY = e.changedTouches[0]?.clientY;
+    if (endY == null) return;
+    if (startY - endY > 90) handleToggleVanish();
   };
 
   const handleDeleteChatThread = async (id: number) => {
@@ -515,12 +822,28 @@ export default function InboxPage() {
             {currentUser?.username || "Сообщения"}
             <ChevronDown className="w-5 h-5 text-zinc-500" />
           </button>
-          <button
-            onClick={() => setShowCreateChatModal(true)}
-            className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full"
-          >
-            <Edit className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setCreateMode("group");
+                setShowCreateChatModal(true);
+              }}
+              title="Создать группу"
+              className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full cursor-pointer"
+            >
+              <Users className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => {
+                setCreateMode("direct");
+                setShowCreateChatModal(true);
+              }}
+              title="Новое сообщение"
+              className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full cursor-pointer"
+            >
+              <Edit className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -538,13 +861,17 @@ export default function InboxPage() {
         </div>
 
         {/* Status Notes strip */}
-        <div className="flex gap-4 px-5 pb-4 overflow-x-auto no-scrollbar">
+        <div className="flex gap-4 px-5 pt-9 pb-4 overflow-x-auto no-scrollbar">
           {currentUser && (
             <button
               onClick={() => {
-                setNewNoteText(myNote?.text || "");
-                setNewNoteTrack(null);
-                setShowCreateNoteModal(true);
+                if (myNote) {
+                  openNoteViewer(myNote);
+                } else {
+                  setNewNoteText("");
+                  setNewNoteTrack(null);
+                  setShowCreateNoteModal(true);
+                }
               }}
               className="flex flex-col items-center gap-1 flex-shrink-0 cursor-pointer group"
             >
@@ -554,11 +881,7 @@ export default function InboxPage() {
                     {myNote.text}
                   </div>
                 )}
-                <img
-                  src={currentUser.avatar || DEFAULT_AVATAR}
-                  alt="Your note"
-                  className="w-12 h-12 rounded-full object-cover border-2 border-zinc-200 dark:border-zinc-800 group-hover:scale-105 transition"
-                />
+                <Avatar src={getFullImageUrl(currentUser.avatar)} name={currentUser.username} className="w-12 h-12 border-2 border-zinc-200 dark:border-zinc-800 group-hover:scale-105 transition" alt="Your note" />
                 <div className="absolute bottom-0 right-0 w-4.5 h-4.5 bg-blue-500 rounded-full border-2 border-white dark:border-black flex items-center justify-center text-white text-[10px] font-bold">
                   {myNote ? <Edit className="w-2.5 h-2.5" /> : "+"}
                 </div>
@@ -576,11 +899,7 @@ export default function InboxPage() {
                 <div className="absolute -top-7 left-1/2 -translate-x-1/2 glass-strong rounded-2xl rounded-bl-sm px-2.5 py-1 whitespace-nowrap max-w-[110px] truncate text-[11px] font-medium shadow-soft">
                   {note.text}
                 </div>
-                <img
-                  src={note.avatar || DEFAULT_AVATAR}
-                  alt={note.username}
-                  className="w-12 h-12 rounded-full object-cover border-2 border-transparent group-hover:scale-105 transition gradient-ring p-[2px]"
-                />
+                <Avatar src={note.avatar} name={note.username} className="w-12 h-12 border-2 border-transparent group-hover:scale-105 transition gradient-ring p-[2px]" />
                 {note.musicTrack && (
                   <div className="absolute bottom-0 right-0 w-4.5 h-4.5 bg-black rounded-full border-2 border-white dark:border-black flex items-center justify-center">
                     <Music className="w-2.5 h-2.5 text-white" />
@@ -618,19 +937,26 @@ export default function InboxPage() {
                   <div className="flex items-center gap-4.5 flex-1 min-w-0">
                     {/* Avatar */}
                     <div className="relative flex-shrink-0">
-                      <img
-                        src={chat.avatar}
-                        alt={chat.username}
-                        className="w-14 h-14 rounded-full object-cover border border-zinc-200 dark:border-zinc-800"
+                      <ChatAvatar
+                        isGroup={chat.isGroup}
+                        avatar={chat.avatar}
+                        name={chat.username}
+                        className="w-14 h-14 border border-zinc-200 dark:border-zinc-800"
                       />
-                      {chat.active && (
-                        <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white dark:border-black rounded-full" />
+                      {!chat.isGroup && isOnline(chat.lastSeenAt, now) && (
+                        <span
+                          title="В сети"
+                          className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white dark:border-black rounded-full"
+                        />
                       )}
                     </div>
 
                     {/* Meta info */}
                     <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-left">
-                      <span className="font-semibold text-sm truncate">{chat.username}</span>
+                      <span className="font-semibold text-sm truncate flex items-center gap-1.5">
+                        {chat.username}
+                        {chat.isGroup && <Users className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />}
+                      </span>
                       <span className={`text-xs truncate ${chat.unread ? "font-bold text-black dark:text-white" : "text-zinc-400 dark:text-zinc-500"}`}>
                         {lastMsg?.image ? "Отправил(-а) вложение" : lastMsg?.text || "Начата беседа"}
                         {lastMsg && (
@@ -655,7 +981,11 @@ export default function InboxPage() {
       </div>
 
       {/* ----------------- ACTIVE CHAT VIEWPORT ----------------- */}
-      <div className={`flex-1 flex flex-col h-full ${selectedChatId === null ? "hidden md:flex" : "flex"}`}>
+      <div
+        className={`flex-1 flex flex-col h-full relative transition-colors duration-300 ${
+          selectedChatId === null ? "hidden md:flex" : "flex"
+        } ${activeChat?.isVanishMode ? "vanish-mode" : ""}`}
+      >
         {activeChat ? (
           <>
             {/* Header info */}
@@ -670,19 +1000,61 @@ export default function InboxPage() {
                   </svg>
                 </button>
                 
-                <img
-                  src={activeChat.avatar}
-                  alt={activeChat.username}
-                  className="w-10 h-10 rounded-full object-cover"
-                />
+                {!activeChat.isGroup && activeChat.otherUserId ? (
+                  <Link href={`/u/${activeChat.otherUserId}`} className="relative flex-shrink-0">
+                    <ChatAvatar
+                      isGroup={activeChat.isGroup}
+                      avatar={activeChat.avatar}
+                      name={activeChat.username}
+                      className="w-10 h-10 hover:opacity-90 transition"
+                    />
+                    {isOnline(activeChat.lastSeenAt, now) && (
+                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-black rounded-full" />
+                    )}
+                  </Link>
+                ) : (
+                  <div className="relative flex-shrink-0">
+                    <ChatAvatar
+                      isGroup={activeChat.isGroup}
+                      avatar={activeChat.avatar}
+                      name={activeChat.username}
+                      className="w-10 h-10"
+                    />
+                    {!activeChat.isGroup && isOnline(activeChat.lastSeenAt, now) && (
+                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-black rounded-full" />
+                    )}
+                  </div>
+                )}
                 <div className="flex flex-col">
-                  <span className="font-semibold text-sm hover:underline cursor-pointer">{activeChat.username}</span>
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium">{activeChat.activeStatus}</span>
+                  {!activeChat.isGroup && activeChat.otherUserId ? (
+                    <Link href={`/u/${activeChat.otherUserId}`}>
+                      <span className="font-semibold text-sm hover:underline cursor-pointer">{activeChat.username}</span>
+                    </Link>
+                  ) : (
+                    <span className="font-semibold text-sm">{activeChat.username}</span>
+                  )}
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium">
+                    {activeChat.isGroup
+                      ? participantsLabel(activeChat.groupInfo?.participantsCount || 0)
+                      : formatLastSeen(activeChat.lastSeenAt, now)}
+                  </span>
                 </div>
               </div>
 
               {/* Call & delete actions */}
               <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200">
+                <button
+                  onClick={handleToggleVanish}
+                  disabled={vanishBusy}
+                  title={activeChat.isVanishMode ? "Выключить исчезающий режим" : "Включить исчезающий режим"}
+                  className={`p-2 rounded-full press cursor-pointer disabled:opacity-40 ${
+                    activeChat.isVanishMode
+                      ? "bg-white/15 text-white"
+                      : "hover:bg-black/5 dark:hover:bg-white/10"
+                  }`}
+                >
+                  <Ghost className="w-5 h-5" />
+                </button>
                 <button
                   onClick={() => setShowNotes(true)}
                   title="Заметки"
@@ -693,12 +1065,27 @@ export default function InboxPage() {
                     <span className="absolute top-1 right-1 w-2 h-2 rounded-full gradient-bg" />
                   )}
                 </button>
-                <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full press cursor-pointer">
-                  <Phone className="w-5 h-5" />
-                </button>
-                <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full press cursor-pointer">
-                  <Video className="w-5 h-5" />
-                </button>
+                {/* Calls are 1:1 only — a group has no single recipient to ring. */}
+                {!activeChat.isGroup && (
+                  <>
+                    <button
+                      onClick={() => handleStartCall("AUDIO")}
+                      disabled={callBusy || !!call}
+                      title="Аудиозвонок"
+                      className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full press cursor-pointer disabled:opacity-40"
+                    >
+                      <Phone className="w-5 h-5" />
+                    </button>
+                    <button
+                      onClick={() => handleStartCall("VIDEO")}
+                      disabled={callBusy || !!call}
+                      title="Видеозвонок"
+                      className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full press cursor-pointer disabled:opacity-40"
+                    >
+                      <Video className="w-5 h-5" />
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => handleDeleteChatThread(activeChat.id)}
                   title="Delete Chat Thread"
@@ -709,23 +1096,95 @@ export default function InboxPage() {
               </div>
             </div>
 
+            {/* Call failure banner — these used to die silently in the console */}
+            {callError && (
+              <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-red-500/10 border border-red-500/30 px-4 py-3 text-sm text-red-500 animate-in fade-in duration-200">
+                <span className="flex-1">{callError}</span>
+                <button
+                  onClick={() => setCallError(null)}
+                  className="p-0.5 hover:opacity-70 cursor-pointer flex-shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
             {/* Message Bubble Thread */}
-            <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-3">
+            <div
+              className="flex-1 overflow-y-auto p-6 flex flex-col gap-3 relative"
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+            >
+              {/* Vanish-mode ambience: falling spies + a hint about the gesture */}
+              {activeChat.isVanishMode && (
+                <>
+                  <div className="pointer-events-none absolute inset-0 overflow-hidden z-0">
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <span
+                        key={i}
+                        className="vanish-spy"
+                        style={{
+                          left: `${(i * 8.5 + 4) % 96}%`,
+                          animationDuration: `${7 + (i % 5) * 2}s`,
+                          animationDelay: `${(i % 6) * 1.2}s`,
+                        }}
+                      >
+                        {i % 2 === 0 ? "🕵️" : "👻"}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="sticky top-0 z-10 self-center glass rounded-full px-4 py-1.5 text-[11px] font-semibold flex items-center gap-2">
+                    <Ghost className="w-3.5 h-3.5" />
+                    Исчезающий режим включён — сообщения удалятся после прочтения
+                  </div>
+                </>
+              )}
+
               {activeChat.messages.map((msg) => {
                 const isMe = msg.sender === "me";
                 return (
                   <div
                     key={msg.id}
-                    className={`group flex gap-3 max-w-[78%] ${isMe ? "self-end flex-row-reverse" : "self-start"}`}
+                    ref={(el) => {
+                      messageRefs.current[msg.id] = el;
+                    }}
+                    className={`group flex gap-3 max-w-[78%] z-1 rounded-2xl transition-shadow duration-500 ${
+                      isMe ? "self-end flex-row-reverse" : "self-start"
+                    } ${highlightedMsgId === msg.id ? "ring-2 ring-[var(--accent-2)] ring-offset-2 ring-offset-transparent" : ""}`}
                   >
                     {!isMe && (
-                      <img
-                        src={activeChat.avatar}
-                        alt={activeChat.username}
-                        className="w-7 h-7 rounded-full object-cover self-end mb-1"
+                      <Avatar
+                        src={activeChat.isGroup ? msg.senderAvatar : activeChat.avatar}
+                        name={msg.senderName || activeChat.username}
+                        className="w-7 h-7 self-end mb-1"
                       />
                     )}
                     <div className="flex flex-col gap-1 text-left min-w-0">
+                      {/* Who said it — only ambiguous in a group */}
+                      {activeChat.isGroup && !isMe && msg.senderName && (
+                        <span className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 px-1">
+                          {msg.senderName}
+                        </span>
+                      )}
+
+                      {/* Quoted original — click scrolls the thread to it */}
+                      {msg.replyTo && (
+                        <button
+                          type="button"
+                          onClick={() => scrollToMessage(msg.replyTo!.id)}
+                          className={`flex flex-col gap-0.5 text-left rounded-xl px-3 py-1.5 border-l-2 border-[var(--accent-2)] max-w-full cursor-pointer hover:opacity-80 transition ${
+                            isMe ? "bg-black/10 dark:bg-white/10" : "bg-black/5 dark:bg-white/5"
+                          }`}
+                        >
+                          <span className="text-[10px] font-bold text-[var(--accent-2)] truncate">
+                            {msg.replyTo.senderName}
+                          </span>
+                          <span className="text-[11px] text-zinc-600 dark:text-zinc-300 truncate max-w-[220px]">
+                            {msg.replyTo.messageText || "Вложение"}
+                          </span>
+                        </button>
+                      )}
+
                       <div className="relative">
                         {msg.isVoice ? (
                           <VoiceMessageBubble url={msg.voiceUrl} durationMs={msg.durationMs || 0} isMe={isMe} />
@@ -754,6 +1213,13 @@ export default function InboxPage() {
 
                         {/* Hover actions: react + delete */}
                         <div className={`absolute top-1/2 -translate-y-1/2 ${isMe ? "right-full mr-2" : "left-full ml-2"} flex items-center gap-1 opacity-0 group-hover:opacity-100 transition`}>
+                          <button
+                            onClick={() => startReply(msg)}
+                            className="p-1.5 glass rounded-full press hover:shadow-soft cursor-pointer"
+                            title="Ответить"
+                          >
+                            <Reply className="w-4 h-4" />
+                          </button>
                           <button
                             onClick={() => setReactionMsgId(reactionMsgId === msg.id ? null : msg.id)}
                             className="p-1.5 glass rounded-full press hover:shadow-soft cursor-pointer"
@@ -824,6 +1290,29 @@ export default function InboxPage() {
                   </div>
                 </div>
               )}
+              {/* Reply composer preview */}
+              {replyTo && (
+                <div className="mb-2 flex items-center gap-3 glass rounded-2xl px-4 py-2.5 shadow-soft animate-in slide-in-from-bottom-2 duration-200">
+                  <Reply className="w-4 h-4 text-[var(--accent-2)] flex-shrink-0" />
+                  <div className="flex flex-col min-w-0 flex-1 border-l-2 border-[var(--accent-2)] pl-3">
+                    <span className="text-[11px] font-bold text-[var(--accent-2)] truncate">
+                      Ответ · {replyTo.senderName}
+                    </span>
+                    <span className="text-xs text-zinc-600 dark:text-zinc-300 truncate">
+                      {replyTo.messageText}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(null)}
+                    title="Отменить ответ"
+                    className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded-full cursor-pointer flex-shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
               {isRecording ? (
                 <div className="flex items-center gap-4 glass rounded-full px-4 py-2.5 shadow-soft">
                   <button
@@ -1040,7 +1529,7 @@ export default function InboxPage() {
 
             <div className="p-5 flex flex-col gap-4">
               <div className="flex items-center gap-3">
-                <img src={currentUser.avatar || DEFAULT_AVATAR} alt="" className="w-10 h-10 rounded-full object-cover" />
+                <Avatar src={getFullImageUrl(currentUser.avatar)} name={currentUser.username} className="w-10 h-10" />
                 <div className="flex-1 relative">
                   <textarea
                     autoFocus
@@ -1059,25 +1548,42 @@ export default function InboxPage() {
                 <span className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 flex items-center gap-1.5">
                   <Music className="w-3.5 h-3.5" /> Музыка (опционально)
                 </span>
-                <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto no-scrollbar">
-                  {DEMO_TRACKS.map((t) => (
+
+                {newNoteTrack ? (
+                  <div className="flex items-center gap-3 glass rounded-2xl p-2">
+                    <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
+                      {newNoteTrack.coverUrl ? (
+                        <img src={newNoteTrack.coverUrl} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <Music className="w-4 h-4 text-zinc-500" />
+                      )}
+                    </div>
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span className="text-xs font-semibold truncate">{newNoteTrack.title}</span>
+                      <span className="text-[10px] text-zinc-450 truncate">{newNoteTrack.artist}</span>
+                    </div>
                     <button
-                      key={t.audioUrl}
-                      onClick={() => setNewNoteTrack(newNoteTrack?.audioUrl === t.audioUrl ? null : t)}
-                      className={`flex items-center gap-3 p-2 rounded-xl text-left transition cursor-pointer ${
-                        newNoteTrack?.audioUrl === t.audioUrl ? "btn-grad text-white" : "glass hover:shadow-soft"
-                      }`}
+                      onClick={() => setShowMusicPicker(true)}
+                      className="text-[11px] font-bold text-blue-500 hover:text-blue-600 cursor-pointer flex-shrink-0"
                     >
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${newNoteTrack?.audioUrl === t.audioUrl ? "bg-white/20" : "bg-zinc-200 dark:bg-zinc-800"}`}>
-                        <Music className="w-4 h-4" />
-                      </div>
-                      <div className="flex flex-col min-w-0">
-                        <span className="text-xs font-semibold truncate">{t.title}</span>
-                        <span className={`text-[10px] truncate ${newNoteTrack?.audioUrl === t.audioUrl ? "text-white/80" : "text-zinc-450"}`}>{t.artist}</span>
-                      </div>
+                      Заменить
                     </button>
-                  ))}
-                </div>
+                    <button
+                      onClick={() => setNewNoteTrack(null)}
+                      title="Убрать музыку"
+                      className="p-1 hover:text-red-500 cursor-pointer flex-shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowMusicPicker(true)}
+                    className="flex items-center justify-center gap-2 glass rounded-2xl py-2.5 text-sm font-semibold hover:shadow-soft cursor-pointer"
+                  >
+                    <Search className="w-4 h-4" /> Выбрать музыку
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
@@ -1102,6 +1608,14 @@ export default function InboxPage() {
         </div>
       )}
 
+      {/* ----------------- MUSIC PICKER (notes) ----------------- */}
+      {showMusicPicker && (
+        <MusicPicker
+          onSelect={(track) => setNewNoteTrack(track)}
+          onClose={() => setShowMusicPicker(false)}
+        />
+      )}
+
       {/* ----------------- VIEW STATUS NOTE MODAL ----------------- */}
       {viewingNote && (
         <div
@@ -1109,7 +1623,7 @@ export default function InboxPage() {
           onClick={() => { setViewingNote(null); noteAudioRef.current?.pause(); }}
         >
           <div className="glass-strong rounded-3xl shadow-soft-lg w-full max-w-xs flex flex-col items-center gap-4 p-6 animate-pop-in" onClick={(e) => e.stopPropagation()}>
-            <img src={viewingNote.avatar || DEFAULT_AVATAR} alt={viewingNote.username} className="w-16 h-16 rounded-full object-cover border-2 border-zinc-200 dark:border-zinc-800" />
+            <Avatar src={viewingNote.avatar} name={viewingNote.username} className="w-16 h-16 border-2 border-zinc-200 dark:border-zinc-800" />
             <span className="font-bold text-sm">{viewingNote.username}</span>
             <div className="glass rounded-2xl rounded-bl-sm px-4 py-3 text-sm text-center max-w-full break-words">
               {viewingNote.text}
@@ -1134,6 +1648,39 @@ export default function InboxPage() {
                 />
               </div>
             )}
+            {viewingNote.isMine && (
+              <div className="flex flex-col gap-2 w-full mt-2 animate-in fade-in duration-200">
+                <button
+                  onClick={() => {
+                    setViewingNote(null);
+                    noteAudioRef.current?.pause();
+                    setNewNoteText(myNote?.text || "");
+                    setNewNoteTrack(myNote?.musicTrack ? {
+                      id: "",
+                      title: myNote.musicTrack.title,
+                      artist: myNote.musicTrack.artist,
+                      audioUrl: myNote.musicTrack.audioUrl,
+                      durationMs: myNote.musicTrack.durationMs,
+                      coverUrl: ""
+                    } : null);
+                    setShowCreateNoteModal(true);
+                  }}
+                  className="w-full btn-grad py-2 rounded-xl text-xs font-bold cursor-pointer transition shadow-soft hover:shadow-soft-lg"
+                >
+                  Оставить новую заметку
+                </button>
+                <button
+                  onClick={() => {
+                    setViewingNote(null);
+                    noteAudioRef.current?.pause();
+                    handleDeleteNote();
+                  }}
+                  className="w-full bg-red-500 hover:bg-red-600 text-white py-2 rounded-xl text-xs font-bold cursor-pointer transition shadow-soft"
+                >
+                  Удалить заметку
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1143,19 +1690,74 @@ export default function InboxPage() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="glass-strong rounded-3xl overflow-hidden shadow-soft-lg w-full max-w-md flex flex-col animate-pop-in">
             <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
-              <h3 className="font-bold text-base">Новое сообщение</h3>
-              <button
-                onClick={() => {
-                  setShowCreateChatModal(false);
-                  setUserSearchText("");
-                  setSearchUsersResults([]);
-                }}
-                className="hover:opacity-75"
-              >
+              <h3 className="font-bold text-base">
+                {createMode === "group" ? "Новая группа" : "Новое сообщение"}
+              </h3>
+              <button onClick={closeCreateModal} className="hover:opacity-75 cursor-pointer">
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
+
+            {/* Mode switch */}
+            <div className="flex gap-2 p-3 border-b border-zinc-200 dark:border-zinc-800">
+              <button
+                onClick={() => setCreateMode("direct")}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold cursor-pointer transition ${
+                  createMode === "direct" ? "btn-grad text-white" : "glass hover:shadow-soft"
+                }`}
+              >
+                Личный чат
+              </button>
+              <button
+                onClick={() => setCreateMode("group")}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold cursor-pointer transition flex items-center justify-center gap-2 ${
+                  createMode === "group" ? "btn-grad text-white" : "glass hover:shadow-soft"
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                Создать группу
+              </button>
+            </div>
+
+            {/* Group name + selected chips */}
+            {createMode === "group" && (
+              <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-2.5">
+                <input
+                  type="text"
+                  placeholder="Название группы (например, Avengers)"
+                  value={groupName}
+                  onChange={(e) => setGroupName(e.target.value)}
+                  className="w-full glass rounded-xl px-3 py-2.5 text-sm outline-none text-zinc-900 dark:text-white"
+                />
+                {groupMembers.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {groupMembers.map((u) => {
+                      const uid = u.id || u.userId;
+                      return (
+                        <span
+                          key={uid}
+                          className="flex items-center gap-1.5 glass rounded-full pl-1 pr-2 py-1 text-xs font-semibold"
+                        >
+                          <Avatar
+                            src={getFullImageUrl(u.avatar || u.imagePath)}
+                            name={u.userName || u.username}
+                            className="w-5 h-5"
+                          />
+                          {u.userName || u.username}
+                          <button
+                            onClick={() => toggleGroupMember(u)}
+                            className="hover:text-red-500 cursor-pointer"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Search Input */}
             <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
               <span className="text-sm font-semibold text-zinc-550 dark:text-zinc-400">Кому:</span>
@@ -1172,32 +1774,90 @@ export default function InboxPage() {
             <div className="flex-1 overflow-y-auto max-h-[300px] p-2 flex flex-col gap-1.5">
               {searchUsersResults.length === 0 ? (
                 <p className="text-zinc-450 dark:text-zinc-500 text-sm text-center py-10">
-                  {userSearchText.trim() ? "Пользователи не найдены." : "Введите имя для поиска собеседника."}
+                  {userSearchText.trim()
+                    ? "Пользователи не найдены."
+                    : createMode === "group"
+                    ? "Найдите и отметьте участников группы."
+                    : "Введите имя для поиска собеседника."}
                 </p>
               ) : (
-                searchUsersResults.map((user) => (
-                  <div
-                    key={user.id}
-                    onClick={() => handleCreateChat(user.id)}
-                    className="flex items-center justify-between p-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer transition"
-                  >
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={user.avatar || DEFAULT_AVATAR}
-                        alt={user.userName}
-                        className="w-10 h-10 rounded-full object-cover border border-zinc-200"
-                      />
-                      <div className="flex flex-col text-left">
-                        <span className="font-bold text-sm leading-none">{user.userName || user.username}</span>
-                        <span className="text-xs text-zinc-450 leading-none mt-1">{user.fullName || user.name}</span>
+                searchUsersResults
+                  .filter((user) => (user.id || user.userId) !== currentUser?.id)
+                  .map((user) => {
+                    const uid = user.id || user.userId;
+                    const checked = groupMembers.some((u) => (u.id || u.userId) === uid);
+                    return (
+                      <div
+                        key={uid}
+                        onClick={() =>
+                          createMode === "group" ? toggleGroupMember(user) : handleCreateChat(uid)
+                        }
+                        className="flex items-center justify-between p-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer transition"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar
+                            src={getFullImageUrl(user.avatar || user.imagePath)}
+                            name={user.userName}
+                            className="w-10 h-10 border border-zinc-200 dark:border-zinc-800"
+                          />
+                          <div className="flex flex-col text-left min-w-0">
+                            <span className="font-bold text-sm leading-none truncate">
+                              {user.userName || user.username}
+                            </span>
+                            <span className="text-xs text-zinc-450 leading-none mt-1 truncate">
+                              {user.fullName || user.name}
+                            </span>
+                          </div>
+                        </div>
+
+                        {createMode === "group" && (
+                          <span
+                            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ml-2 transition ${
+                              checked
+                                ? "btn-grad border-transparent text-white"
+                                : "border-zinc-300 dark:border-zinc-600"
+                            }`}
+                          >
+                            {checked && <Check className="w-3 h-3" strokeWidth={3} />}
+                          </span>
+                        )}
                       </div>
-                    </div>
-                  </div>
-                ))
+                    );
+                  })
               )}
             </div>
+
+            {/* Create group action */}
+            {createMode === "group" && (
+              <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
+                <span className="text-xs text-zinc-450 flex-1">
+                  {groupMembers.length < 2
+                    ? "Выберите минимум 2 участника."
+                    : `Выбрано: ${groupMembers.length}`}
+                </span>
+                <button
+                  onClick={handleCreateGroup}
+                  disabled={groupBusy || !groupName.trim() || groupMembers.length < 2}
+                  className="btn-grad px-5 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer flex-shrink-0"
+                >
+                  {groupBusy ? "Создание..." : "Создать"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
+      )}
+
+      {/* ----------------- CALL PANEL (outgoing / incoming / connected) ----------------- */}
+      {call && callPhase && (
+        <CallPanel
+          call={call}
+          phase={callPhase}
+          peerName={chats.find((c) => c.id === call.chatId)?.username || activeChat?.username || "Пользователь"}
+          peerAvatar={chats.find((c) => c.id === call.chatId)?.avatar || activeChat?.avatar}
+          onAccepted={() => setCallPhase("connected")}
+          onEnded={closeCall}
+        />
       )}
 
     </div>

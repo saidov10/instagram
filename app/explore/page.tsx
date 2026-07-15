@@ -9,13 +9,36 @@ import {
   Send,
   Bookmark,
   Smile,
-  Search
+  Search,
+  Hash,
+  TrendingUp
 } from "lucide-react";
 import { useSelector } from "react-redux";
 import { RootState } from "../store/store";
 import { api, getFullImageUrl } from "../services/api";
+import Avatar from "../components/Avatar";
+import HashtagText from "../components/HashtagText";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
+
+interface TrendingTag {
+  tag: string;
+  postCount: number;
+}
+
+/** The endpoint may hand back bare strings or objects — accept either. */
+const mapTrendingTag = (raw: any): TrendingTag | null => {
+  if (typeof raw === "string") {
+    const tag = raw.replace(/^#/, "");
+    return tag ? { tag, postCount: 0 } : null;
+  }
+  const tag = (raw?.hashtag || raw?.tag || raw?.name || "").replace(/^#/, "");
+  if (!tag) return null;
+  return {
+    tag,
+    postCount: raw?.postCount ?? raw?.count ?? raw?.postsCount ?? 0,
+  };
+};
 
 interface ExploreItem {
   id: number;
@@ -41,6 +64,13 @@ export default function ExplorePage() {
   const [newComment, setNewComment] = useState("");
   const [items, setItems] = useState<ExploreItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [trending, setTrending] = useState<TrendingTag[]>([]);
+
+  useEffect(() => {
+    api.post.getTrendingHashtags()
+      .then((list) => setTrending((list || []).map(mapTrendingTag).filter(Boolean) as TrendingTag[]))
+      .catch(() => setTrending([]));
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -60,7 +90,7 @@ export default function ExplorePage() {
             commentsCount: p.commentCount || 0,
             spanClass: SPAN_PATTERN.includes(idx % 10) ? "md:row-span-2 md:col-span-2" : "",
             username: p.userName || p.username || "user",
-            avatar: getFullImageUrl(p.userAvatar || p.userImage) || DEFAULT_AVATAR,
+            avatar: getFullImageUrl(p.userAvatar || p.userImage),
             caption: p.content || p.title || "",
             isLiked: myId ? likeArr.includes(myId) : false,
             comments: [],
@@ -116,6 +146,34 @@ export default function ExplorePage() {
           className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg pl-10 pr-4 py-2 text-sm"
         />
       </div>
+
+      {/* Trending hashtags */}
+      {trending.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <h2 className="text-sm font-bold flex items-center gap-2">
+            <TrendingUp className="w-4 h-4" /> Популярные хэштеги
+          </h2>
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+            {trending.map((t) => (
+              <Link
+                key={t.tag}
+                href={`/explore/tags/${encodeURIComponent(t.tag)}`}
+                className="glass rounded-full pl-2.5 pr-4 py-2 flex items-center gap-2 flex-shrink-0 hover:shadow-soft transition lift"
+              >
+                <span className="w-7 h-7 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                  <Hash className="w-3.5 h-3.5" />
+                </span>
+                <span className="flex flex-col leading-tight">
+                  <span className="text-sm font-semibold">#{t.tag}</span>
+                  {t.postCount > 0 && (
+                    <span className="text-[10px] text-zinc-500">{t.postCount} публикаций</span>
+                  )}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="grid grid-cols-3 gap-1 md:gap-2 auto-rows-[120px] sm:auto-rows-[180px] md:auto-rows-[290px]">
@@ -193,7 +251,7 @@ export default function ExplorePage() {
             <div className="w-full md:w-[400px] border-t md:border-t-0 md:border-l border-zinc-200 dark:border-zinc-800 flex flex-col bg-white dark:bg-zinc-900 h-[45vh] md:h-auto">
               <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
                 <Link href={selectedItem.userId ? `/u/${selectedItem.userId}` : "#"} className="flex items-center gap-3">
-                  <img src={selectedItem.avatar} alt={selectedItem.username} className="w-8 h-8 rounded-full object-cover" />
+                  <Avatar src={selectedItem.avatar} name={selectedItem.username} className="w-8 h-8" />
                   <span className="font-semibold text-sm hover:underline cursor-pointer">{selectedItem.username}</span>
                 </Link>
               </div>
@@ -201,10 +259,13 @@ export default function ExplorePage() {
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
                 {selectedItem.caption && (
                   <div className="flex gap-3">
-                    <img src={selectedItem.avatar} alt={selectedItem.username} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+                    <Avatar src={selectedItem.avatar} name={selectedItem.username} className="w-8 h-8 flex-shrink-0" />
                     <div className="text-sm">
                       <span className="font-bold mr-2">{selectedItem.username}</span>
-                      <span className="text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap">{selectedItem.caption}</span>
+                      <HashtagText
+                        text={selectedItem.caption}
+                        className="text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap"
+                      />
                     </div>
                   </div>
                 )}
