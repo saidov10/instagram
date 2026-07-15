@@ -441,6 +441,14 @@ export default function InboxPage() {
     setCallBusy(true);
     setCallError(null);
     try {
+      // The backend doesn't reject a second call on top of an active one, so check ourselves
+      // rather than stranding both sides in overlapping call sessions.
+      const existing = mapCall(await api.chat.getActiveCall(activeChat.id).catch(() => null));
+      if (existing && (existing.status === "RINGING" || existing.status === "ACCEPTED")) {
+        setCallError("В этом чате уже есть активный звонок.");
+        return;
+      }
+
       const raw = await api.chat.initiateCall({
         chatId: activeChat.id,
         recipientId: activeChat.otherUserId,
@@ -458,6 +466,10 @@ export default function InboxPage() {
         );
         return;
       }
+
+      // We deliberately do NOT block on a missing rtcToken: it's valid (null) in Agora Testing
+      // mode. The token is forwarded as-is to client.join in CallPanel, which surfaces a clear
+      // "temporarily unavailable" message only if the join actually fails for a token reason.
 
       handledCallIds.current.add(session.callId);
       setCall(session);
@@ -1857,7 +1869,12 @@ export default function InboxPage() {
           phase={callPhase}
           peerName={chats.find((c) => c.id === call.chatId)?.username || activeChat?.username || "Пользователь"}
           peerAvatar={chats.find((c) => c.id === call.chatId)?.avatar || activeChat?.avatar}
-          onAccepted={() => setCallPhase("connected")}
+          onAccepted={(session) => {
+            // Merge in the fresh session from the ACCEPTED response — it carries the rtcToken
+            // actually usable for joining, which the RINGING snapshot may have lacked.
+            setCall((prev) => (prev ? { ...prev, ...session } : session));
+            setCallPhase("connected");
+          }}
           onEnded={closeCall}
         />
       )}

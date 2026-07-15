@@ -81,6 +81,47 @@ async function loadAgoraRTC(retries = 2): Promise<any> {
   }
 }
 
+/** Rejects if `promise` doesn't settle within `ms`, so a hung join surfaces an error. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`__timeout__:${label}`)), ms)
+    ),
+  ]);
+}
+
+/**
+ * Turns raw Agora/getUserMedia errors into a message that says what to actually fix.
+ * `hadToken` says whether the backend actually gave us an rtcToken: a token failure with no
+ * token means the Agora project is in Secure mode but the backend has no App Certificate, so
+ * we surface a "temporarily unavailable" message (a backend/env issue, not the user's fault).
+ */
+function describeCallError(err: any, hadToken: boolean): string {
+  const name = err?.name || "";
+  const code = err?.code || "";
+  const msg = String(err?.message || "");
+
+  const isTokenError = /token|dynamic key|invalid vendor|CAN_NOT_GET|invalid_?token|-7|110/i.test(msg + code);
+
+  if (msg.startsWith("__timeout__")) {
+    return "Не удалось подключиться (истекло время). Проверьте доступ к микрофону и режим проекта Agora.";
+  }
+  if (name === "NotAllowedError" || code === "PERMISSION_DENIED" || /permission denied/i.test(msg)) {
+    return "Доступ к микрофону/камере запрещён. Разрешите его в браузере (значок 🔒 в адресной строке) и повторите.";
+  }
+  if (name === "NotFoundError" || code === "DEVICE_NOT_FOUND") {
+    return "Микрофон или камера не найдены на этом устройстве.";
+  }
+  if (isTokenError && !hadToken) {
+    return "Звонки временно недоступны (сервер не выдал токен Agora). Попробуйте позже.";
+  }
+  if (isTokenError) {
+    return "Ошибка токена Agora. Проверьте: режим проекта (Testing mode не требует токен) или что бэкенд генерирует rtcToken с тем же App ID и App Certificate.";
+  }
+  return msg || "Не удалось подключиться к звонку.";
+}
+
 type Phase = "outgoing" | "incoming" | "connected";
 
 interface CallPanelProps {
@@ -88,7 +129,7 @@ interface CallPanelProps {
   phase: Phase;
   peerName: string;
   peerAvatar?: string;
-  onAccepted: () => void;
+  onAccepted: (session: CallSession) => void;
   onEnded: () => void;
 }
 
@@ -102,6 +143,10 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
   const remoteRef = useRef<HTMLDivElement | null>(null);
   const localRef = useRef<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
+  // Latest onEnded, so the Agora event handlers (set up once inside the join effect) can end
+  // the call without capturing a stale prop.
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
 
   const [joining, setJoining] = useState(false);
   const [joined, setJoined] = useState(false);
@@ -169,6 +214,10 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
         setError("Бэкенд не вернул channelName для звонка.");
         return;
       }
+      // Note: we deliberately do NOT block on a missing rtcToken. Agora accepts a null token in
+      // Testing mode; a real "007…" token is only required in Secure mode. We forward exactly
+      // what the backend returned and let the join succeed (Testing mode) or fail (Secure mode
+      // without a certificate) — the catch below turns a token failure into a clear message.
 
       setJoining(true);
       setError(null);
@@ -193,13 +242,35 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
         });
 
         client.on("user-unpublished", () => setRemoteJoined(false));
-        client.on("user-left", () => setRemoteJoined(false));
+        // In a 1-on-1 call, the remote leaving the channel means the peer hung up — tear down
+        // and close our side too instead of sitting on "Ожидание собеседника…".
+        client.on("user-left", () => {
+          setRemoteJoined(false);
+          leaveAgora();
+          onEndedRef.current();
+        });
 
-        await client.join(appId, call.channelName, call.rtcToken || null, call.uid ?? null);
+        // Always join with uid 0: the backend builds a uid-0 wildcard token that's valid for
+        // whatever uid Agora assigns each client, so both parties use 0. `rtcToken || null`
+        // forwards the backend's token as-is, normalizing an empty/absent token to null
+        // (which Agora treats as "no token", the Testing-mode path).
+        //
+        // Joining the RTC channel can hang if the App ID/token/network is wrong —
+        // time it out so the user sees a real error instead of a frozen "Подключение…".
+        await withTimeout(
+          client.join(appId, call.channelName, call.rtcToken || null, 0),
+          15000,
+          "join"
+        );
         if (cancelled) return;
 
+        // Acquiring mic/camera waits on the browser permission prompt; time it out too.
         if (call.type === "VIDEO") {
-          const [mic, cam] = await AgoraRTC.createMicrophoneAndCameraTracks();
+          const [mic, cam] = await withTimeout<[IMicrophoneAudioTrack, ICameraVideoTrack]>(
+            AgoraRTC.createMicrophoneAndCameraTracks(),
+            20000,
+            "media"
+          );
           if (cancelled) {
             mic.close();
             cam.close();
@@ -209,7 +280,11 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
           if (localRef.current) cam.play(localRef.current);
           await client.publish([mic, cam]);
         } else {
-          const mic = await AgoraRTC.createMicrophoneAudioTrack();
+          const mic = await withTimeout<IMicrophoneAudioTrack>(
+            AgoraRTC.createMicrophoneAudioTrack(),
+            20000,
+            "media"
+          );
           if (cancelled) {
             mic.close();
             return;
@@ -221,7 +296,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
         if (!cancelled) setJoined(true);
       } catch (err: any) {
         console.error("Agora join failed:", err);
-        if (!cancelled) setError(err?.message || "Не удалось подключиться к звонку.");
+        if (!cancelled) setError(describeCallError(err, !!call.rtcToken));
       } finally {
         if (!cancelled) setJoining(false);
       }
@@ -246,8 +321,10 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
     if (busy) return;
     setBusy(true);
     try {
-      await api.chat.respondToCall({ callId: call.callId, status: "ACCEPTED" });
-      onAccepted();
+      const raw = await api.chat.respondToCall({ callId: call.callId, status: "ACCEPTED" });
+      // The ACCEPTED response carries a freshly issued rtcToken — the RINGING snapshot we
+      // joined on may have had a null/stale one, so this is the session we must join with.
+      onAccepted(mapCall(raw) ?? call);
     } catch (err) {
       console.error("Failed to accept call:", err);
       setError("Не удалось принять звонок.");
