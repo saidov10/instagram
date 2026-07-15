@@ -81,6 +81,37 @@ async function loadAgoraRTC(retries = 2): Promise<any> {
   }
 }
 
+/** Rejects if `promise` doesn't settle within `ms`, so a hung join surfaces an error. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`__timeout__:${label}`)), ms)
+    ),
+  ]);
+}
+
+/** Turns raw Agora/getUserMedia errors into a message that says what to actually fix. */
+function describeCallError(err: any): string {
+  const name = err?.name || "";
+  const code = err?.code || "";
+  const msg = String(err?.message || "");
+
+  if (msg.startsWith("__timeout__")) {
+    return "Не удалось подключиться (истекло время). Проверьте доступ к микрофону и режим проекта Agora.";
+  }
+  if (name === "NotAllowedError" || code === "PERMISSION_DENIED" || /permission denied/i.test(msg)) {
+    return "Доступ к микрофону/камере запрещён. Разрешите его в браузере (значок 🔒 в адресной строке) и повторите.";
+  }
+  if (name === "NotFoundError" || code === "DEVICE_NOT_FOUND") {
+    return "Микрофон или камера не найдены на этом устройстве.";
+  }
+  if (/token|dynamic key|invalid vendor|CAN_NOT_GET|invalid_?token|-7|110/i.test(msg + code)) {
+    return "Ошибка токена Agora. Проверьте: режим проекта (Testing mode не требует токен) или что бэкенд генерирует rtcToken с тем же App ID и App Certificate.";
+  }
+  return msg || "Не удалось подключиться к звонку.";
+}
+
 type Phase = "outgoing" | "incoming" | "connected";
 
 interface CallPanelProps {
@@ -195,11 +226,22 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
         client.on("user-unpublished", () => setRemoteJoined(false));
         client.on("user-left", () => setRemoteJoined(false));
 
-        await client.join(appId, call.channelName, call.rtcToken || null, call.uid ?? null);
+        // Joining the RTC channel can hang if the App ID/token/network is wrong —
+        // time it out so the user sees a real error instead of a frozen "Подключение…".
+        await withTimeout(
+          client.join(appId, call.channelName, call.rtcToken || null, call.uid ?? null),
+          15000,
+          "join"
+        );
         if (cancelled) return;
 
+        // Acquiring mic/camera waits on the browser permission prompt; time it out too.
         if (call.type === "VIDEO") {
-          const [mic, cam] = await AgoraRTC.createMicrophoneAndCameraTracks();
+          const [mic, cam] = await withTimeout<[IMicrophoneAudioTrack, ICameraVideoTrack]>(
+            AgoraRTC.createMicrophoneAndCameraTracks(),
+            20000,
+            "media"
+          );
           if (cancelled) {
             mic.close();
             cam.close();
@@ -209,7 +251,11 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
           if (localRef.current) cam.play(localRef.current);
           await client.publish([mic, cam]);
         } else {
-          const mic = await AgoraRTC.createMicrophoneAudioTrack();
+          const mic = await withTimeout<IMicrophoneAudioTrack>(
+            AgoraRTC.createMicrophoneAudioTrack(),
+            20000,
+            "media"
+          );
           if (cancelled) {
             mic.close();
             return;
@@ -221,7 +267,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
         if (!cancelled) setJoined(true);
       } catch (err: any) {
         console.error("Agora join failed:", err);
-        if (!cancelled) setError(err?.message || "Не удалось подключиться к звонку.");
+        if (!cancelled) setError(describeCallError(err));
       } finally {
         if (!cancelled) setJoining(false);
       }

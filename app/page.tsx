@@ -571,54 +571,54 @@ export default function HomeFeed() {
         </div>
       </div>
 
-      {/* Suggestions Sidebar */}
+      {/* Suggestions Sidebar — sticky so it stays put while the feed scrolls */}
       {currentUser && (
-        <aside className="hidden lg:flex flex-col w-[320px] pt-4 select-none bg-white dark:bg-black text-black dark:text-white">
-          {/* User Card */}
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-4">
-              <Avatar src={getFullImageUrl(currentUser.avatar)} name={currentUser.username} className="w-14 h-14 border border-zinc-200 dark:border-zinc-800" />
-              <div className="flex flex-col">
-                <span className="font-semibold text-sm hover:underline cursor-pointer leading-tight">
-                  {currentUser.username}
-                </span>
-                <span className="text-zinc-450 text-xs font-normal leading-tight mt-0.5">{currentUser.name}</span>
-              </div>
+        <aside className="hidden lg:flex flex-col w-[320px] shrink-0 self-start sticky top-8 pt-4 select-none text-black dark:text-white">
+          {/* Current user card */}
+          <div className="flex items-center gap-3 mb-5">
+            <Link href="/profile" className="shrink-0">
+              <Avatar src={getFullImageUrl(currentUser.avatar)} name={currentUser.username} className="w-11 h-11" />
+            </Link>
+            <div className="flex flex-col min-w-0 flex-1">
+              <Link href="/profile" className="font-semibold text-sm leading-tight truncate hover:opacity-60 transition-opacity">
+                {currentUser.username}
+              </Link>
+              <span className="text-zinc-500 dark:text-zinc-400 text-sm leading-tight truncate">{currentUser.name}</span>
             </div>
-            <button className="text-blue-500 font-semibold text-[12px] hover:text-blue-400 cursor-pointer">
+            <button className="text-blue-500 font-semibold text-xs hover:text-blue-300 transition-colors cursor-pointer shrink-0">
               Переключить
             </button>
           </div>
 
-          {/* Suggestions Title */}
-          <div className="flex justify-between items-center mb-4">
-            <span className="text-zinc-400 font-bold text-sm">Рекомендации для вас</span>
-            <Link href="/explore/people" className="font-bold text-[12px] hover:text-zinc-650 dark:hover:text-zinc-300">
+          {/* Suggestions header */}
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-zinc-500 dark:text-zinc-400 font-semibold text-sm">Рекомендации для вас</span>
+            <Link href="/explore/people" className="font-semibold text-xs hover:opacity-60 transition-opacity">
               Все
             </Link>
           </div>
 
           {/* Suggestion list */}
-          <div className="flex flex-col gap-5 mb-8">
+          <div className="flex flex-col mb-4">
             {suggestions.map((sug) => (
-              <div key={sug.id} className="flex items-center justify-between">
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <Avatar src={sug.avatar} name={sug.username} className="w-11 h-11 border border-zinc-200 dark:border-zinc-800" />
-                  <div className="flex flex-col min-w-0">
-                    <span className="font-semibold text-sm hover:underline cursor-pointer truncate leading-tight">
-                      {sug.username}
-                    </span>
-                    <span className="text-zinc-450 dark:text-zinc-500 text-xs truncate leading-tight mt-0.5">
-                      {sug.subtitle}
-                    </span>
-                  </div>
+              <div key={sug.id} className="flex items-center gap-3 py-2 -mx-2 px-2 rounded-lg hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors">
+                <Link href={sug.userId ? `/u/${sug.userId}` : "#"} className="shrink-0">
+                  <Avatar src={sug.avatar} name={sug.username} className="w-11 h-11" />
+                </Link>
+                <div className="flex flex-col min-w-0 flex-1">
+                  <Link href={sug.userId ? `/u/${sug.userId}` : "#"} className="font-semibold text-sm hover:opacity-60 transition-opacity truncate leading-tight">
+                    {sug.username}
+                  </Link>
+                  <span className="text-zinc-500 dark:text-zinc-400 text-xs truncate leading-tight mt-0.5">
+                    {sug.subtitle}
+                  </span>
                 </div>
                 <button
                   onClick={() => handleFollowSuggestion(sug.id)}
-                  className={`font-semibold text-xs transition duration-150 cursor-pointer flex-shrink-0 ml-2 ${
+                  className={`font-semibold text-xs transition-colors cursor-pointer flex-shrink-0 ml-2 ${
                     sug.followed
-                      ? "text-zinc-400 hover:text-white"
-                      : "text-blue-500 hover:text-blue-400"
+                      ? "text-zinc-500 dark:text-zinc-400 hover:text-black dark:hover:text-white"
+                      : "text-blue-500 hover:text-blue-300"
                   }`}
                 >
                   {sug.followed ? "Подписан" : "Подписаться"}
@@ -628,7 +628,7 @@ export default function HomeFeed() {
           </div>
 
           {/* Footer links */}
-          <footer className="text-zinc-450 text-[11px] leading-snug flex flex-col gap-4">
+          <footer className="text-zinc-400 dark:text-zinc-500 text-[11px] leading-snug flex flex-col gap-3.5 mt-2">
             <div className="flex flex-wrap gap-x-1 gap-y-0.5">
               {["About", "Help", "Press", "API", "Jobs", "Privacy", "Terms", "Locations", "Language", "Meta Verified"].map((link, idx) => (
                 <React.Fragment key={link}>
@@ -637,7 +637,7 @@ export default function HomeFeed() {
                 </React.Fragment>
               ))}
             </div>
-            <span className="uppercase text-[10px] tracking-wider text-zinc-400">© 2026 INSTAGRAM FROM META</span>
+            <span className="uppercase text-[10px] tracking-wider">© 2026 INSTAGRAM FROM META</span>
           </footer>
         </aside>
       )}
