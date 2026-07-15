@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Search, X, Play, Pause, Music } from "lucide-react";
 import { api, getFullImageUrl } from "../services/api";
+import SmartImage from "./SmartImage";
 
 /** A track as the rest of the app consumes it (notes, reels). */
 export interface MusicTrack {
@@ -211,7 +212,7 @@ export default function MusicPicker({ onSelect, onClose }: MusicPickerProps) {
                   {/* Cover + play overlay */}
                   <div className="relative w-11 h-11 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-200 dark:bg-zinc-800">
                     {track.coverUrl ? (
-                      <img src={track.coverUrl} alt="" className="w-full h-full object-cover" />
+                      <SmartImage src={track.coverUrl} alt="" fill sizes="44px" unoptimized className="object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center">
                         <Music className="w-5 h-5 text-zinc-500" />

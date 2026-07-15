@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Plus, X, ChevronLeft, ChevronRight, Trash2, Pencil, Check } from "lucide-react";
 import { api, getFullImageUrl } from "../services/api";
+import SmartImage from "./SmartImage";
 
 export interface Highlight {
   id: string;
@@ -188,7 +189,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
             >
               <div className="w-16 h-16 rounded-full p-[2px] border border-zinc-300 dark:border-zinc-700 group-hover:scale-105 transition overflow-hidden">
                 {h.cover ? (
-                  <img src={h.cover} alt={h.title} className="w-full h-full rounded-full object-cover" />
+                  <SmartImage src={h.cover} alt={h.title} width={128} height={128} sizes="64px" className="w-full h-full rounded-full object-cover" />
                 ) : (
                   <div className="w-full h-full rounded-full bg-zinc-200 dark:bg-zinc-800" />
                 )}
@@ -256,7 +257,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
               <span className="text-white font-semibold text-sm drop-shadow">{viewing.highlight.title}</span>
             </div>
 
-            <img src={viewing.stories[viewing.index].image} alt="Highlight" className="w-full h-full object-contain" />
+            <SmartImage src={viewing.stories[viewing.index].image} alt="Highlight" fill sizes="(max-width: 768px) 100vw, 448px" className="object-contain" />
           </div>
 
           <button
@@ -330,7 +331,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
                           selected ? "ring-2 ring-[var(--accent-2)] scale-95" : "hover:opacity-80"
                         }`}
                       >
-                        <img src={s.image} alt="" className="w-full h-full object-cover" />
+                        <SmartImage src={s.image} alt="" fill sizes="150px" className="object-cover" />
                         {selected && (
                           <span className="absolute top-1 right-1 w-5 h-5 rounded-full btn-grad flex items-center justify-center">
                             <Check className="w-3 h-3 text-white" />

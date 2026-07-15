@@ -11,14 +11,36 @@ if (rawBaseUrl.includes("/swagger")) {
 }
 export const BASE_URL = rawBaseUrl;
 
+/**
+ * Resolves any avatar / post / story / reel / chat media reference to a usable URL,
+ * regardless of what shape the backend hands us:
+ *   - falsy                      -> "" (callers render their own placeholder / fallback)
+ *   - absolute (http/https)      -> returned unchanged. This is what prevents
+ *                                   double-prefixing now that the API returns full
+ *                                   Cloudinary URLs (e.g. https://res.cloudinary.com/...).
+ *   - local object/data URL      -> returned unchanged (blob:/data: upload previews)
+ *   - legacy relative "/uploads" -> prefixed with the backend base URL
+ */
 export function getFullImageUrl(path: string | null | undefined): string {
   if (!path) return "";
-  if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) {
-    return path;
+  const trimmed = path.trim();
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("data:") ||
+    trimmed.startsWith("blob:")
+  ) {
+    return trimmed;
   }
-  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const cleanPath = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   return `${BASE_URL}${cleanPath}`;
 }
+
+/**
+ * Canonical name for the media URL resolver. `getFullImageUrl` is the original name
+ * kept for its existing call sites; both are the same function.
+ */
+export const resolveMediaUrl = getFullImageUrl;
 
 export class ApiError extends Error {
   status: number;

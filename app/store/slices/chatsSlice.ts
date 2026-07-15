@@ -202,7 +202,7 @@ export const sendMessage = createAsyncThunk(
           id: message.id || message.messageId || nextLocalMessageId(),
           sender: "me" as const,
           text: messageText || "",
-          image: voice ? null : (message.filePath || message.imagePath || null),
+          image: voice ? undefined : (getFullImageUrl(message.filePath || message.imagePath) || undefined),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isVoice: !!voice,
           voiceUrl: voice ? (getFullImageUrl(message.filePath || message.imagePath) || (file ? URL.createObjectURL(file) : undefined)) : undefined,

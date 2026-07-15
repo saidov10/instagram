@@ -8,6 +8,7 @@ import { RootState } from "../../store/store";
 import { api, getFullImageUrl, ApiError } from "../../services/api";
 import { ProfileSkeleton } from "../../components/SkeletonLoader";
 import Avatar from "../../components/Avatar";
+import SmartImage from "../../components/SmartImage";
 import Highlights from "../../components/Highlights";
 import ReportModal, { ReportTarget } from "../../components/ReportModal";
 
@@ -372,7 +373,7 @@ export default function UserProfilePage() {
                 {post.image.toLowerCase().match(/\.(mp4|mov|webm)$/) ? (
                   <video src={post.image} className="w-full h-full object-cover" muted playsInline />
                 ) : (
-                  <img src={post.image} alt="Post" className="w-full h-full object-cover transition duration-300 group-hover:scale-105" />
+                  <SmartImage src={post.image} alt="Post" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-105" />
                 )}
                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition duration-200 flex items-center justify-center gap-6 text-white text-base font-bold">
                   <div className="flex items-center gap-2"><Heart className="w-6 h-6 fill-white" />{post.likes}</div>
@@ -394,6 +395,7 @@ export default function UserProfilePage() {
             {selectedPost.image.toLowerCase().match(/\.(mp4|mov|webm)$/) ? (
               <video src={selectedPost.image} className="max-h-[85vh] w-auto rounded-xl" controls autoPlay loop />
             ) : (
+              // eslint-disable-next-line @next/next/no-img-element -- full-screen lightbox keeps the image's natural aspect ratio, which next/image can't infer for remote sources
               <img src={selectedPost.image} alt="Post" className="max-h-[85vh] w-auto object-contain rounded-xl" />
             )}
           </div>

@@ -6,6 +6,7 @@ import { useSelector } from "react-redux";
 import { Heart, MessageCircle, UserPlus, UserCheck, X, Bell, CheckCheck } from "lucide-react";
 import { RootState } from "../store/store";
 import { api, getFullImageUrl } from "../services/api";
+import SmartImage from "./SmartImage";
 import Avatar from "./Avatar";
 
 type NotificationType = "LIKE" | "COMMENT" | "FOLLOW" | "FOLLOW_REQUEST" | "FOLLOW_ACCEPT";
@@ -310,7 +311,7 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
                       </Link>
 
                       {n.postImage && (
-                        <img src={n.postImage} alt="post" className="w-11 h-11 rounded-lg object-cover shadow-soft flex-shrink-0" />
+                        <SmartImage src={n.postImage} alt="post" width={88} height={88} sizes="44px" className="w-11 h-11 rounded-lg object-cover shadow-soft flex-shrink-0" />
                       )}
 
                       <button

@@ -13,6 +13,7 @@ import { getStoredToken, api, getFullImageUrl } from "../services/api";
 import { ACTIVITY_PING_INTERVAL_MS } from "../lib/presence";
 import NotificationsPanel from "./NotificationsPanel";
 import Avatar from "./Avatar";
+import SmartImage from "./SmartImage";
 import MusicPicker, { MusicTrack } from "./MusicPicker";
 import {
   Home,
@@ -851,9 +852,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                       className="w-full h-full max-h-[50vh] md:max-h-[70vh] object-contain"
                     />
                   ) : (
-                    <img
+                    <SmartImage
                       src={selectedImage}
                       alt="Preview"
+                      sizes="(max-width: 768px) 100vw, 600px"
                       className="w-full h-full max-h-[50vh] md:max-h-[70vh] object-contain"
                     />
                   )
@@ -1004,7 +1006,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                         <div className="flex items-center gap-3 glass rounded-2xl p-2">
                           <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
                             {reelTrack.coverUrl ? (
-                              <img src={reelTrack.coverUrl} alt="" className="w-full h-full object-cover" />
+                              <SmartImage src={reelTrack.coverUrl} alt="" width={80} height={80} sizes="40px" unoptimized className="w-full h-full object-cover" />
                             ) : (
                               <Music className="w-4 h-4 text-zinc-500" />
                             )}
@@ -1079,7 +1081,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                             <div className="flex items-center gap-3 glass rounded-2xl p-2">
                               <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
                                 {reelTrack.coverUrl ? (
-                                  <img src={reelTrack.coverUrl} alt="" className="w-full h-full object-cover" />
+                                  <SmartImage src={reelTrack.coverUrl} alt="" width={80} height={80} sizes="40px" unoptimized className="w-full h-full object-cover" />
                                 ) : (
                                   <Music className="w-4 h-4 text-zinc-500" />
                                 )}

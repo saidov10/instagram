@@ -40,6 +40,7 @@ import { api, getFullImageUrl } from "./services/api";
 import { PostSkeleton, StoriesSkeleton } from "./components/SkeletonLoader";
 import { useApp } from "./context/AppContext";
 import Avatar from "./components/Avatar";
+import SmartImage from "./components/SmartImage";
 import ReportModal, { ReportTarget } from "./components/ReportModal";
 import HashtagText from "./components/HashtagText";
 import StoryViewer from "./components/StoryViewer";
@@ -417,10 +418,12 @@ export default function HomeFeed() {
                       playsInline
                     />
                   ) : (
-                    <img
+                    <SmartImage
                       src={post.image}
                       alt="Post content"
-                      className="w-full h-full object-cover"
+                      fill
+                      sizes="(max-width: 768px) 100vw, 470px"
+                      className="object-cover"
                     />
                   )}
 

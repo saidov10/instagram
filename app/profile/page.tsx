@@ -34,6 +34,7 @@ import { ProfileSkeleton } from "../components/SkeletonLoader";
 import { useApp } from "../context/AppContext";
 import { Bookmark as BookmarkIcon } from "lucide-react";
 import Avatar from "../components/Avatar";
+import SmartImage from "../components/SmartImage";
 import Highlights from "../components/Highlights";
 
 export default function ProfilePage() {
@@ -274,7 +275,7 @@ export default function ProfilePage() {
                     onClick={() => setSelectedPostId(post.id)}
                     className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
                   >
-                    <img src={post.image} alt="Grid thumbnail" className="w-full h-full object-cover transition duration-300 group-hover:scale-103" />
+                    <SmartImage src={post.image} alt="Grid thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
                     {/* Hover Overlay */}
                     <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition duration-200 flex items-center justify-center gap-6 text-white text-base font-bold">
                       <div className="flex items-center gap-2">
@@ -315,7 +316,7 @@ export default function ProfilePage() {
                   {post.image.toLowerCase().match(/\.(mp4|mov|webm)$/) ? (
                     <video src={post.image} className="w-full h-full object-cover" muted playsInline />
                   ) : (
-                    <img src={post.image} alt="Saved" className="w-full h-full object-cover transition duration-300 group-hover:scale-105" />
+                    <SmartImage src={post.image} alt="Saved" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-105" />
                   )}
                   <div className="absolute top-2 right-2 text-white drop-shadow">
                     <BookmarkIcon className="w-5 h-5 fill-white" />
@@ -460,7 +461,7 @@ export default function ProfilePage() {
 
             {/* Left Column: Image */}
             <div className="flex-1 bg-zinc-950 flex items-center justify-center max-h-[45vh] md:max-h-full">
-              <img src={selectedPost.image} alt="Detail" className="w-full h-full object-contain aspect-square" />
+              <SmartImage src={selectedPost.image} alt="Detail" sizes="(max-width: 768px) 100vw, 640px" className="w-full h-full object-contain aspect-square" />
             </div>
 
             {/* Right Column: Feed and interactions */}

@@ -8,6 +8,7 @@ import { AppDispatch } from "../store/store";
 import { likeStory, answerSticker, deleteStory, Story } from "../store/slices/storiesSlice";
 import { api, getFullImageUrl } from "../services/api";
 import Avatar from "./Avatar";
+import SmartImage from "./SmartImage";
 
 /** Quick reactions offered above the reply box. */
 const QUICK_REACTIONS = ["😂", "😮", "😍", "😢", "👏", "🔥"];
@@ -379,7 +380,7 @@ export default function StoryViewer({
         </div>
 
         {/* Media */}
-        <img src={story.image} alt="Story" className="w-full h-full object-contain" />
+        <SmartImage src={story.image} alt="Story" fill sizes="(max-width: 768px) 100vw, 448px" className="object-contain" />
         {story.musicTrack && (
           <audio
             ref={storyAudioRef}

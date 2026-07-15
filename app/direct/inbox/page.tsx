@@ -46,6 +46,7 @@ import {
 import { api, getFullImageUrl } from "../../services/api";
 import { ChatsListSkeleton } from "../../components/SkeletonLoader";
 import Avatar from "../../components/Avatar";
+import SmartImage from "../../components/SmartImage";
 import CallPanel, { CallSession, CallType, mapCall, ENV_APP_ID } from "../../components/CallPanel";
 import { isOnline, formatLastSeen } from "../../lib/presence";
 import MusicPicker, { MusicTrack } from "../../components/MusicPicker";
@@ -1190,6 +1191,7 @@ export default function InboxPage() {
                           <VoiceMessageBubble url={msg.voiceUrl} durationMs={msg.durationMs || 0} isMe={isMe} />
                         ) : msg.image ? (
                           <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-soft">
+                            {/* eslint-disable-next-line @next/next/no-img-element -- chat attachment keeps the sender's natural aspect ratio, unknown for remote images */}
                             <img src={msg.image} alt="Attachment" className="max-w-full h-auto object-cover max-h-60" />
                           </div>
                         ) : (
@@ -1553,7 +1555,7 @@ export default function InboxPage() {
                   <div className="flex items-center gap-3 glass rounded-2xl p-2">
                     <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
                       {newNoteTrack.coverUrl ? (
-                        <img src={newNoteTrack.coverUrl} alt="" className="w-full h-full object-cover" />
+                        <SmartImage src={newNoteTrack.coverUrl} alt="" width={80} height={80} sizes="40px" unoptimized className="w-full h-full object-cover" />
                       ) : (
                         <Music className="w-4 h-4 text-zinc-500" />
                       )}

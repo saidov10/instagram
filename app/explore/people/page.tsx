@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { UserCheck, UserPlus, ArrowLeft } from "lucide-react";
+import SmartImage from "../../components/SmartImage";
 
 interface Suggestion {
   id: number;
@@ -101,9 +102,12 @@ export default function SuggestionsPage() {
               className="flex items-center justify-between p-4 border-b border-zinc-100 dark:border-zinc-900/60 last:border-b-0"
             >
               <div className="flex items-center gap-4.5 min-w-0 flex-1">
-                <img
+                <SmartImage
                   src={sug.avatar}
                   alt={sug.username}
+                  width={96}
+                  height={96}
+                  sizes="48px"
                   className="w-12 h-12 rounded-full object-cover border border-zinc-200 dark:border-zinc-800 flex-shrink-0"
                 />
                 <div className="flex flex-col min-w-0 flex-1">

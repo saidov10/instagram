@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Hash, Heart, MessageCircle, X, ChevronLeft } from "lucide-react";
 import { api, getFullImageUrl } from "../../../services/api";
 import Avatar from "../../../components/Avatar";
+import SmartImage from "../../../components/SmartImage";
 import HashtagText from "../../../components/HashtagText";
 
 interface TagPost {
@@ -118,10 +119,12 @@ export default function HashtagPage() {
               {post.isVideo ? (
                 <video src={post.image} className="w-full h-full object-cover" muted playsInline />
               ) : (
-                <img
+                <SmartImage
                   src={post.image}
                   alt={`#${tag}`}
-                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  fill
+                  sizes="(max-width: 768px) 33vw, 300px"
+                  className="object-cover transition-transform duration-500 group-hover:scale-105"
                 />
               )}
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-6 text-white font-semibold transition duration-200">
@@ -160,6 +163,7 @@ export default function HashtagPage() {
               {selected.isVideo ? (
                 <video src={selected.image} className="w-full max-h-[40vh] md:max-h-[75vh] object-contain" controls autoPlay loop />
               ) : (
+                // eslint-disable-next-line @next/next/no-img-element -- lightbox preserves the remote image's natural aspect ratio
                 <img src={selected.image} alt="" className="w-full max-h-[40vh] md:max-h-[75vh] object-contain" />
               )}
             </div>

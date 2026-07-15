@@ -17,6 +17,7 @@ import { useSelector } from "react-redux";
 import { RootState } from "../store/store";
 import { api, getFullImageUrl } from "../services/api";
 import Avatar from "../components/Avatar";
+import SmartImage from "../components/SmartImage";
 import HashtagText from "../components/HashtagText";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
@@ -200,10 +201,12 @@ export default function ExplorePage() {
               {item.isVideo ? (
                 <video src={item.image} className="w-full h-full object-cover" muted playsInline />
               ) : (
-                <img
+                <SmartImage
                   src={item.image}
                   alt="Explore post"
-                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  fill
+                  sizes="(max-width: 768px) 33vw, 300px"
+                  className="object-cover transition-transform duration-500 group-hover:scale-105"
                 />
               )}
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-6 text-white font-semibold transition duration-200">
@@ -238,9 +241,10 @@ export default function ExplorePage() {
               {selectedItem.isVideo ? (
                 <video src={selectedItem.image} className="w-full h-full max-h-[40vh] md:max-h-[75vh] object-contain" controls autoPlay loop />
               ) : (
-                <img
+                <SmartImage
                   src={selectedItem.image}
                   alt="Post Media"
+                  sizes="(max-width: 768px) 100vw, 800px"
                   className="w-full h-full max-h-[40vh] md:max-h-[75vh] object-contain select-none"
                   onDoubleClick={() => handleLike(selectedItem.id)}
                 />

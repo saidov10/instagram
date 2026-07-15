@@ -8,6 +8,7 @@ import { loginUser, clearError } from "../store/slices/authSlice";
 import { AppDispatch, RootState } from "../store/store";
 import { api } from "../services/api";
 import { ChevronLeft, X } from "lucide-react";
+import SmartImage from "../components/SmartImage";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -83,19 +84,23 @@ export default function LoginPage() {
           <div className="relative w-full h-72 mt-8 flex justify-center items-center">
             {/* Card 1 (Left background) */}
             <div className="absolute left-[15%] w-36 h-52 bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl -rotate-12 overflow-hidden opacity-60 scale-90 origin-bottom transform transition duration-500 hover:rotate-0 hover:scale-100 hover:opacity-100 z-10">
-              <img
+              <SmartImage
                 src="https://images.unsplash.com/photo-1517841905240-472988babdf9?w=200&h=300&fit=crop"
                 alt="Story Left"
-                className="w-full h-full object-cover"
+                fill
+                sizes="160px"
+                className="object-cover"
               />
             </div>
 
             {/* Card 2 (Center foreground) */}
             <div className="absolute w-40 h-56 bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl overflow-hidden z-30 transition duration-500 hover:scale-105">
-              <img
+              <SmartImage
                 src="https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=200&h=300&fit=crop"
                 alt="Story Center"
-                className="w-full h-full object-cover"
+                fill
+                sizes="160px"
+                className="object-cover"
               />
               {/* Fake stories progress bars overlay */}
               <div className="absolute top-2.5 left-2.5 right-2.5 flex gap-1 z-40">
@@ -106,10 +111,12 @@ export default function LoginPage() {
 
             {/* Card 3 (Right background) */}
             <div className="absolute right-[15%] w-36 h-52 bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl rotate-12 overflow-hidden opacity-60 scale-90 origin-bottom transform transition duration-500 hover:rotate-0 hover:scale-100 hover:opacity-100 z-20">
-              <img
+              <SmartImage
                 src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=300&fit=crop"
                 alt="Story Right"
-                className="w-full h-full object-cover"
+                fill
+                sizes="160px"
+                className="object-cover"
               />
             </div>
           </div>

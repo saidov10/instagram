@@ -30,6 +30,7 @@ import {
 import { useApp } from "../context/AppContext";
 import { getFullImageUrl } from "../services/api";
 import Avatar from "../components/Avatar";
+import SmartImage from "../components/SmartImage";
 import ReportModal, { ReportTarget } from "../components/ReportModal";
 import HashtagText from "../components/HashtagText";
 
@@ -277,10 +278,12 @@ export default function ReelsPage() {
                     playsInline
                   />
                 ) : (
-                  <img
+                  <SmartImage
                     src={reel.media}
                     alt={reel.creator}
-                    className="w-full h-full object-cover select-none"
+                    fill
+                    sizes="(max-width: 768px) 100vw, 480px"
+                    className="object-cover select-none"
                   />
                 )}
 

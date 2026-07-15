@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import SmartImage from "./SmartImage";
 
 interface AvatarProps {
   src?: string | null;
@@ -18,10 +19,13 @@ export default function Avatar({ src, name, className = "w-10 h-10", alt }: Avat
 
   if (hasSrc) {
     return (
-      <img
+      <SmartImage
         src={src as string}
         alt={alt || name || "avatar"}
         onError={() => setFailedSrc(src as string)}
+        width={96}
+        height={96}
+        sizes="96px"
         className={`${className} rounded-full object-cover flex-shrink-0`}
       />
     );
