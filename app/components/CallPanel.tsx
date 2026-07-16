@@ -249,7 +249,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
         client.on("user-left", () => {
           setRemoteJoined(false);
           leaveAgora();
-          onEndedRef.current();
+          onEnded();
         });
 
         // Always join with uid 0: the backend builds a uid-0 wildcard token that's valid for

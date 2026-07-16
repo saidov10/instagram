@@ -18,6 +18,7 @@ import { RootState } from "../store/store";
 import { api, getFullImageUrl } from "../services/api";
 import Avatar from "../components/Avatar";
 import SmartImage from "../components/SmartImage";
+import LikersListModal from "../components/LikersListModal";
 import HashtagText from "../components/HashtagText";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
@@ -62,15 +63,20 @@ const SPAN_PATTERN = [4, 8];
 export default function ExplorePage() {
   const { currentUser } = useSelector((state: RootState) => state.auth);
   const [selectedItem, setSelectedItem] = useState<ExploreItem | null>(null);
+  const [likersModalPostId, setLikersModalPostId] = useState<number | null>(null);
   const [newComment, setNewComment] = useState("");
   const [items, setItems] = useState<ExploreItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [trending, setTrending] = useState<TrendingTag[]>([]);
+  const [followedTags, setFollowedTags] = useState<string[]>([]);
 
   useEffect(() => {
     api.post.getTrendingHashtags()
       .then((list) => setTrending((list || []).map(mapTrendingTag).filter(Boolean) as TrendingTag[]))
       .catch(() => setTrending([]));
+    api.post.getFollowedHashtags()
+      .then((list) => setFollowedTags(list || []))
+      .catch(() => setFollowedTags([]));
   }, []);
 
   useEffect(() => {
@@ -153,6 +159,26 @@ export default function ExplorePage() {
           className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg pl-10 pr-4 py-2 text-sm"
         />
       </div>
+
+      {/* Followed hashtags */}
+      {followedTags.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <h2 className="text-sm font-bold flex items-center gap-2">
+            <Hash className="w-4 h-4" /> Отслеживаемые хэштеги
+          </h2>
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+            {followedTags.map((tag) => (
+              <Link
+                key={tag}
+                href={`/explore/tags/${encodeURIComponent(tag)}`}
+                className="glass rounded-full px-4 py-2 flex items-center gap-1.5 flex-shrink-0 hover:shadow-soft transition lift text-sm font-semibold"
+              >
+                #{tag}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Trending hashtags */}
       {trending.length > 0 && (
@@ -303,7 +329,12 @@ export default function ExplorePage() {
                   </div>
                   <button><Bookmark className="w-6 h-6 text-zinc-800 dark:text-zinc-250" /></button>
                 </div>
-                <p className="text-sm font-bold">{selectedItem.likes.toLocaleString()} отметок «Нравится»</p>
+                <button
+                  onClick={() => setLikersModalPostId(selectedItem.id)}
+                  className="text-sm font-bold cursor-pointer hover:opacity-70"
+                >
+                  {selectedItem.likes.toLocaleString()} отметок «Нравится»
+                </button>
               </div>
 
               <form onSubmit={handleAddComment} className="border-t border-zinc-200 dark:border-zinc-800 p-3 flex items-center justify-between">
@@ -328,6 +359,9 @@ export default function ExplorePage() {
             </div>
           </div>
         </div>
+      )}
+      {likersModalPostId != null && (
+        <LikersListModal postId={likersModalPostId} onClose={() => setLikersModalPostId(null)} />
       )}
     </div>
   );

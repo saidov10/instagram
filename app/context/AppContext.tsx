@@ -9,6 +9,8 @@ interface AppContextType {
   setCreateOpen: (open: boolean) => void;
   createType: "post" | "story" | "reel";
   setCreateType: (type: "post" | "story" | "reel") => void;
+  remixTarget: { postId: number; username: string } | null;
+  setRemixTarget: (target: { postId: number; username: string } | null) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -17,6 +19,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [createType, setCreateType] = useState<"post" | "story" | "reel">("post");
+  const [remixTarget, setRemixTarget] = useState<{ postId: number; username: string } | null>(null);
 
   // Apply class for Tailwind dark mode
   useEffect(() => {
@@ -43,6 +46,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setCreateOpen,
         createType,
         setCreateType,
+        remixTarget,
+        setRemixTarget,
       }}
     >
       {children}

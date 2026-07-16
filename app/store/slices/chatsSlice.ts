@@ -24,6 +24,9 @@ export interface Message {
   /** Author display info — only meaningful in group chats. */
   senderName?: string;
   senderAvatar?: string;
+  /** Locked media bubble — `image` stays empty until `open-view-once-message` is called. */
+  isViewOnce?: boolean;
+  viewOnceOpened?: boolean;
 }
 
 export interface GroupParticipant {
@@ -50,11 +53,16 @@ export interface Chat {
   avatar: string;
   unread: boolean;
   messages: Message[];
+  /** Preview for the chat list — the full `messages` array only loads once the thread is opened. */
+  lastMessage: Message | null;
+  /** ISO timestamp used to sort the inbox most-recent-first. */
+  lastActivityAt: string;
   /** ISO timestamp of the other user's last activity ping. Null for groups. */
   lastSeenAt: string | null;
   isGroup: boolean;
   groupInfo: GroupInfo | null;
   isVanishMode: boolean;
+  isPinned: boolean;
 }
 
 interface ChatsState {
@@ -89,6 +97,23 @@ const formatReplyTo = (raw: any): ReplyPreview | null => {
   };
 };
 
+const formatMessage = (m: any, currentUserId: string): Message => ({
+  id: m.id || m.messageId,
+  sender: (m.senderId || m.senderUserId) === currentUserId ? "me" : "them",
+  text: m.messageText || m.text || "",
+  image: m.isVoice || (m.isViewOnce && !m.viewOnceOpened) ? undefined : getFullImageUrl(m.filePath || m.imagePath) || undefined,
+  time: m.createAt ? new Date(m.createAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just now",
+  reaction: m.reactions?.[m.reactions.length - 1]?.reaction || m.reaction || null,
+  isVoice: !!m.isVoice,
+  voiceUrl: m.isVoice ? getFullImageUrl(m.filePath || m.imagePath) || undefined : undefined,
+  durationMs: m.durationMs,
+  replyTo: formatReplyTo(m.replyTo),
+  senderName: m.senderName || m.userName || undefined,
+  senderAvatar: getFullImageUrl(m.senderAvatar || m.userAvatar) || undefined,
+  isViewOnce: !!m.isViewOnce,
+  viewOnceOpened: !!m.viewOnceOpened,
+});
+
 const formatBackendChat = (c: any, currentUserId: string): Chat => {
   // Groups carry `groupInfo` instead of `otherUser`.
   const isGroup = !!c.isGroup;
@@ -117,20 +142,16 @@ const formatBackendChat = (c: any, currentUserId: string): Chat => {
 
   // Format messages (backend field is `senderId`)
   const rawMsgs = c.messages || [];
-  const messages: Message[] = rawMsgs.map((m: any) => ({
-    id: m.id || m.messageId,
-    sender: (m.senderId || m.senderUserId) === currentUserId ? "me" : "them",
-    text: m.messageText || m.text || "",
-    image: m.isVoice ? null : getFullImageUrl(m.filePath || m.imagePath) || null,
-    time: m.createAt ? new Date(m.createAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just now",
-    reaction: m.reactions?.[m.reactions.length - 1]?.reaction || m.reaction || null,
-    isVoice: !!m.isVoice,
-    voiceUrl: m.isVoice ? getFullImageUrl(m.filePath || m.imagePath) || undefined : undefined,
-    durationMs: m.durationMs,
-    replyTo: formatReplyTo(m.replyTo),
-    senderName: m.senderName || m.userName || undefined,
-    senderAvatar: getFullImageUrl(m.senderAvatar || m.userAvatar) || undefined,
-  }));
+  const messages: Message[] = rawMsgs.map((m: any) => formatMessage(m, currentUserId));
+
+  // The chat-list endpoint (get-chats) sends a single `lastMessage` summary instead of the
+  // full `messages` array — the full thread only arrives via get-chat-by-id. Fall back to the
+  // last loaded message when the thread is already open, so both views agree once fetched.
+  const rawLastMessage = c.lastMessage || rawMsgs[rawMsgs.length - 1] || null;
+  const lastMessage: Message | null = rawLastMessage ? formatMessage(rawLastMessage, currentUserId) : null;
+  const unread = !!rawLastMessage &&
+    (rawLastMessage.senderId || rawLastMessage.senderUserId) !== currentUserId &&
+    !(rawLastMessage.seenBy || []).includes(currentUserId);
 
   return {
     id: c.id || c.chatId,
@@ -138,12 +159,15 @@ const formatBackendChat = (c: any, currentUserId: string): Chat => {
     username: isGroup ? groupInfo!.name : receiver.userName || receiver.username || "direct_user",
     name: isGroup ? groupInfo!.name : receiver.name || receiver.fullName || "Direct Conversation",
     avatar: isGroup ? groupInfo!.avatar : getFullImageUrl(receiver.avatar || receiver.imagePath),
-    unread: c.isUnread || false,
+    unread: c.isUnread ?? unread,
     messages,
+    lastMessage,
+    lastActivityAt: rawLastMessage?.createAt || c.createAt || new Date(0).toISOString(),
     lastSeenAt: isGroup ? null : receiver.lastSeenAt || null,
     isGroup,
     groupInfo,
     isVanishMode: !!c.isVanishMode,
+    isPinned: !!c.isPinned,
   };
 };
 
@@ -195,6 +219,7 @@ export const sendMessage = createAsyncThunk(
       file,
       voice,
       replyTo,
+      isViewOnce,
     }: {
       chatId: number;
       messageText?: string;
@@ -203,6 +228,7 @@ export const sendMessage = createAsyncThunk(
       /** The message being replied to; its id is sent to the backend. */
       replyTo?: ReplyPreview | null;
       currentUserId: string;
+      isViewOnce?: boolean;
     },
     { rejectWithValue }
   ) => {
@@ -212,7 +238,8 @@ export const sendMessage = createAsyncThunk(
         messageText,
         file,
         voice ? { isVoice: true, durationMs: voice.durationMs } : undefined,
-        replyTo?.id
+        replyTo?.id,
+        isViewOnce
       );
       // Re-map response
       return {
@@ -221,7 +248,7 @@ export const sendMessage = createAsyncThunk(
           id: message.id || message.messageId || nextLocalMessageId(),
           sender: "me" as const,
           text: messageText || "",
-          image: voice ? undefined : (getFullImageUrl(message.filePath || message.imagePath) || undefined),
+          image: voice || message.isViewOnce ? undefined : (getFullImageUrl(message.filePath || message.imagePath) || undefined),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isVoice: !!voice,
           voiceUrl: voice ? (getFullImageUrl(message.filePath || message.imagePath) || (file ? URL.createObjectURL(file) : undefined)) : undefined,
@@ -229,6 +256,8 @@ export const sendMessage = createAsyncThunk(
           // Prefer the server's echo, but fall back to the local preview so the
           // quote renders immediately instead of after the next refetch.
           replyTo: formatReplyTo(message.replyTo) || replyTo || null,
+          isViewOnce: !!message.isViewOnce,
+          viewOnceOpened: false,
         },
       };
     } catch (err: any) {
@@ -302,6 +331,31 @@ export const deleteChat = createAsyncThunk(
   }
 );
 
+/** Tap-to-reveal — swaps the locked bubble for the one-time mediaUrl the server just wiped its own copy of. */
+export const openViewOnceMessage = createAsyncThunk(
+  "chats/openViewOnce",
+  async ({ messageId, chatId }: { messageId: number; chatId: number }, { rejectWithValue }) => {
+    try {
+      const res = await api.chat.openViewOnceMessage(messageId);
+      return { messageId, chatId, mediaUrl: res.mediaUrl };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Не удалось открыть медиа.");
+    }
+  }
+);
+
+export const pinChat = createAsyncThunk(
+  "chats/pinChat",
+  async ({ chatId, isPinned }: { chatId: number; isPinned: boolean }, { rejectWithValue }) => {
+    try {
+      await api.chat.pinChat(chatId, isPinned);
+      return { chatId, isPinned };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to pin chat.");
+    }
+  }
+);
+
 const chatsSlice = createSlice({
   name: "chats",
   initialState,
@@ -320,7 +374,12 @@ const chatsSlice = createSlice({
       })
       .addCase(fetchChats.fulfilled, (state, action: PayloadAction<Chat[]>) => {
         state.loading = false;
-        state.chats = action.payload;
+        // Pinned first, then most-recent-message first.
+        state.chats = [...action.payload].sort((a, b) => {
+          const pinDiff = Number(b.isPinned) - Number(a.isPinned);
+          if (pinDiff !== 0) return pinDiff;
+          return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
+        });
       })
       .addCase(fetchChats.rejected, (state, action) => {
         state.loading = false;
@@ -371,11 +430,21 @@ const chatsSlice = createSlice({
         // Append to active chat
         if (state.activeChat && state.activeChat.id === chatId) {
           state.activeChat.messages.push(message);
+          state.activeChat.lastMessage = message;
+          state.activeChat.lastActivityAt = new Date().toISOString();
         }
-        // Update in lists
+        // Update in lists, then float the chat back to the top of the inbox.
         const chatInList = state.chats.find((c) => c.id === chatId);
         if (chatInList) {
           chatInList.messages.push(message);
+          chatInList.lastMessage = message;
+          chatInList.unread = false;
+          chatInList.lastActivityAt = new Date().toISOString();
+          state.chats.sort((a, b) => {
+            const pinDiff = Number(b.isPinned) - Number(a.isPinned);
+            if (pinDiff !== 0) return pinDiff;
+            return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
+          });
         }
       })
 
@@ -406,6 +475,27 @@ const chatsSlice = createSlice({
         if (state.activeChat && state.activeChat.id === action.payload) {
           state.activeChat = null;
         }
+      })
+
+      // Open a view-once message — swaps the locked bubble for the one-time mediaUrl.
+      .addCase(openViewOnceMessage.fulfilled, (state, action) => {
+        const { messageId, chatId, mediaUrl } = action.payload;
+        [state.activeChat, state.chats.find((c) => c.id === chatId)].forEach((chat) => {
+          if (!chat || chat.id !== chatId) return;
+          const msg = chat.messages.find((m) => m.id === messageId);
+          if (msg) {
+            msg.viewOnceOpened = true;
+            msg.image = mediaUrl;
+          }
+        });
+      })
+
+      // Pin / unpin a chat — max 3, sorted pinned-first.
+      .addCase(pinChat.fulfilled, (state, action) => {
+        const { chatId, isPinned } = action.payload;
+        const chat = state.chats.find((c) => c.id === chatId);
+        if (chat) chat.isPinned = isPinned;
+        state.chats.sort((a, b) => Number(b.isPinned) - Number(a.isPinned));
       });
   },
 });

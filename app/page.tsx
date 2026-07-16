@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -20,7 +20,8 @@ import {
   UserX,
   Pin,
   AlertTriangle,
-  Repeat2
+  Repeat2,
+  PlusCircle
 } from "lucide-react";
 import { AppDispatch, RootState } from "./store/store";
 import {
@@ -42,6 +43,11 @@ import {
   toggleSensitive,
   revealSensitivePost,
   repostPost,
+  pinPostToProfile,
+  toggleAgeRestricted,
+  toggleStorySharing,
+  markNotInterested,
+  updatePostMedia,
   Post,
   Comment
 } from "./store/slices/postsSlice";
@@ -59,6 +65,7 @@ import SmartImage from "./components/SmartImage";
 import ReportModal, { ReportTarget } from "./components/ReportModal";
 import HashtagText from "./components/HashtagText";
 import StoryViewer from "./components/StoryViewer";
+import LikersListModal from "./components/LikersListModal";
 
 const VerifiedBadge = () => (
   <svg viewBox="0 0 24 24" className="w-[14px] h-[14px] text-white flex-shrink-0 inline-block" style={{ verticalAlign: 'middle', fill: 'var(--verified-blue)' }}>
@@ -104,6 +111,8 @@ export default function HomeFeed() {
   const [editPostId, setEditPostId] = useState<number | null>(null);
   const [editCaption, setEditCaption] = useState("");
   const [editBusy, setEditBusy] = useState(false);
+  const [editKeepImages, setEditKeepImages] = useState<string[]>([]);
+  const [editNewImages, setEditNewImages] = useState<File[]>([]);
   const editPost = posts.find((p) => p.id === editPostId) || null;
 
   // Reporting (post / comment / story)
@@ -111,6 +120,62 @@ export default function HomeFeed() {
 
   // Comments modal state
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<number | null>(null);
+  const [likersModalPostId, setLikersModalPostId] = useState<number | null>(null);
+  const [insightsPost, setInsightsPost] = useState<Post | null>(null);
+  const [insightsData, setInsightsData] = useState<any>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+
+  const handleOpenInsights = async (post: Post) => {
+    setMenuPostId(null);
+    setInsightsPost(post);
+    setInsightsLoading(true);
+    try {
+      const data = await api.post.getPostInsights(post.id);
+      setInsightsData(data);
+    } catch (err) {
+      console.error("Failed to load post insights:", err);
+      setInsightsData(null);
+    } finally {
+      setInsightsLoading(false);
+    }
+  };
+  const viewedPostIdsRef = useRef<Set<number>>(new Set());
+  const [activeLives, setActiveLives] = useState<{ id: string; username: string; avatar: string }[]>([]);
+  useEffect(() => {
+    if (!currentUser) return;
+    const load = () => {
+      api.live.getActiveLives()
+        .then((list) => setActiveLives((list || []).map((l: any) => ({
+          id: l.id,
+          username: l.userName || l.username || "user",
+          avatar: getFullImageUrl(l.userAvatar),
+        }))))
+        .catch(() => {});
+    };
+    load();
+    const interval = setInterval(load, 20000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
+  // Fires view-post once per post per session when at least half its card scrolls into view.
+  useEffect(() => {
+    if (posts.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          const id = Number((entry.target as HTMLElement).dataset.viewPostId);
+          if (!id || viewedPostIdsRef.current.has(id)) return;
+          viewedPostIdsRef.current.add(id);
+          api.post.viewPost(id).catch(() => {});
+          observer.unobserve(entry.target);
+        });
+      },
+      { threshold: 0.5 }
+    );
+    document.querySelectorAll("[data-view-post-id]").forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [posts]);
   const activeCommentsPost = posts.find((p) => p.id === activeCommentsPostId) || null;
 
   // Reply / thread-expansion state for the comment tree
@@ -194,7 +259,7 @@ export default function HomeFeed() {
   const isOwnMenuPost = !!(menuPost && currentUser && menuPost.userId === currentUser.id);
 
   const handleCopyLink = (postId: number) => {
-    const url = `${window.location.origin}/?post=${postId}`;
+    const url = `${window.location.origin}/p/${postId}`;
     navigator.clipboard?.writeText(url).catch(() => {});
     setCopied(true);
     setTimeout(() => {
@@ -211,6 +276,8 @@ export default function HomeFeed() {
   const handleOpenEdit = (post: Post) => {
     setEditPostId(post.id);
     setEditCaption(post.caption || "");
+    setEditKeepImages(post.images && post.images.length > 0 ? post.images : [post.image]);
+    setEditNewImages([]);
     setMenuPostId(null);
   };
 
@@ -219,9 +286,17 @@ export default function HomeFeed() {
     setEditBusy(true);
     try {
       await dispatch(updatePostCaption({ postId: editPostId, caption: editCaption.trim() })).unwrap();
+      const original = editPost?.images && editPost.images.length > 0 ? editPost.images : (editPost ? [editPost.image] : []);
+      const mediaChanged =
+        editNewImages.length > 0 ||
+        editKeepImages.length !== original.length ||
+        editKeepImages.some((url, i) => url !== original[i]);
+      if (mediaChanged) {
+        await dispatch(updatePostMedia({ postId: editPostId, keepImages: editKeepImages, newImages: editNewImages })).unwrap();
+      }
       setEditPostId(null);
     } catch (err) {
-      console.error("Failed to update caption:", err);
+      console.error("Failed to update post:", err);
     } finally {
       setEditBusy(false);
     }
@@ -246,6 +321,48 @@ export default function HomeFeed() {
     setMenuPostId(null);
   };
 
+  const handlePinToProfile = async (post: Post) => {
+    setMenuPostId(null);
+    try {
+      await dispatch(pinPostToProfile({ postId: post.id, isPinned: !post.isPinnedToProfile })).unwrap();
+    } catch (err: any) {
+      alert(err?.message || "Не удалось закрепить публикацию (максимум 3).");
+    }
+  };
+
+  const handleToggleAgeRestricted = (post: Post) => {
+    dispatch(toggleAgeRestricted({ postId: post.id, isAgeRestricted: !post.isAgeRestricted }));
+    setMenuPostId(null);
+  };
+
+  const handleToggleStorySharing = (post: Post) => {
+    dispatch(toggleStorySharing({ postId: post.id, allowStorySharing: !post.allowStorySharing }));
+    setMenuPostId(null);
+  };
+
+  // "Not interested" collapses the tile immediately with a grace-period Undo; the API call
+  // (which the backend has no way to reverse) only fires once that window elapses.
+  const [collapsedPostIds, setCollapsedPostIds] = useState<Set<number>>(new Set());
+  const notInterestedTimers = React.useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  const handleNotInterested = (post: Post) => {
+    setMenuPostId(null);
+    setCollapsedPostIds((prev) => new Set(prev).add(post.id));
+    notInterestedTimers.current[post.id] = setTimeout(() => {
+      dispatch(markNotInterested({ postId: post.id }));
+    }, 4000);
+  };
+
+  const handleUndoNotInterested = (postId: number) => {
+    clearTimeout(notInterestedTimers.current[postId]);
+    delete notInterestedTimers.current[postId];
+    setCollapsedPostIds((prev) => {
+      const next = new Set(prev);
+      next.delete(postId);
+      return next;
+    });
+  };
+
   const [repostedIds, setRepostedIds] = useState<Set<number>>(new Set());
 
   const handleRepost = async (post: Post) => {
@@ -255,6 +372,18 @@ export default function HomeFeed() {
       setRepostedIds((prev) => new Set(prev).add(post.id));
     } catch (err) {
       console.error("Failed to repost:", err);
+    }
+  };
+
+  const [sharedToStoryIds, setSharedToStoryIds] = useState<Set<number>>(new Set());
+  const handleShareToStory = async (post: Post) => {
+    setMenuPostId(null);
+    try {
+      await api.story.sharePostToStory(post.id);
+      setSharedToStoryIds((prev) => new Set(prev).add(post.id));
+      setTimeout(() => setSharedToStoryIds((prev) => { const n = new Set(prev); n.delete(post.id); return n; }), 2500);
+    } catch (err: any) {
+      alert(err?.message || "Автор отключил репост этой публикации в истории.");
     }
   };
 
@@ -283,7 +412,7 @@ export default function HomeFeed() {
           // Ranked by mutual followers; falls back to a plain user list if unavailable.
           let users: any[];
           try {
-            users = await api.user.getSuggestedUsers(20);
+            users = await api.user.getSuggestedUsers(5);
           } catch {
             users = await api.user.getUsers({ pageSize: 5 });
           }
@@ -408,7 +537,7 @@ export default function HomeFeed() {
         </Link>
       </div>
       <div className="flex gap-3 overflow-x-auto no-scrollbar p-3">
-        {suggestions.slice(0, 10).map((sug) => (
+        {suggestions.slice(0, 5).map((sug) => (
           <div
             key={`row-${sug.id}`}
             className="flex flex-col items-center gap-2 w-36 flex-shrink-0 border border-zinc-100 dark:border-zinc-900/60 rounded-xl p-3 text-center"
@@ -430,7 +559,7 @@ export default function HomeFeed() {
               className={`w-full font-semibold text-xs rounded-lg py-1.5 transition-colors cursor-pointer ${
                 sug.followed
                   ? "glass text-black dark:text-white"
-                  : "btn-grad text-white hover:opacity-90"
+                  : "btn-primary hover:opacity-90"
               }`}
             >
               {sug.followed ? "Подписан" : "Подписаться"}
@@ -604,6 +733,40 @@ export default function HomeFeed() {
                 </div>
               )}
 
+              {currentUser && (
+                <Link
+                  href="/live"
+                  className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer outline-none group"
+                >
+                  <div className="w-14 h-14 rounded-full border-2 border-dashed border-red-400 flex items-center justify-center group-hover:scale-110 transition-transform duration-200">
+                    <span className="text-red-500 text-[10px] font-bold">LIVE</span>
+                  </div>
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal max-w-[74px] truncate">
+                    В эфир
+                  </span>
+                </Link>
+              )}
+
+              {activeLives.map((live) => (
+                <Link
+                  key={live.id}
+                  href={`/live/${live.id}`}
+                  className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer outline-none group"
+                >
+                  <div className="relative p-[2.5px] rounded-full bg-red-500 group-hover:scale-110 transition-transform duration-200">
+                    <div className="bg-white dark:bg-black p-[2.5px] rounded-full">
+                      <Avatar src={live.avatar} name={live.username} className="w-14 h-14" />
+                    </div>
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                      LIVE
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal max-w-[74px] truncate mt-1">
+                    {live.username}
+                  </span>
+                </Link>
+              ))}
+
               {stories.filter((s) => s.userId !== currentUser?.id).length === 0 ? (
                 <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 px-2">Нет доступных историй</p>
               ) : (
@@ -664,10 +827,27 @@ export default function HomeFeed() {
             posts.map((post, postIndex) => {
               const authorStory = stories.find((s) => s.userId === post.userId) ||
                                   (post.userId === currentUser?.id && myStories.length > 0 ? myStories[0] : null);
+              if (collapsedPostIds.has(post.id)) {
+                return (
+                  <div
+                    key={post.id}
+                    className="border border-[var(--border)] rounded-xl p-6 flex items-center justify-between gap-4 text-sm"
+                  >
+                    <span className="text-zinc-500">Вы будете видеть меньше публикаций, похожих на эту от @{post.username}.</span>
+                    <button
+                      onClick={() => handleUndoNotInterested(post.id)}
+                      className="text-blue-500 font-semibold hover:underline cursor-pointer flex-shrink-0"
+                    >
+                      Отменить
+                    </button>
+                  </div>
+                );
+              }
               return (
                 <React.Fragment key={post.id}>
                 {postIndex === 2 && suggestions.length > 0 && renderSuggestionsRow()}
                 <article
+                  data-view-post-id={post.id}
                   className="border border-[var(--border)] rounded-xl overflow-hidden flex flex-col w-full animate-fade-up bg-transparent"
                 >
                   {/* Reposted-from banner (#17) */}
@@ -724,7 +904,13 @@ export default function HomeFeed() {
                         <span className="text-zinc-400 text-xs font-normal">{post.time}</span>
                       </div>
                       {post.location && (
-                        <span className="text-xs text-zinc-400 font-normal leading-tight mt-0.5">{post.location}</span>
+                        post.locationId ? (
+                          <Link href={`/explore/locations/${post.locationId}`} className="text-xs text-zinc-400 font-normal leading-tight mt-0.5 hover:underline w-fit">
+                            {post.location}
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-zinc-400 font-normal leading-tight mt-0.5">{post.location}</span>
+                        )
                       )}
                     </div>
                   </div>
@@ -741,7 +927,17 @@ export default function HomeFeed() {
                   className="relative aspect-square w-full select-none cursor-pointer overflow-hidden bg-zinc-50 dark:bg-zinc-950"
                   onDoubleClick={() => !post.isBlurred && handleDoubleLike(post.id)}
                 >
-                  {post.image.toLowerCase().endsWith('.mp4') || post.image.toLowerCase().endsWith('.mov') || post.image.toLowerCase().endsWith('.webm') ? (
+                  {post.isReel && post.videoUrl ? (
+                    <video
+                      src={post.videoUrl}
+                      poster={post.image}
+                      className="w-full h-full object-cover"
+                      muted
+                      loop
+                      autoPlay
+                      playsInline
+                    />
+                  ) : post.image.toLowerCase().endsWith('.mp4') || post.image.toLowerCase().endsWith('.mov') || post.image.toLowerCase().endsWith('.webm') ? (
                     <video
                       src={post.image}
                       className="w-full h-full object-cover"
@@ -825,13 +1021,16 @@ export default function HomeFeed() {
 
                 {/* Likes & Info */}
                 <div className="px-3.5 pb-3.5 flex flex-col gap-1.5">
-                  <span className="font-bold text-sm text-zinc-900 dark:text-white">
+                  <button
+                    onClick={() => setLikersModalPostId(post.id)}
+                    className="font-bold text-sm text-zinc-900 dark:text-white text-left w-fit cursor-pointer hover:opacity-70"
+                  >
                     {post.hideLikeCount
                       ? (post.isLiked
                           ? "Нравится вам и другим"
                           : "Нравится другим людям")
                       : `${post.likes.toLocaleString()} отметок «Нравится»`}
-                  </span>
+                  </button>
                   
                   {/* Caption */}
                   <p className="text-sm text-zinc-900 dark:text-white leading-tight">
@@ -1068,6 +1267,46 @@ export default function HomeFeed() {
                 {menuPost.allowComments ? "Выключить комментарии" : "Включить комментарии"}
               </button>
             )}
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handleOpenInsights(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Статистика
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handlePinToProfile(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                {menuPost.isPinnedToProfile ? "Открепить от профиля" : "Закрепить в профиле"}
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handleToggleAgeRestricted(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                {menuPost.isAgeRestricted ? "Снять возрастное ограничение" : "Отметить 18+"}
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handleToggleStorySharing(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                {menuPost.allowStorySharing ? "Запретить репост в истории" : "Разрешить репост в истории"}
+              </button>
+            )}
+            {!isOwnMenuPost && (
+              <button
+                onClick={() => handleNotInterested(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Неинтересно
+              </button>
+            )}
             {!isOwnMenuPost && (
               <button
                 onClick={() => {
@@ -1085,6 +1324,13 @@ export default function HomeFeed() {
               className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-50"
             >
               {repostedIds.has(menuPost.id) ? "Опубликовано ✓" : "Опубликовать у себя (репост)"}
+            </button>
+            <button
+              onClick={() => handleShareToStory(menuPost)}
+              disabled={sharedToStoryIds.has(menuPost.id)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-50"
+            >
+              {sharedToStoryIds.has(menuPost.id) ? "Добавлено в историю ✓" : "Добавить в историю"}
             </button>
             {menuPost.userId && (
               <Link
@@ -1138,20 +1384,56 @@ export default function HomeFeed() {
                 {editBusy ? "Сохранение…" : "Готово"}
               </button>
             </div>
-            <div className="flex gap-3 p-4">
-              <SmartImage
-                src={editPost.image}
-                alt=""
-                className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
-              />
+            <div className="flex flex-col gap-4 p-4">
               <textarea
                 value={editCaption}
                 onChange={(e) => setEditCaption(e.target.value)}
                 placeholder="Добавьте подпись…"
-                rows={4}
+                rows={3}
                 autoFocus
-                className="flex-1 bg-transparent text-sm resize-none outline-none placeholder:text-zinc-400"
+                className="w-full bg-transparent text-sm resize-none outline-none placeholder:text-zinc-400"
               />
+              {/* Media editor: reorder isn't drag-based here, but tiles can be removed/added */}
+              <div className="flex gap-2 flex-wrap">
+                {editKeepImages.map((url, i) => (
+                  <div key={url + i} className="relative w-16 h-16 flex-shrink-0">
+                    <SmartImage src={url} alt="" fill sizes="64px" className="object-cover rounded-lg" />
+                    {editKeepImages.length + editNewImages.length > 1 && (
+                      <button
+                        onClick={() => setEditKeepImages((prev) => prev.filter((_, idx) => idx !== i))}
+                        className="absolute -top-1.5 -right-1.5 bg-black text-white rounded-full w-5 h-5 flex items-center justify-center cursor-pointer"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {editNewImages.map((file, i) => (
+                  <div key={file.name + i} className="relative w-16 h-16 flex-shrink-0">
+                    <SmartImage src={URL.createObjectURL(file)} alt="" fill sizes="64px" className="object-cover rounded-lg" />
+                    <button
+                      onClick={() => setEditNewImages((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="absolute -top-1.5 -right-1.5 bg-black text-white rounded-full w-5 h-5 flex items-center justify-center cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+                <label className="w-16 h-16 flex-shrink-0 rounded-lg border-2 border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center cursor-pointer text-zinc-400 hover:text-zinc-500">
+                  <PlusCircle className="w-6 h-6" />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      setEditNewImages((prev) => [...prev, ...files]);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
             </div>
           </div>
         </div>
@@ -1219,6 +1501,56 @@ export default function HomeFeed() {
 
       {/* ----------------- REPORT MODAL ----------------- */}
       {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
+      {likersModalPostId != null && (
+        <LikersListModal postId={likersModalPostId} onClose={() => setLikersModalPostId(null)} />
+      )}
+      {insightsPost && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-60 flex items-center justify-center p-4"
+          onClick={() => setInsightsPost(null)}
+        >
+          <div
+            className="glass-strong w-full max-w-sm rounded-3xl shadow-soft-lg p-5 flex flex-col gap-4 animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base">Статистика публикации</h3>
+              <button onClick={() => setInsightsPost(null)} className="hover:opacity-70 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {insightsLoading ? (
+              <div className="grid grid-cols-2 gap-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="h-16 rounded-xl shimmer" />
+                ))}
+              </div>
+            ) : !insightsData ? (
+              <p className="text-sm text-zinc-450 text-center py-6">Не удалось загрузить статистику.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: "Просмотры", value: insightsData.viewCount },
+                  { label: "Отметки «Нравится»", value: insightsData.likeCount },
+                  { label: "Комментарии", value: insightsData.commentCount },
+                  { label: "Сохранения", value: insightsData.saveCount },
+                  { label: "Репосты", value: insightsData.repostCount },
+                  { label: "В историях", value: insightsData.storyShareCount },
+                ].map((tile) => (
+                  <div key={tile.label} className="rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-150 dark:border-zinc-800 p-3 flex flex-col gap-1">
+                    <span className="text-xl font-bold tabular-nums">{tile.value ?? 0}</span>
+                    <span className="text-[11px] text-zinc-500">{tile.label}</span>
+                  </div>
+                ))}
+                <div className="col-span-2 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-150 dark:border-zinc-800 p-3 flex items-center justify-between">
+                  <span className="text-[11px] text-zinc-500">Вовлечённость</span>
+                  <span className="text-lg font-bold tabular-nums">{insightsData.engagementRatePercent ?? 0}%</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ----------------- COMMENTS MODAL OVERLAY ----------------- */}
       {activeCommentsPostId !== null && (

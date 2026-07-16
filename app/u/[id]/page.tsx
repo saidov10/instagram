@@ -12,6 +12,10 @@ import SmartImage from "../../components/SmartImage";
 import Highlights from "../../components/Highlights";
 import ReportModal, { ReportTarget } from "../../components/ReportModal";
 import VerifiedBadge from "../../components/VerifiedBadge";
+import StoryViewer from "../../components/StoryViewer";
+import { formatBackendStory, viewStory as viewStoryThunk, Story } from "../../store/slices/storiesSlice";
+import { useDispatch } from "react-redux";
+import { AppDispatch } from "../../store/store";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
@@ -21,6 +25,9 @@ interface PublicProfile {
   fullName: string;
   avatar: string;
   about: string;
+  website: string;
+  pronouns: string;
+  isInQuietMode: boolean;
   postsCount: number;
   followersCount: number;
   followingCount: number;
@@ -41,9 +48,13 @@ export default function UserProfilePage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const userId = params?.id;
+  const dispatch = useDispatch<AppDispatch>();
   const { currentUser } = useSelector((state: RootState) => state.auth);
 
   const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [userStories, setUserStories] = useState<Story[]>([]);
+  const [activeStoryId, setActiveStoryId] = useState<number | null>(null);
+  const activeStory = activeStoryId === null ? null : userStories.find((s) => s.id === activeStoryId) || null;
   const [posts, setPosts] = useState<GridPost[]>([]);
   const [followState, setFollowState] = useState<FollowState>("none");
   const [followBusy, setFollowBusy] = useState(false);
@@ -69,6 +80,14 @@ export default function UserProfilePage() {
     }
   }, [currentUser, userId, router]);
 
+  const handleOpenUserStory = (story: Story) => {
+    if (story.userId && story.userId !== currentUser?.id) {
+      dispatch(viewStoryThunk(story.id));
+    }
+    setUserStories((prev) => prev.map((s) => (s.id === story.id ? { ...s, viewed: true } : s)));
+    setActiveStoryId(story.id);
+  };
+
   const loadProfile = useCallback(async () => {
     if (!userId) return;
     setLoading(true);
@@ -92,6 +111,9 @@ export default function UserProfilePage() {
         fullName: p.fullName || p.name || "",
         avatar: getFullImageUrl(p.avatar || p.imagePath),
         about: p.about || "",
+        website: p.website || "",
+        pronouns: p.pronouns || "",
+        isInQuietMode: !!p.isInQuietMode,
         postsCount: p.postsCount ?? 0,
         followersCount: p.followersCount ?? 0,
         followingCount: p.followingCount ?? 0,
@@ -102,6 +124,9 @@ export default function UserProfilePage() {
       const followStatus = await api.profile.getIsFollowUserProfileById(userId).catch(() => false);
       setFollowState(followStatus ? "following" : "none");
 
+      const rawStories = await api.story.getUserStories(userId).catch(() => []);
+      setUserStories((rawStories || []).map(formatBackendStory));
+
       // Gate the posts grid for private accounts you don't yet follow.
       if (isPrivate && !followStatus) {
         setPosts([]);
@@ -110,7 +135,7 @@ export default function UserProfilePage() {
         setPosts(
           (rawPosts || []).map((rp: any) => ({
             id: rp.id || rp.postId,
-            image: getFullImageUrl((rp.images && rp.images[0]) || rp.filePath || rp.imagePath || rp.image) || DEFAULT_AVATAR,
+            image: getFullImageUrl(rp.coverUrl || (rp.images && rp.images[0]) || rp.filePath || rp.imagePath || rp.image) || DEFAULT_AVATAR,
             likes: typeof rp.likeCount === "number" ? rp.likeCount : (rp.likes?.length || 0),
             comments: rp.commentCount || 0,
           }))
@@ -321,12 +346,23 @@ export default function UserProfilePage() {
 
       {/* ----------------- HEADER ----------------- */}
       <header className="flex flex-col md:flex-row items-center md:items-start gap-8 md:gap-24 border-b border-zinc-200 dark:border-zinc-800 pb-10">
-        <div className="relative w-36 h-36 flex-shrink-0">
-          <div className="w-full h-full rounded-full p-[3px] gradient-ring animate-gradient shadow-soft-md">
-            <div className="bg-background p-1 rounded-full w-full h-full">
-              <Avatar src={profile.avatar} name={profile.userName} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
+        <div
+          onClick={() => userStories.length > 0 && handleOpenUserStory(userStories[0])}
+          className={`relative w-36 h-36 flex-shrink-0 ${userStories.length > 0 ? "cursor-pointer" : ""}`}
+        >
+          {userStories.length > 0 ? (
+            <div
+              className={`w-full h-full rounded-full p-[3px] shadow-soft-md ${
+                userStories.every((s) => s.viewed) ? "bg-zinc-300 dark:bg-zinc-700" : "gradient-ring animate-gradient"
+              }`}
+            >
+              <div className="bg-background p-1 rounded-full w-full h-full">
+                <Avatar src={profile.avatar} name={profile.userName} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
+              </div>
             </div>
-          </div>
+          ) : (
+            <Avatar src={profile.avatar} name={profile.userName} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
+          )}
         </div>
 
         <div className="flex-1 flex flex-col gap-5 w-full text-left">
@@ -335,6 +371,9 @@ export default function UserProfilePage() {
               {profile.userName}
               {profile.isVerified && <VerifiedBadge className="w-[18px] h-[18px]" />}
             </h2>
+            {profile.isInQuietMode && (
+              <span className="text-xs text-zinc-450 flex items-center gap-1">🌙 В тихом режиме</span>
+            )}
             <div className="flex gap-2 text-sm font-semibold items-center">
               <button
                 onClick={handleFollow}
@@ -342,7 +381,7 @@ export default function UserProfilePage() {
                 className={`px-6 py-2 rounded-xl transition cursor-pointer disabled:opacity-60 press ${
                   followState !== "none"
                     ? "glass hover:shadow-soft text-black dark:text-white"
-                    : "btn-grad"
+                    : "btn-primary"
                 }`}
               >
                 {followState === "following" ? "Вы подписаны" : followState === "pending" ? "Запрошено" : "Подписаться"}
@@ -460,10 +499,27 @@ export default function UserProfilePage() {
           </div>
 
           <div className="text-sm text-zinc-900 dark:text-zinc-200">
-            {profile.fullName && <span className="font-semibold block">{profile.fullName}</span>}
+            {profile.fullName && (
+              <span className="font-semibold block">
+                {profile.fullName}
+                {profile.pronouns && (
+                  <span className="font-normal text-zinc-450 dark:text-zinc-500 ml-1.5">{profile.pronouns}</span>
+                )}
+              </span>
+            )}
             <p className="mt-1 text-zinc-650 dark:text-zinc-400 whitespace-pre-wrap">
               {profile.about || "Описание отсутствует."}
             </p>
+            {profile.website && (
+              <a
+                href={/^https?:\/\//.test(profile.website) ? profile.website : `https://${profile.website}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-[#0095f6] dark:text-[#4da6ff] font-semibold hover:underline"
+              >
+                {profile.website.replace(/^https?:\/\//, "")}
+              </a>
+            )}
           </div>
         </div>
       </header>
@@ -539,6 +595,17 @@ export default function UserProfilePage() {
 
       {/* ----------------- REPORT MODAL ----------------- */}
       {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
+      {activeStory && (
+        <StoryViewer
+          key={activeStory.id}
+          story={activeStory}
+          list={userStories}
+          currentUserId={currentUser?.id}
+          onNavigate={handleOpenUserStory}
+          onClose={() => setActiveStoryId(null)}
+          onReport={(storyId) => setReportTarget({ type: "STORY", id: String(storyId) })}
+        />
+      )}
     </div>
   );
 }

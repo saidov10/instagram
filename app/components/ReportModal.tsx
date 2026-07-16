@@ -104,7 +104,7 @@ export default function ReportModal({ target, onClose }: { target: ReportTarget;
               <button
                 onClick={handleSubmit}
                 disabled={!selected || submitting}
-                className="w-full py-2.5 rounded-xl text-sm font-bold bg-red-500 hover:bg-red-600 text-white disabled:opacity-50 cursor-pointer transition"
+                className="w-full py-2.5 rounded-xl text-sm font-bold btn-primary disabled:opacity-50 cursor-pointer transition"
               >
                 {submitting ? "Отправка..." : "Отправить жалобу"}
               </button>

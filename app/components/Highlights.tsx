@@ -62,8 +62,9 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
       const list = await api.highlight.getUserHighlights(userId);
       setHighlights((list || []).map(mapHighlight).filter((h) => h.id));
     } catch (err) {
+      // A transient fetch failure shouldn't wipe highlights the user just saw render —
+      // keep whatever we already had rather than flashing to an empty tray.
       console.error("Failed to load highlights:", err);
-      setHighlights([]);
     } finally {
       setLoading(false);
     }
@@ -123,17 +124,38 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
       // Cover defaults to the first selected story's image.
       const cover = archive.find((s) => s.id === selectedIds[0])?.image || editing?.cover || "";
       if (editing) {
-        await api.highlight.updateHighlight(editing.id, { title: title.trim(), cover, storyIds: selectedIds });
+        const updated = await api.highlight.updateHighlight(editing.id, { title: title.trim(), cover, storyIds: selectedIds });
+        const mapped = mapHighlight(updated || { ...editing, title, cover, storyIds: selectedIds });
+        setHighlights((prev) => prev.map((h) => (h.id === mapped.id ? mapped : h)));
       } else {
-        await api.highlight.createHighlight({ title: title.trim(), cover, storyIds: selectedIds });
+        const created = await api.highlight.createHighlight({ title: title.trim(), cover, storyIds: selectedIds });
+        if (created?.id) {
+          setHighlights((prev) => [...prev, mapHighlight(created)]);
+        }
       }
       setEditorOpen(false);
-      await load();
+      // Reconcile with the server in the background — load() no longer clears the list on failure.
+      load();
     } catch (err: any) {
       console.error("Failed to save highlight:", err);
       setError(err?.message || "Не удалось сохранить. Попробуйте ещё раз.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleMoveHighlight = async (id: string, direction: -1 | 1) => {
+    const idx = highlights.findIndex((h) => h.id === id);
+    const swapWith = idx + direction;
+    if (idx === -1 || swapWith < 0 || swapWith >= highlights.length) return;
+    const reordered = [...highlights];
+    [reordered[idx], reordered[swapWith]] = [reordered[swapWith], reordered[idx]];
+    setHighlights(reordered);
+    try {
+      await api.highlight.reorderHighlights(reordered.map((h) => h.id));
+    } catch (err) {
+      console.error("Failed to reorder highlights:", err);
+      setHighlights(highlights);
     }
   };
 
@@ -180,7 +202,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
           </button>
         )}
 
-        {highlights.map((h) => (
+        {highlights.map((h, i) => (
           <div key={h.id} className="flex flex-col items-center gap-2 flex-shrink-0 relative group">
             <button
               onClick={() => openHighlight(h)}
@@ -199,6 +221,24 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
 
             {isOwner && (
               <div className="absolute -top-1 -right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                {i > 0 && (
+                  <button
+                    onClick={() => handleMoveHighlight(h.id, -1)}
+                    title="Переместить влево"
+                    className="p-1 rounded-full glass-strong shadow-soft cursor-pointer"
+                  >
+                    <ChevronLeft className="w-3 h-3" />
+                  </button>
+                )}
+                {i < highlights.length - 1 && (
+                  <button
+                    onClick={() => handleMoveHighlight(h.id, 1)}
+                    title="Переместить вправо"
+                    className="p-1 rounded-full glass-strong shadow-soft cursor-pointer"
+                  >
+                    <ChevronRight className="w-3 h-3" />
+                  </button>
+                )}
                 <button
                   onClick={() => openEditor(h)}
                   title="Изменить"
@@ -350,7 +390,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
               <button
                 onClick={handleSave}
                 disabled={!title.trim() || selectedIds.length === 0 || saving}
-                className="w-full btn-grad py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
+                className="w-full btn-primary py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
               >
                 {saving ? "Сохранение..." : editing ? "Сохранить" : "Создать"}
               </button>

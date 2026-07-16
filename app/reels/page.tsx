@@ -16,7 +16,8 @@ import {
   Smile,
   Film,
   Check,
-  Flag
+  Flag,
+  Repeat
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import {
@@ -33,6 +34,7 @@ import Avatar from "../components/Avatar";
 import SmartImage from "../components/SmartImage";
 import ReportModal, { ReportTarget } from "../components/ReportModal";
 import HashtagText from "../components/HashtagText";
+import LikersListModal from "../components/LikersListModal";
 
 interface ReelComment {
   id: number;
@@ -62,13 +64,14 @@ interface Reel {
   isSaved: boolean;
   isAudioSaved: boolean;
   comments: ReelComment[];
+  remixOfUsername?: string;
 }
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
 
 export default function ReelsPage() {
   const dispatch = useDispatch<AppDispatch>();
-  const { setCreateOpen, setCreateType } = useApp();
+  const { setCreateOpen, setCreateType, setRemixTarget } = useApp();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
   const { reels: backendReels, savedAudios, loading } = useSelector((state: RootState) => state.posts);
 
@@ -81,6 +84,7 @@ export default function ReelsPage() {
   const [audioBusy, setAudioBusy] = useState(false);
   const [showReelMenu, setShowReelMenu] = useState(false);
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [likersModalPostId, setLikersModalPostId] = useState<number | null>(null);
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -113,6 +117,7 @@ export default function ReelsPage() {
         isLiked: !!p.isLiked,
         isSaved: !!p.isSaved,
         isAudioSaved: !!audioId && savedAudioIds.has(audioId),
+        remixOfUsername: p.originalReel?.userName || p.originalReel?.username || undefined,
         comments: (p.comments || []).map((c: any) => ({
           id: c.id || c.commentId,
           userId: c.userId || "",
@@ -264,7 +269,7 @@ export default function ReelsPage() {
             setCreateType("reel");
             setCreateOpen(true);
           }}
-          className="btn-grad px-5 py-2.5 rounded-xl text-sm font-bold cursor-pointer"
+          className="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold cursor-pointer"
         >
           Создать Reel
         </button>
@@ -340,6 +345,11 @@ export default function ReelsPage() {
                 {currentReel.creator}
               </span>
             </Link>
+            {currentReel.remixOfUsername && (
+              <span className="text-[11px] text-white/70 flex items-center gap-1 -mt-1">
+                <Repeat className="w-3 h-3" /> Ремикс @{currentReel.remixOfUsername}
+              </span>
+            )}
 
             {/* Caption */}
             <p className="text-xs line-clamp-2 leading-relaxed opacity-90 select-text text-left">
@@ -348,7 +358,10 @@ export default function ReelsPage() {
 
             {/* Audio track + save-audio */}
             <div className="flex items-center gap-2 mt-1">
-              <div className="flex items-center gap-2 text-xs bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 min-w-0">
+              <Link
+                href={currentReel.audioId ? `/audio/${encodeURIComponent(currentReel.audioId)}` : "#"}
+                className="flex items-center gap-2 text-xs bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 min-w-0 hover:bg-black/40 transition"
+              >
                 <Music className="w-3.5 h-3.5 flex-shrink-0" />
                 <div className="overflow-hidden w-28 relative h-4">
                   <span className="absolute animate-marquee whitespace-nowrap font-medium">
@@ -356,7 +369,7 @@ export default function ReelsPage() {
                     {currentReel.audioArtist ? ` · ${currentReel.audioArtist}` : ""}
                   </span>
                 </div>
-              </div>
+              </Link>
               {currentReel.audioId && (
                 <button
                   onClick={() => handleSaveAudio(currentReel)}
@@ -395,7 +408,12 @@ export default function ReelsPage() {
                   }`}
                 />
               </button>
-              <span className="text-xs font-semibold drop-shadow">{currentReel.likesCount.toLocaleString()}</span>
+              <button
+                onClick={() => setLikersModalPostId(currentReel.id)}
+                className="text-xs font-semibold drop-shadow cursor-pointer hover:opacity-80"
+              >
+                {currentReel.likesCount.toLocaleString()}
+              </button>
             </div>
 
             {/* Comments toggle */}
@@ -432,6 +450,19 @@ export default function ReelsPage() {
               </button>
               {showReelMenu && (
                 <div className="absolute bottom-full right-0 mb-2 w-48 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-20 animate-pop-in">
+                  {currentUser && currentReel.userId !== currentUser.id && (
+                    <button
+                      onClick={() => {
+                        setRemixTarget({ postId: currentReel.id, username: currentReel.creator });
+                        setCreateType("reel");
+                        setCreateOpen(true);
+                        setShowReelMenu(false);
+                      }}
+                      className="w-full flex items-center gap-2.5 p-3.5 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                    >
+                      <Repeat className="w-4 h-4" /> Ремикс
+                    </button>
+                  )}
                   {currentUser && currentReel.userId !== currentUser.id ? (
                     <button
                       onClick={() => {
@@ -543,6 +574,9 @@ export default function ReelsPage() {
 
       {/* ----------------- REPORT MODAL ----------------- */}
       {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
+      {likersModalPostId != null && (
+        <LikersListModal postId={likersModalPostId} onClose={() => setLikersModalPostId(null)} />
+      )}
 
     </div>
   );

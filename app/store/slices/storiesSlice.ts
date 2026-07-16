@@ -44,6 +44,37 @@ export interface Story {
   viewers?: StoryViewer[];
   /** #21 — an @mention sticker tagging another user. */
   mention?: { userId: string; username: string } | null;
+  link?: { url: string; label: string } | null;
+  countdown?: { endsAt: string; label: string } | null;
+  sharedPost?: { id: number; image: string; username: string } | null;
+  /** Where the interactive/mention sticker was placed on the image (0–1 fractions), plus size/angle. */
+  stickerPosition?: { x: number; y: number; scale?: number; rotation?: number } | null;
+}
+
+/** The backend still doesn't echo the @mentioned user's display name (only their id) on
+ *  fetch — cache it locally, keyed by story id, purely so the creator's own client can show
+ *  "@username" instead of "@profile" without an extra lookup. Same-device-only, non-critical. */
+const MENTION_NAME_CACHE_KEY = "story_mention_names";
+
+function getCachedMentionUsername(storyId: number): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const registry = JSON.parse(localStorage.getItem(MENTION_NAME_CACHE_KEY) || "{}");
+    return registry[storyId] || null;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedMentionUsername(storyId: number, username: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const registry = JSON.parse(localStorage.getItem(MENTION_NAME_CACHE_KEY) || "{}");
+    registry[storyId] = username;
+    localStorage.setItem(MENTION_NAME_CACHE_KEY, JSON.stringify(registry));
+  } catch (e) {
+    console.error("Failed to cache mention username:", e);
+  }
 }
 
 /** Normalizes whatever shape the backend uses for the viewers list. */
@@ -81,8 +112,10 @@ const initialState: StoriesState = {
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
 /**
- * The sticker may arrive as a nested `sticker` object or flattened onto the story
- * (stickerType/stickerQuestion/stickerOptions) — accept both.
+ * The backend always nests sticker data (regardless of type) under a single `sticker` object:
+ * `{ id, type, questionText, options, linkUrl, linkLabel, countdownEndsAt, countdownLabel,
+ *    mentionedUserId }`. Older code assumed flattened `stickerX` fields on the story itself,
+ * which the fetch response never actually has — accept both shapes defensively, real one first.
  */
 const formatSticker = (s: any): StorySticker | null => {
   const raw = s.sticker || s.storySticker || null;
@@ -102,7 +135,7 @@ const formatSticker = (s: any): StorySticker | null => {
   return {
     id,
     type: type as StickerType,
-    question: raw?.question || raw?.stickerQuestion || s.stickerQuestion || "",
+    question: raw?.questionText || raw?.question || raw?.stickerQuestion || s.stickerQuestion || "",
     options,
     myOptionIndex: typeof myOptionIndex === "number" ? myOptionIndex : null,
     myAnswer: raw?.myAnswer ?? raw?.textAnswer ?? null,
@@ -110,19 +143,13 @@ const formatSticker = (s: any): StorySticker | null => {
 };
 
 export const formatBackendStory = (s: any): Story => {
-  let localTrack = null;
+  const id = s.id || s.storyId;
   const mediaUrl = s.fileName || s.imagePath || s.image || "";
-  if (mediaUrl && typeof window !== "undefined") {
-    try {
-      const registry = JSON.parse(localStorage.getItem("story_music_tracks") || "{}");
-      localTrack = registry[mediaUrl] || null;
-    } catch (e) {}
-  }
-
-  const rawTrack = s.musicTrack || s.audioUrl ? s : (localTrack ? { musicTrack: localTrack } : null);
+  const sticker = s.sticker || s.storySticker || null;
+  const stickerType = String(sticker?.type || s.stickerType || "").toUpperCase();
 
   return {
-    id: s.id || s.storyId,
+    id,
     username: s.userName || s.username || s.viewerDto?.userName || "user",
     avatar: getFullImageUrl(s.userAvatar || s.viewerDto?.avatar),
     image: getFullImageUrl(mediaUrl) || DEFAULT_AVATAR,
@@ -136,27 +163,36 @@ export const formatBackendStory = (s: any): Story => {
     isLiked: !!(s.isLiked ?? s.viewerDto?.isLiked),
     reaction: s.reaction || s.viewerDto?.reaction || null,
     sticker: formatSticker(s),
-    mention: (s.stickerMentionUserId || s.mentionUserId || s.mention)
+    mention: stickerType === "MENTION" && sticker?.mentionedUserId
       ? {
-          userId: s.stickerMentionUserId || s.mentionUserId || s.mention?.userId || "",
-          username: s.mentionUsername || s.mention?.userName || s.mention?.username || "user",
+          userId: sticker.mentionedUserId,
+          username: s.mentionUsername || getCachedMentionUsername(id) || "",
         }
       : null,
-    musicTrack: rawTrack?.musicTrack
+    link: stickerType === "LINK" && sticker?.linkUrl
+      ? { url: sticker.linkUrl, label: sticker.linkLabel || "Ссылка" }
+      : null,
+    countdown: stickerType === "COUNTDOWN" && sticker?.countdownEndsAt
+      ? { endsAt: sticker.countdownEndsAt, label: sticker.countdownLabel || "Обратный отсчёт" }
+      : null,
+    stickerPosition: sticker
+      ? { x: sticker.x ?? 0.5, y: sticker.y ?? 0.5, scale: sticker.scale ?? 1, rotation: sticker.rotation ?? 0 }
+      : null,
+    sharedPost: s.sharedPost
       ? {
-          audioUrl: getFullImageUrl(rawTrack.musicTrack.audioUrl || rawTrack.musicTrack.url),
-          title: rawTrack.musicTrack.title || rawTrack.musicTrack.name || "Оригинальный звук",
-          artist: rawTrack.musicTrack.artist || "",
-          durationMs: rawTrack.musicTrack.durationMs || 0,
+          id: s.sharedPost.id || s.sharedPostId,
+          image: getFullImageUrl((s.sharedPost.images && s.sharedPost.images[0]) || s.sharedPost.image),
+          username: s.sharedPost.userName || s.sharedPost.username || "user",
         }
-      : (rawTrack?.audioUrl
-        ? {
-            audioUrl: getFullImageUrl(rawTrack.audioUrl),
-            title: rawTrack.audioTitle || rawTrack.audioName || "Оригинальный звук",
-            artist: rawTrack.audioArtist || "",
-            durationMs: 0,
-          }
-        : null),
+      : null,
+    musicTrack: s.audioUrl
+      ? {
+          audioUrl: getFullImageUrl(s.audioUrl),
+          title: s.audioTitle || s.audioName || "Оригинальный звук",
+          artist: s.audioArtist || "",
+          durationMs: s.audioDurationMs || 0,
+        }
+      : null,
   };
 };
 
@@ -214,36 +250,44 @@ export const createStory = createAsyncThunk(
       isForCloseFriends = false,
       sticker,
       mention,
+      link,
+      countdown,
       musicTrack,
+      stickerPosition,
     }: {
       file: File;
       postId?: number;
       isForCloseFriends?: boolean;
       sticker?: { type: StickerType; question: string; options?: string[] };
       mention?: { userId: string; username: string };
+      link?: { url: string; label?: string };
+      countdown?: { endsAt: string; label?: string };
       musicTrack?: { id: string; title: string; artist: string; audioUrl: string; coverUrl?: string; durationMs?: number } | null;
+      /** Tap-to-place position for the mention/poll/question sticker on the preview image. */
+      stickerPosition?: { x: number; y: number; scale?: number; rotation?: number } | null;
     },
     { dispatch, rejectWithValue }
   ) => {
     try {
-      // A mention sticker (#21) and a poll/question sticker are mutually exclusive.
+      // Exactly one sticker type ships per story.
       const stickerArg = mention
         ? { type: "MENTION" as const, mentionUserId: mention.userId, mentionUsername: mention.username }
+        : link
+        ? { type: "LINK" as const, url: link.url, label: link.label }
+        : countdown
+        ? { type: "COUNTDOWN" as const, endsAt: countdown.endsAt, label: countdown.label }
         : sticker;
-      const res = await api.story.addStory(file, postId, isForCloseFriends, stickerArg, musicTrack);
-      const secureUrl = typeof res === "string" ? res : res?.data || res?.secureUrl || "";
-      if (secureUrl && musicTrack && typeof window !== "undefined") {
-        try {
-          const registry = JSON.parse(localStorage.getItem("story_music_tracks") || "{}");
-          registry[secureUrl] = musicTrack;
-          localStorage.setItem("story_music_tracks", JSON.stringify(registry));
-        } catch (e) {
-          console.error("Failed to save story music to localStorage:", e);
-        }
+      // AddStories returns the full created story object (id, audio*, sticker incl. x/y/scale/rotation).
+      const created = await api.story.addStory(file, postId, isForCloseFriends, stickerArg, musicTrack, stickerPosition);
+
+      // The backend still doesn't echo the @mentioned user's display name — cache it locally,
+      // keyed by the real story id we now get back directly.
+      if (mention?.username && created?.id != null) {
+        setCachedMentionUsername(created.id, mention.username);
       }
+
       dispatch(fetchStories());
       dispatch(fetchMyStories());
-      return res;
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to create story.");
     }

@@ -258,7 +258,7 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
                         <button
                           onClick={() => respondToRequest(r.userId, true)}
                           disabled={busy[`req-${r.userId}`]}
-                          className="text-xs font-bold px-3 py-1.5 rounded-lg btn-grad press cursor-pointer disabled:opacity-60"
+                          className="text-xs font-bold px-3 py-1.5 rounded-lg btn-primary press cursor-pointer disabled:opacity-60"
                         >
                           Подтвердить
                         </button>
@@ -293,7 +293,13 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
                       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.isRead ? "bg-transparent" : "bg-blue-500"}`} />
 
                       <Link
-                        href={n.senderId ? `/u/${n.senderId}` : "#"}
+                        href={
+                          (n.type === "LIKE" || n.type === "COMMENT") && n.postId
+                            ? `/p/${n.postId}`
+                            : n.senderId
+                            ? `/u/${n.senderId}`
+                            : "#"
+                        }
                         onClick={onClose}
                         className="flex items-center gap-3 flex-1 min-w-0"
                       >
@@ -311,7 +317,9 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
                       </Link>
 
                       {n.postImage && (
-                        <SmartImage src={n.postImage} alt="post" width={88} height={88} sizes="44px" className="w-11 h-11 rounded-lg object-cover shadow-soft flex-shrink-0" />
+                        <Link href={n.postId ? `/p/${n.postId}` : "#"} onClick={onClose} className="flex-shrink-0">
+                          <SmartImage src={n.postImage} alt="post" width={88} height={88} sizes="44px" className="w-11 h-11 rounded-lg object-cover shadow-soft" />
+                        </Link>
                       )}
 
                       <button

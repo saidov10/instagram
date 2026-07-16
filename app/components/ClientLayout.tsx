@@ -8,6 +8,7 @@ import { useApp } from "../context/AppContext";
 import { logout, initializeToken, fetchMyProfile } from "../store/slices/authSlice";
 import { createPost, createReel } from "../store/slices/postsSlice";
 import { createStory } from "../store/slices/storiesSlice";
+import { fetchChats } from "../store/slices/chatsSlice";
 import { AppDispatch, RootState } from "../store/store";
 import { getStoredToken, api, getFullImageUrl } from "../services/api";
 import { ACTIVITY_PING_INTERVAL_MS } from "../lib/presence";
@@ -40,7 +41,10 @@ import {
   Globe,
   Check,
   Users,
-  AtSign
+  AtSign,
+  QrCode,
+  ShoppingBag,
+  Clock
 } from "lucide-react";
 
 /** One row of "Недавнее": either a visited profile or a raw text query. */
@@ -72,8 +76,10 @@ const formatSearchHistory = (h: any): SearchHistoryItem | null => {
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const dispatch = useDispatch<AppDispatch>();
-  const { theme, toggleTheme, isCreateOpen, setCreateOpen, createType, setCreateType } = useApp();
+  const { theme, toggleTheme, isCreateOpen, setCreateOpen, createType, setCreateType, remixTarget, setRemixTarget } = useApp();
   const { isLoggedIn, currentUser } = useSelector((state: RootState) => state.auth);
+  const { chats } = useSelector((state: RootState) => state.chats);
+  const unreadChatsCount = chats.filter((c) => c.unread).length;
   
   const pathname = usePathname();
   const router = useRouter();
@@ -101,9 +107,33 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [tagResults, setTagResults] = useState<any[]>([]);
   const [tagLoading, setTagLoading] = useState(false);
 
-  // Post advanced settings (#14 hide like count, #24 sensitive)
+  // Post advanced settings (#14 hide like count, #24 sensitive, age-restricted, story-sharing, close friends)
   const [postSensitive, setPostSensitive] = useState(false);
   const [postHideLikes, setPostHideLikes] = useState(false);
+  const [postAgeRestricted, setPostAgeRestricted] = useState(false);
+  const [postCloseFriendsOnly, setPostCloseFriendsOnly] = useState(false);
+
+  // Post location tagging
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [locationQuery, setLocationQuery] = useState("");
+  const [locationResults, setLocationResults] = useState<any[]>([]);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<{ id: number; label: string } | null>(null);
+
+  // Post product tags (shopping) — tap-to-place on the preview image
+  const [showProductTagger, setShowProductTagger] = useState(false);
+  const [productTags, setProductTags] = useState<{ name: string; price: number; currency: string; url?: string; x: number; y: number }[]>([]);
+  const [pendingTagPos, setPendingTagPos] = useState<{ x: number; y: number } | null>(null);
+  // Story sticker placement — POLL/QUESTION/MENTION are drawn wherever this is set; LINK/COUNTDOWN
+  // aren't spatial (they render as a fixed pill/box like the rest of the app).
+  const [stickerPos, setStickerPos] = useState<{ x: number; y: number } | null>(null);
+  const [pendingTagName, setPendingTagName] = useState("");
+  const [pendingTagPrice, setPendingTagPrice] = useState("");
+  const [pendingTagUrl, setPendingTagUrl] = useState("");
+
+  // Post scheduling
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [scheduledFor, setScheduledFor] = useState("");
 
   // Drafts (#18)
   const [drafts, setDrafts] = useState<any[]>([]);
@@ -114,7 +144,11 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [isForCloseFriends, setIsForCloseFriends] = useState(false);
 
   // Story-specific: optional interactive sticker (poll or open question)
-  const [stickerKind, setStickerKind] = useState<"NONE" | "POLL" | "QUESTION">("NONE");
+  const [stickerKind, setStickerKind] = useState<"NONE" | "POLL" | "QUESTION" | "LINK" | "COUNTDOWN">("NONE");
+  const [stickerLinkUrl, setStickerLinkUrl] = useState("");
+  const [stickerLinkLabel, setStickerLinkLabel] = useState("");
+  const [stickerCountdownEndsAt, setStickerCountdownEndsAt] = useState("");
+  const [stickerCountdownLabel, setStickerCountdownLabel] = useState("");
 
   // Story-specific: @mention sticker (#21)
   const [mentionUser, setMentionUser] = useState<{ id: string; username: string; avatar: string } | null>(null);
@@ -129,6 +163,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [showSearchPanel, setShowSearchPanel] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchHashtags, setSearchHashtags] = useState<any[]>([]);
+  const [searchLocations, setSearchLocations] = useState<any[]>([]);
+  const [searchFilter, setSearchFilter] = useState<"TOP" | "ACCOUNTS" | "TAGS" | "PLACES">("TOP");
   const [searchLoading, setSearchLoading] = useState(false);
   const [followingList, setFollowingList] = useState<any[]>([]);
 
@@ -139,6 +176,18 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   // Notifications panel
   const [showNotifPanel, setShowNotifPanel] = useState(false);
 
+  // One-time "Welcome back" toast after a deactivated/pending-deletion account auto-reactivates on login
+  const [reactivatedToast, setReactivatedToast] = useState(false);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (sessionStorage.getItem("ig_reactivated_welcome") === "1") {
+      sessionStorage.removeItem("ig_reactivated_welcome");
+      setReactivatedToast(true);
+      const t = setTimeout(() => setReactivatedToast(false), 5000);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
   // Load subscriptions when search panel opens to know follow status
   React.useEffect(() => {
     if (showSearchPanel && currentUser) {
@@ -148,28 +197,34 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     }
   }, [showSearchPanel, currentUser]);
 
-  // Debounced user search
+  // Debounced unified search (Top/Accounts/Tags/Places)
   React.useEffect(() => {
     if (!showSearchPanel) return;
     const q = searchQuery.trim();
     if (!q) {
       setSearchResults([]);
+      setSearchHashtags([]);
+      setSearchLocations([]);
       setSearchLoading(false);
       return;
     }
     setSearchLoading(true);
     const t = setTimeout(async () => {
       try {
-        const users = await api.user.getUsers({ userName: q });
-        setSearchResults(users || []);
+        const res = await api.search.unifiedSearch(q, searchFilter);
+        setSearchResults(res?.users || []);
+        setSearchHashtags(res?.hashtags || []);
+        setSearchLocations(res?.locations || []);
       } catch {
         setSearchResults([]);
+        setSearchHashtags([]);
+        setSearchLocations([]);
       } finally {
         setSearchLoading(false);
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [searchQuery, showSearchPanel]);
+  }, [searchQuery, showSearchPanel, searchFilter]);
 
   // Debounced user search for the "Tag people" / "Mention" pickers
   React.useEffect(() => {
@@ -193,6 +248,29 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     }, 350);
     return () => clearTimeout(t);
   }, [tagQuery, showTagPicker, showMentionPicker]);
+
+  // Debounced location search for the composer's "Add location" picker
+  React.useEffect(() => {
+    if (!showLocationPicker) return;
+    const q = locationQuery.trim();
+    if (!q) {
+      setLocationResults([]);
+      setLocationLoading(false);
+      return;
+    }
+    setLocationLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const results = await api.location.getLocations({ city: q });
+        setLocationResults(results || []);
+      } catch {
+        setLocationResults([]);
+      } finally {
+        setLocationLoading(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [locationQuery, showLocationPicker]);
 
   const toggleTaggedUser = (user: any) => {
     const uid = user.id || user.userId;
@@ -383,8 +461,16 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     };
   }, [isLoggedIn]);
 
+  // Poll the inbox so the "Сообщения" nav icon can show an unread badge from anywhere in the app.
+  React.useEffect(() => {
+    if (!isLoggedIn || !currentUser) return;
+    dispatch(fetchChats(currentUser.id));
+    const timer = setInterval(() => dispatch(fetchChats(currentUser.id)), 15000);
+    return () => clearInterval(timer);
+  }, [isLoggedIn, currentUser, dispatch]);
+
   // If on login or signup pages, just show content without sidebar/navs
-  if (pathname === "/login" || pathname === "/accounts/emailsignup") {
+  if (pathname === "/login" || pathname === "/accounts/emailsignup" || pathname === "/reset-password" || pathname?.startsWith("/live")) {
     return <>{children}</>;
   }
 
@@ -449,6 +535,11 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     setStickerKind("NONE");
     setStickerQuestion("");
     setPollOptions(["Да", "Нет"]);
+    setStickerLinkUrl("");
+    setStickerLinkLabel("");
+    setStickerCountdownEndsAt("");
+    setStickerCountdownLabel("");
+    setStickerPos(null);
     setMentionUser(null);
     setShowMentionPicker(false);
     setTaggedUsers([]);
@@ -458,9 +549,21 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     setTagResults([]);
     setPostSensitive(false);
     setPostHideLikes(false);
+    setPostAgeRestricted(false);
+    setPostCloseFriendsOnly(false);
+    setShowLocationPicker(false);
+    setLocationQuery("");
+    setLocationResults([]);
+    setSelectedLocation(null);
+    setShowProductTagger(false);
+    setProductTags([]);
+    setPendingTagPos(null);
+    setIsScheduling(false);
+    setScheduledFor("");
     setShowSaveDraftPrompt(false);
     setUploadSuccess(false);
     setUploadError(null);
+    setRemixTarget(null);
   };
 
   // Closing with an unpublished post/reel offers to keep it as a draft (#18).
@@ -499,7 +602,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           isForCloseFriends,
           sticker,
           mention: mentionUser ? { userId: mentionUser.id, username: mentionUser.username } : undefined,
+          link: stickerKind === "LINK" && stickerLinkUrl.trim() ? { url: stickerLinkUrl.trim(), label: stickerLinkLabel.trim() || undefined } : undefined,
+          countdown: stickerKind === "COUNTDOWN" && stickerCountdownEndsAt ? { endsAt: new Date(stickerCountdownEndsAt).toISOString(), label: stickerCountdownLabel.trim() || undefined } : undefined,
           musicTrack: finalTrack,
+          stickerPosition: (stickerKind === "POLL" || stickerKind === "QUESTION" || mentionUser) ? (stickerPos || { x: 0.5, y: 0.4 }) : undefined,
         })).unwrap();
       } else if (createType === "reel") {
         await dispatch(createReel({
@@ -508,9 +614,17 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           audioId: reelTrack?.id,
           audioName: reelTrack?.title,
           audioArtist: reelTrack?.artist,
+          remixOfPostId: remixTarget?.postId,
         })).unwrap();
+      } else if (isScheduling && scheduledFor) {
+        await api.post.schedulePost({
+          title: caption || "Instagram Post",
+          content: caption,
+          images: [imageFile],
+          scheduledFor: new Date(scheduledFor).toISOString(),
+        });
       } else {
-        await dispatch(createPost({
+        const created = await dispatch(createPost({
           title: caption || "Instagram Post",
           content: caption,
           images: [imageFile],
@@ -519,12 +633,22 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           collaboratorIds: Array.from(collaboratorIds),
           isSensitive: postSensitive,
           hideLikeCount: postHideLikes,
+          isForCloseFriends: postCloseFriendsOnly,
+          locationId: selectedLocation?.id,
+          productTags: productTags.length > 0 ? productTags : undefined,
         })).unwrap();
+        const newPostId = created?.id;
+        if (postAgeRestricted && newPostId) {
+          await api.post.toggleAgeRestricted(newPostId, true).catch(() => {});
+        }
       }
 
       setIsUploading(false);
       setUploadSuccess(true);
-      const targetPath = createType === "reel" ? "/reels" : (createType === "story" ? "/" : "/profile");
+      const targetPath =
+        createType === "reel" ? "/reels" :
+        createType === "story" ? "/" :
+        (isScheduling && scheduledFor) ? "/scheduled" : "/profile";
       setTimeout(() => {
         resetCreateModal();
         router.push(targetPath);
@@ -537,6 +661,11 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   };
 
   const handleLogout = () => {
+    const pushToken = localStorage.getItem("instagram_push_token");
+    if (pushToken) {
+      api.notification.unregisterPushToken(pushToken).catch(() => {});
+      localStorage.removeItem("instagram_push_token");
+    }
     dispatch(logout());
     setShowMoreMenu(false);
     router.push("/login");
@@ -571,6 +700,16 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
   return (
     <div className="h-screen flex flex-col md:flex-row text-black dark:text-white transition-colors duration-200">
+
+      {/* ----------------- WELCOME BACK TOAST (account auto-reactivated on login) ----------------- */}
+      {reactivatedToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] glass-strong rounded-xl px-5 py-3 shadow-soft-lg animate-fade-up flex items-center gap-3">
+          <span className="text-sm font-semibold">Welcome back, your account is active again</span>
+          <button onClick={() => setReactivatedToast(false)} className="text-zinc-400 hover:text-current cursor-pointer">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* ----------------- DESKTOP & TABLET SIDEBAR ----------------- */}
       <aside className="group/sidebar hidden md:block w-[72px] shrink-0 h-screen sticky top-0 z-40">
@@ -623,7 +762,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           }`}
                         />
                       ) : (
-                        <Icon className={`w-6 h-6 shrink-0 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
+                        <span className="relative shrink-0">
+                          <Icon className={`w-6 h-6 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
+                          {item.label === "Сообщения" && unreadChatsCount > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-[#ED4956] text-white text-[10px] font-bold flex items-center justify-center">
+                              {unreadChatsCount > 9 ? "9+" : unreadChatsCount}
+                            </span>
+                          )}
+                        </span>
                       )}
                       <span className={`${labelReveal} ${isActive ? "font-bold" : "font-normal"}`}>
                         {item.label}
@@ -646,7 +792,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           }`}
                         />
                       ) : (
-                        <Icon className={`w-6 h-6 shrink-0 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
+                        <span className="relative shrink-0">
+                          <Icon className={`w-6 h-6 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
+                          {item.label === "Сообщения" && unreadChatsCount > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-[#ED4956] text-white text-[10px] font-bold flex items-center justify-center">
+                              {unreadChatsCount > 9 ? "9+" : unreadChatsCount}
+                            </span>
+                          )}
+                        </span>
                       )}
                       <span className={`${labelReveal} ${isActive ? "font-bold" : "font-normal"}`}>
                         {item.label}
@@ -687,6 +840,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               >
                 <Settings className="w-5 h-5" />
                 Настройки
+              </Link>
+              <Link
+                href="/qr"
+                onClick={() => setShowMoreMenu(false)}
+                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-sm font-medium transition"
+              >
+                <QrCode className="w-5 h-5" />
+                QR-код
               </Link>
               <hr className="my-2 border-zinc-200 dark:border-zinc-800" />
               <button
@@ -743,6 +904,26 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               </button>
             )}
           </div>
+          {searchQuery.trim() && (
+            <div className="flex gap-1.5 mb-4">
+              {([
+                { key: "TOP", label: "Топ" },
+                { key: "ACCOUNTS", label: "Аккаунты" },
+                { key: "TAGS", label: "Теги" },
+                { key: "PLACES", label: "Места" },
+              ] as const).map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setSearchFilter(f.key)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold cursor-pointer transition ${
+                    searchFilter === f.key ? "bg-black text-white dark:bg-white dark:text-black" : "glass hover:shadow-soft"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
           <hr className="border-zinc-200 dark:border-zinc-800 mb-4" />
           <div className="flex-1 overflow-y-auto no-scrollbar">
             {!searchQuery.trim() ? (
@@ -822,12 +1003,47 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   </div>
                 ))}
               </div>
-            ) : searchResults.length === 0 ? (
+            ) : searchResults.length === 0 && searchHashtags.length === 0 && searchLocations.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-600 select-none">
                 <span className="text-sm font-medium">Ничего не найдено.</span>
               </div>
             ) : (
               <div className="flex flex-col gap-3">
+                {searchHashtags.length > 0 && (
+                  <div className="flex flex-col gap-1 mb-2">
+                    {searchHashtags.map((h: any) => {
+                      const tag = typeof h === "string" ? h : h.tag || h.hashtag || h.name;
+                      return (
+                        <Link
+                          key={tag}
+                          href={`/explore/tags/${encodeURIComponent(tag)}`}
+                          onClick={() => setShowSearchPanel(false)}
+                          className="flex items-center gap-3 py-1.5 hover:opacity-75"
+                        >
+                          <span className="w-11 h-11 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0 font-bold text-zinc-500"># </span>
+                          <span className="text-sm font-semibold">#{tag}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {searchLocations.length > 0 && (
+                  <div className="flex flex-col gap-1 mb-2">
+                    {searchLocations.map((loc: any) => (
+                      <Link
+                        key={loc.locationId || loc.id}
+                        href={`/explore/locations/${loc.locationId || loc.id}`}
+                        onClick={() => setShowSearchPanel(false)}
+                        className="flex items-center gap-3 py-1.5 hover:opacity-75"
+                      >
+                        <span className="w-11 h-11 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                          <MapPin className="w-4.5 h-4.5 text-zinc-500" />
+                        </span>
+                        <span className="text-sm font-semibold">{[loc.city, loc.country].filter(Boolean).join(", ")}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
                 {searchResults.map((user: any) => {
                   const uid = user.id || user.userId || "";
                   const uname = user.userName || user.username || "user";
@@ -949,7 +1165,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                         <button
                           onClick={() => toggleCollaborator(uid)}
                           className={`text-[10px] font-bold px-2 py-1 rounded-full flex-shrink-0 transition cursor-pointer ${
-                            isCollab ? "btn-grad text-white" : "glass text-zinc-500"
+                            isCollab ? "btn-primary" : "glass text-zinc-500"
                           }`}
                           title="Пригласить как соавтора"
                         >
@@ -1193,12 +1409,21 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   {isUploading ? "Делимся..." : uploadSuccess ? "Поделено" : "Поделиться"}
                 </button>
               ) : (
-                <button
-                  onClick={() => { refreshDrafts(); setShowDrafts(true); }}
-                  className="text-sm font-semibold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
-                >
-                  Черновики
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => { refreshDrafts(); setShowDrafts(true); }}
+                    className="text-sm font-semibold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
+                  >
+                    Черновики
+                  </button>
+                  <Link
+                    href="/scheduled"
+                    onClick={() => setCreateOpen(false)}
+                    className="text-sm font-semibold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
+                  >
+                    Запланировано
+                  </Link>
+                </div>
               )}
             </div>
 
@@ -1224,12 +1449,106 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                       className="w-full h-full max-h-[50vh] md:max-h-[70vh] object-contain"
                     />
                   ) : (
-                    <SmartImage
-                      src={selectedImage}
-                      alt="Preview"
-                      sizes="(max-width: 768px) 100vw, 600px"
-                      className="w-full h-full max-h-[50vh] md:max-h-[70vh] object-contain"
-                    />
+                    <div
+                      className="relative w-full h-full max-h-[50vh] md:max-h-[70vh]"
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const pos = {
+                          x: (e.clientX - rect.left) / rect.width,
+                          y: (e.clientY - rect.top) / rect.height,
+                        };
+                        if (createType === "story" && (stickerKind === "POLL" || stickerKind === "QUESTION" || mentionUser)) {
+                          setStickerPos(pos);
+                          return;
+                        }
+                        if (!showProductTagger) return;
+                        setPendingTagPos(pos);
+                        setPendingTagName("");
+                        setPendingTagPrice("");
+                        setPendingTagUrl("");
+                      }}
+                    >
+                      <SmartImage
+                        src={selectedImage}
+                        alt="Preview"
+                        fill
+                        sizes="(max-width: 768px) 100vw, 600px"
+                        className={`object-contain ${showProductTagger || (createType === "story" && (stickerKind === "POLL" || stickerKind === "QUESTION" || mentionUser)) ? "cursor-crosshair" : ""}`}
+                      />
+                      {createType === "story" && (stickerKind === "POLL" || stickerKind === "QUESTION" || mentionUser) && (
+                        <div
+                          className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none px-3 py-1.5 rounded-full glass-strong text-xs font-bold shadow-soft-lg animate-pop-in"
+                          style={{ left: `${(stickerPos?.x ?? 0.5) * 100}%`, top: `${(stickerPos?.y ?? 0.4) * 100}%` }}
+                        >
+                          {mentionUser ? `@${mentionUser.username}` : stickerKind === "POLL" ? "📊 Опрос" : "❓ Вопрос"}
+                        </div>
+                      )}
+                      {showProductTagger && productTags.map((tag, i) => (
+                        <div
+                          key={i}
+                          className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full bg-white border-2 border-black shadow"
+                          style={{ left: `${tag.x * 100}%`, top: `${tag.y * 100}%` }}
+                          title={tag.name}
+                        />
+                      ))}
+                      {showProductTagger && pendingTagPos && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="absolute z-10 w-56 glass-strong rounded-xl shadow-soft-lg p-3 flex flex-col gap-2"
+                          style={{
+                            left: `${Math.min(pendingTagPos.x * 100, 70)}%`,
+                            top: `${Math.min(pendingTagPos.y * 100, 70)}%`,
+                          }}
+                        >
+                          <input
+                            autoFocus
+                            value={pendingTagName}
+                            onChange={(e) => setPendingTagName(e.target.value)}
+                            placeholder="Название товара"
+                            className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs outline-none"
+                          />
+                          <input
+                            value={pendingTagPrice}
+                            onChange={(e) => setPendingTagPrice(e.target.value)}
+                            placeholder="Цена (USD)"
+                            inputMode="decimal"
+                            className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs outline-none"
+                          />
+                          <input
+                            value={pendingTagUrl}
+                            onChange={(e) => setPendingTagUrl(e.target.value)}
+                            placeholder="Ссылка (необязательно)"
+                            className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs outline-none"
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <button onClick={() => setPendingTagPos(null)} className="text-xs text-zinc-450 cursor-pointer">
+                              Отмена
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (!pendingTagName.trim()) return;
+                                setProductTags((prev) => [
+                                  ...prev,
+                                  {
+                                    name: pendingTagName.trim(),
+                                    price: parseFloat(pendingTagPrice) || 0,
+                                    currency: "USD",
+                                    url: pendingTagUrl.trim() || undefined,
+                                    x: pendingTagPos.x,
+                                    y: pendingTagPos.y,
+                                  },
+                                ]);
+                                setPendingTagPos(null);
+                              }}
+                              disabled={!pendingTagName.trim()}
+                              className="text-xs font-bold text-blue-500 disabled:opacity-50 cursor-pointer"
+                            >
+                              Добавить
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )
                 ) : (
                   <div className="flex flex-col items-center text-center">
@@ -1280,7 +1599,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                         <button
                           onClick={() => setIsForCloseFriends(false)}
                           className={`flex items-center gap-3 p-3 rounded-2xl text-left transition cursor-pointer ${
-                            !isForCloseFriends ? "btn-grad text-white" : "glass hover:shadow-soft"
+                            !isForCloseFriends ? "btn-primary" : "glass hover:shadow-soft"
                           }`}
                         >
                           <Globe className="w-5 h-5 flex-shrink-0" />
@@ -1295,11 +1614,11 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           onClick={() => setIsForCloseFriends(true)}
                           className={`flex items-center gap-3 p-3 rounded-2xl text-left transition cursor-pointer ${
                             isForCloseFriends
-                              ? "bg-green-500 text-white"
+                              ? "btn-primary"
                               : "glass hover:shadow-soft"
                           }`}
                         >
-                          <Star className={`w-5 h-5 flex-shrink-0 ${isForCloseFriends ? "fill-white" : "fill-green-500 text-green-500"}`} />
+                          <Star className={`w-5 h-5 flex-shrink-0 fill-green-500 text-green-500`} />
                           <div className="flex flex-col">
                             <span className="text-sm font-semibold">Для близких друзей</span>
                             <span className={`text-[11px] ${isForCloseFriends ? "text-white/80" : "text-zinc-450"}`}>
@@ -1320,18 +1639,24 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           { kind: "NONE", label: "Без стикера" },
                           { kind: "POLL", label: "Опрос" },
                           { kind: "QUESTION", label: "Вопрос" },
+                          { kind: "LINK", label: "Ссылка" },
+                          { kind: "COUNTDOWN", label: "Отсчёт" },
                         ] as const).map(({ kind, label }) => (
                           <button
                             key={kind}
                             onClick={() => setStickerKind(kind)}
                             className={`flex-1 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                              stickerKind === kind ? "btn-grad text-white" : "glass hover:shadow-soft"
+                              stickerKind === kind ? "btn-primary" : "glass hover:shadow-soft"
                             }`}
                           >
                             {label}
                           </button>
                         ))}
                       </div>
+
+                      {(stickerKind === "POLL" || stickerKind === "QUESTION" || mentionUser) && (
+                        <span className="text-[11px] text-zinc-450">Нажмите на фото слева, чтобы разместить стикер.</span>
+                      )}
 
                       {/* Mention sticker (#21) */}
                       {mentionUser ? (
@@ -1351,7 +1676,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                         </button>
                       )}
 
-                      {stickerKind !== "NONE" && (
+                      {(stickerKind === "POLL" || stickerKind === "QUESTION") && (
                         <div className="flex flex-col gap-2 animate-in fade-in duration-200">
                           <input
                             type="text"
@@ -1383,6 +1708,44 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                               ))}
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {stickerKind === "LINK" && (
+                        <div className="flex flex-col gap-2 animate-in fade-in duration-200">
+                          <input
+                            type="text"
+                            value={stickerLinkUrl}
+                            onChange={(e) => setStickerLinkUrl(e.target.value)}
+                            placeholder="https://..."
+                            className="w-full glass rounded-xl px-3 py-2.5 text-sm outline-none text-zinc-900 dark:text-white"
+                          />
+                          <input
+                            type="text"
+                            value={stickerLinkLabel}
+                            onChange={(e) => setStickerLinkLabel(e.target.value)}
+                            placeholder="Подпись (необязательно)"
+                            className="w-full glass rounded-xl px-3 py-2.5 text-sm outline-none text-zinc-900 dark:text-white"
+                          />
+                        </div>
+                      )}
+
+                      {stickerKind === "COUNTDOWN" && (
+                        <div className="flex flex-col gap-2 animate-in fade-in duration-200">
+                          <input
+                            type="datetime-local"
+                            value={stickerCountdownEndsAt}
+                            min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                            onChange={(e) => setStickerCountdownEndsAt(e.target.value)}
+                            className="w-full glass rounded-xl px-3 py-2.5 text-sm outline-none text-zinc-900 dark:text-white"
+                          />
+                          <input
+                            type="text"
+                            value={stickerCountdownLabel}
+                            onChange={(e) => setStickerCountdownLabel(e.target.value)}
+                            placeholder="Название события"
+                            className="w-full glass rounded-xl px-3 py-2.5 text-sm outline-none text-zinc-900 dark:text-white"
+                          />
                         </div>
                       )}
 
@@ -1450,6 +1813,15 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                     </>
                   ) : (
                     <>
+                      {createType === "reel" && remixTarget && (
+                        <div className="flex items-center justify-between gap-2 glass rounded-2xl px-3.5 py-2.5">
+                          <span className="text-xs font-semibold">Ремикс на @{remixTarget.username}</span>
+                          <button onClick={() => setRemixTarget(null)} className="hover:text-red-500 cursor-pointer">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+
                       {/* Caption input */}
                       <textarea
                         rows={4}
@@ -1509,10 +1881,89 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                         </>
                       ) : (
                         <>
-                          <div className="flex items-center justify-between text-sm text-zinc-500">
-                            <span className="font-medium text-zinc-900 dark:text-zinc-200">Добавить местоположение</span>
-                            <MapPin className="w-4 h-4" />
-                          </div>
+                          {/* Location */}
+                          <button
+                            onClick={() => setShowLocationPicker((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer hover:opacity-75 transition"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">
+                              {selectedLocation ? selectedLocation.label : "Добавить местоположение"}
+                            </span>
+                            <MapPin className="w-4 h-4 text-zinc-500" />
+                          </button>
+                          {selectedLocation && (
+                            <span className="flex items-center gap-1.5 glass rounded-full pl-3 pr-2 py-1 text-xs font-semibold w-fit">
+                              {selectedLocation.label}
+                              <button onClick={() => setSelectedLocation(null)} className="hover:text-red-500 cursor-pointer">
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          )}
+                          {showLocationPicker && !selectedLocation && (
+                            <div className="flex flex-col gap-2">
+                              <input
+                                autoFocus
+                                value={locationQuery}
+                                onChange={(e) => setLocationQuery(e.target.value)}
+                                placeholder="Поиск города…"
+                                className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                              />
+                              <div className="max-h-32 overflow-y-auto flex flex-col gap-1">
+                                {locationLoading ? (
+                                  <span className="text-xs text-zinc-450">Поиск…</span>
+                                ) : locationResults.length === 0 && locationQuery.trim() ? (
+                                  <span className="text-xs text-zinc-450">Не найдено.</span>
+                                ) : (
+                                  locationResults.map((loc) => (
+                                    <button
+                                      key={loc.locationId || loc.id}
+                                      onClick={() => {
+                                        setSelectedLocation({
+                                          id: loc.locationId || loc.id,
+                                          label: [loc.city, loc.country].filter(Boolean).join(", "),
+                                        });
+                                        setShowLocationPicker(false);
+                                      }}
+                                      className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+                                    >
+                                      {[loc.city, loc.state, loc.country].filter(Boolean).join(", ")}
+                                    </button>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <hr className="border-zinc-200 dark:border-zinc-800" />
+
+                          {/* Product tags (shopping) */}
+                          <button
+                            onClick={() => setShowProductTagger((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer hover:opacity-75 transition"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">
+                              Отметить товары
+                              {productTags.length > 0 && <span className="text-zinc-400 font-normal"> · {productTags.length}</span>}
+                            </span>
+                            <ShoppingBag className="w-4 h-4 text-zinc-500" />
+                          </button>
+                          {showProductTagger && (
+                            <span className="text-[11px] text-zinc-450">Нажмите на фото слева, чтобы разместить метку товара.</span>
+                          )}
+                          {productTags.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {productTags.map((t, i) => (
+                                <span key={i} className="flex items-center gap-1.5 glass rounded-full pl-2.5 pr-2 py-1 text-xs font-semibold">
+                                  {t.name} · ${t.price}
+                                  <button
+                                    onClick={() => setProductTags((prev) => prev.filter((_, idx) => idx !== i))}
+                                    className="hover:text-red-500 cursor-pointer"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           <hr className="border-zinc-200 dark:border-zinc-800" />
 
                           {/* Tag people */}
@@ -1568,6 +2019,49 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                               <span className="w-4 h-4 rounded-full bg-white" />
                             </span>
                           </button>
+                          <button
+                            onClick={() => setPostAgeRestricted((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">Возрастное ограничение 18+</span>
+                            <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${postAgeRestricted ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                              <span className="w-4 h-4 rounded-full bg-white" />
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => setPostCloseFriendsOnly((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200 flex items-center gap-1.5">
+                              <Star className="w-3.5 h-3.5 fill-green-500 text-green-500" /> Только близкие друзья
+                            </span>
+                            <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${postCloseFriendsOnly ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                              <span className="w-4 h-4 rounded-full bg-white" />
+                            </span>
+                          </button>
+                          <hr className="border-zinc-200 dark:border-zinc-800" />
+
+                          {/* Schedule for later */}
+                          <button
+                            onClick={() => setIsScheduling((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200 flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5" /> Запланировать публикацию
+                            </span>
+                            <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${isScheduling ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                              <span className="w-4 h-4 rounded-full bg-white" />
+                            </span>
+                          </button>
+                          {isScheduling && (
+                            <input
+                              type="datetime-local"
+                              value={scheduledFor}
+                              min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                              onChange={(e) => setScheduledFor(e.target.value)}
+                              className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                            />
+                          )}
                           <hr className="border-zinc-200 dark:border-zinc-800" />
                         </>
                       )}
