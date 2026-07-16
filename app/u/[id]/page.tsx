@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useSelector } from "react-redux";
-import { Grid, Heart, MessageCircle, Lock, X, MoreHorizontal, EyeOff, Eye, Ban, Flag } from "lucide-react";
+import { Grid, Heart, MessageCircle, Lock, X, MoreHorizontal, EyeOff, Eye, Ban, Flag, UserX, VolumeX, ChevronLeft } from "lucide-react";
 import { RootState } from "../../store/store";
 import { api, getFullImageUrl, ApiError } from "../../services/api";
 import { ProfileSkeleton } from "../../components/SkeletonLoader";
@@ -50,10 +50,13 @@ export default function UserProfilePage() {
   const [forbidden, setForbidden] = useState(false);
   const [selectedPost, setSelectedPost] = useState<GridPost | null>(null);
 
-  // Options menu (block / hide stories / report)
+  // Options menu (block / hide stories / report / restrict / mute)
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [isHidingStoriesFrom, setIsHidingStoriesFrom] = useState(false);
+  const [isRestricted, setIsRestricted] = useState(false);
+  const [muteType, setMuteType] = useState<"NONE" | "ALL" | "POSTS" | "STORIES">("NONE");
+  const [showMuteSubmenu, setShowMuteSubmenu] = useState(false);
   const [optionsBusy, setOptionsBusy] = useState(false);
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
 
@@ -127,6 +130,20 @@ export default function UserProfilePage() {
     if (!userId) return;
     api.story.getHiddenUsers()
       .then((list) => setIsHidingStoriesFrom((list || []).some((u: any) => (u.id || u.userId) === userId)))
+      .catch(() => {});
+  }, [userId]);
+
+  // Load restrict / mute status separately (not fatal if it fails).
+  useEffect(() => {
+    if (!userId) return;
+    api.user.getRestrictedUsers()
+      .then((list) => setIsRestricted((list || []).some((u: any) => (u.id || u.userId) === userId)))
+      .catch(() => {});
+    api.user.getMutedUsers()
+      .then((list) => {
+        const entry = (list || []).find((u: any) => (u.id || u.userId) === userId);
+        setMuteType(entry ? (entry.muteType || "ALL") : "NONE");
+      })
       .catch(() => {});
   }, [userId]);
 
@@ -210,6 +227,61 @@ export default function UserProfilePage() {
     }
   };
 
+  const handleToggleRestrict = async () => {
+    if (!userId || optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      if (isRestricted) {
+        await api.user.unrestrictUser(userId);
+        setIsRestricted(false);
+      } else {
+        await api.user.restrictUser(userId);
+        setIsRestricted(true);
+      }
+    } catch (err) {
+      console.error("Failed to toggle restrict:", err);
+    } finally {
+      setOptionsBusy(false);
+      setShowOptionsMenu(false);
+    }
+  };
+
+  // Toggling a mute dimension: choosing the currently-active one lifts it, and
+  // when neither posts nor stories remain muted we call unmute.
+  const handleToggleMute = async (dimension: "POSTS" | "STORIES") => {
+    if (!userId || optionsBusy) return;
+    const posts = muteType === "ALL" || muteType === "POSTS";
+    const stories = muteType === "ALL" || muteType === "STORIES";
+    const next = {
+      POSTS: !posts,
+      STORIES: !stories,
+    };
+    if (dimension === "POSTS") next.POSTS = !posts;
+    if (dimension === "STORIES") next.STORIES = !stories;
+
+    let target: "NONE" | "ALL" | "POSTS" | "STORIES";
+    if (next.POSTS && next.STORIES) target = "ALL";
+    else if (next.POSTS) target = "POSTS";
+    else if (next.STORIES) target = "STORIES";
+    else target = "NONE";
+
+    setOptionsBusy(true);
+    const prev = muteType;
+    setMuteType(target);
+    try {
+      if (target === "NONE") {
+        await api.user.unmuteUser(userId);
+      } else {
+        await api.user.muteUser(userId, target);
+      }
+    } catch (err) {
+      console.error("Failed to update mute:", err);
+      setMuteType(prev);
+    } finally {
+      setOptionsBusy(false);
+    }
+  };
+
   if (loading) return <ProfileSkeleton />;
 
   if (forbidden) {
@@ -284,34 +356,91 @@ export default function UserProfilePage() {
                 </button>
                 {showOptionsMenu && (
                   <div className="absolute right-0 top-full mt-2 w-64 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-20 animate-pop-in">
-                    <button
-                      onClick={handleToggleHideStories}
-                      disabled={optionsBusy}
-                      className="w-full flex items-center gap-3 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
-                    >
-                      {isHidingStoriesFrom ? <Eye className="w-4.5 h-4.5" /> : <EyeOff className="w-4.5 h-4.5" />}
-                      {isHidingStoriesFrom ? "Показать мои истории" : "Скрыть мои истории от этого пользователя"}
-                    </button>
-                    <hr className="border-[var(--border)]" />
-                    <button
-                      onClick={() => {
-                        setReportTarget({ type: "USER", id: userId! });
-                        setShowOptionsMenu(false);
-                      }}
-                      className="w-full flex items-center gap-3 p-3.5 text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition cursor-pointer text-left"
-                    >
-                      <Flag className="w-4.5 h-4.5" />
-                      Пожаловаться
-                    </button>
-                    <hr className="border-[var(--border)]" />
-                    <button
-                      onClick={handleToggleBlock}
-                      disabled={optionsBusy}
-                      className="w-full flex items-center gap-3 p-3.5 text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition cursor-pointer text-left"
-                    >
-                      <Ban className="w-4.5 h-4.5" />
-                      {isBlocked ? "Разблокировать" : "Заблокировать"}
-                    </button>
+                    {showMuteSubmenu ? (
+                      <>
+                        <button
+                          onClick={() => setShowMuteSubmenu(false)}
+                          className="w-full flex items-center gap-2 p-3.5 text-sm font-bold hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                        >
+                          <ChevronLeft className="w-4.5 h-4.5" />
+                          Скрыть
+                        </button>
+                        <hr className="border-[var(--border)]" />
+                        <button
+                          onClick={() => handleToggleMute("POSTS")}
+                          disabled={optionsBusy}
+                          className="w-full flex items-center justify-between p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                        >
+                          <span>Публикации</span>
+                          <span className={`w-9 h-5 rounded-full flex items-center transition ${muteType === "ALL" || muteType === "POSTS" ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"} p-0.5`}>
+                            <span className="w-4 h-4 rounded-full bg-white" />
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => handleToggleMute("STORIES")}
+                          disabled={optionsBusy}
+                          className="w-full flex items-center justify-between p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                        >
+                          <span>Истории</span>
+                          <span className={`w-9 h-5 rounded-full flex items-center transition ${muteType === "ALL" || muteType === "STORIES" ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"} p-0.5`}>
+                            <span className="w-4 h-4 rounded-full bg-white" />
+                          </span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={handleToggleHideStories}
+                          disabled={optionsBusy}
+                          className="w-full flex items-center gap-3 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                        >
+                          {isHidingStoriesFrom ? <Eye className="w-4.5 h-4.5" /> : <EyeOff className="w-4.5 h-4.5" />}
+                          {isHidingStoriesFrom ? "Показать мои истории" : "Скрыть мои истории от этого пользователя"}
+                        </button>
+                        <hr className="border-[var(--border)]" />
+                        <button
+                          onClick={() => setShowMuteSubmenu(true)}
+                          className="w-full flex items-center gap-3 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                        >
+                          <VolumeX className="w-4.5 h-4.5" />
+                          Скрыть
+                          {muteType !== "NONE" && (
+                            <span className="ml-auto text-xs text-zinc-400">
+                              {muteType === "ALL" ? "Всё" : muteType === "POSTS" ? "Публикации" : "Истории"}
+                            </span>
+                          )}
+                        </button>
+                        <hr className="border-[var(--border)]" />
+                        <button
+                          onClick={handleToggleRestrict}
+                          disabled={optionsBusy}
+                          className="w-full flex items-center gap-3 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                        >
+                          <UserX className="w-4.5 h-4.5" />
+                          {isRestricted ? "Отменить ограничение" : "Ограничить"}
+                        </button>
+                        <hr className="border-[var(--border)]" />
+                        <button
+                          onClick={() => {
+                            setReportTarget({ type: "USER", id: userId! });
+                            setShowOptionsMenu(false);
+                          }}
+                          className="w-full flex items-center gap-3 p-3.5 text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition cursor-pointer text-left"
+                        >
+                          <Flag className="w-4.5 h-4.5" />
+                          Пожаловаться
+                        </button>
+                        <hr className="border-[var(--border)]" />
+                        <button
+                          onClick={handleToggleBlock}
+                          disabled={optionsBusy}
+                          className="w-full flex items-center gap-3 p-3.5 text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition cursor-pointer text-left"
+                        >
+                          <Ban className="w-4.5 h-4.5" />
+                          {isBlocked ? "Разблокировать" : "Заблокировать"}
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

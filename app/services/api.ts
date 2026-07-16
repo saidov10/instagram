@@ -289,8 +289,20 @@ export const api = {
       return request(`/Post/get-post-by-id?id=${id}`);
     },
 
-    async getMyPosts(): Promise<any[]> {
-      const res = await request<any>("/Post/get-my-posts");
+    async getMyPosts(includeArchived = false): Promise<any[]> {
+      const res = await request<any>(
+        `/Post/get-my-posts${includeArchived ? "?includeArchived=true" : ""}`
+      );
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async getArchivedPosts(): Promise<any[]> {
+      const res = await request<any>("/Post/get-archived-posts");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async getTaggedPosts(userId: string): Promise<any[]> {
+      const res = await request<any>(`/Post/get-tagged-posts?userId=${userId}`);
       return Array.isArray(res) ? res : res?.data || [];
     },
 
@@ -308,12 +320,22 @@ export const api = {
       return Array.isArray(res) ? res : res?.data || [];
     },
 
-    async addPost(data: { title: string; content: string; images: File[]; isReel?: boolean }): Promise<any> {
+    async addPost(data: {
+      title: string;
+      content: string;
+      images: File[];
+      isReel?: boolean;
+      taggedUserIds?: string[];
+    }): Promise<any> {
       const formData = new FormData();
       formData.append("Title", data.title);
       formData.append("Content", data.content);
       if (data.isReel) {
         formData.append("isReel", "true");
+      }
+      // The backend binds a single JSON-array string of user ids.
+      if (data.taggedUserIds && data.taggedUserIds.length > 0) {
+        formData.append("taggedUserIds", JSON.stringify(data.taggedUserIds));
       }
       data.images.forEach((img) => {
         formData.append("Images", img);
@@ -322,6 +344,21 @@ export const api = {
       return request("/Post/add-post", {
         method: "POST",
         body: formData,
+      });
+    },
+
+    /** Edit a post's caption (owner only). Hashtags are recomputed server-side. */
+    async updatePost(data: { postId: number; title?: string; content?: string }): Promise<any> {
+      return request("/Post/update-post", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+    },
+
+    /** Hide/unhide a post from feeds without deleting it (owner only). */
+    async archivePost(postId: number, isArchived: boolean): Promise<any> {
+      return request(`/Post/archive-post?postId=${postId}&isArchived=${isArchived}`, {
+        method: "PUT",
       });
     },
 
@@ -549,8 +586,31 @@ export const api = {
     },
 
     async createChat(receiverUserId: string): Promise<any> {
+      // Returns a chat whose status is 'PENDING' (recipient doesn't follow you back)
+      // or 'ACCEPTED'. Pending chats land in the recipient's message requests.
       return request(`/Chat/create-chat?receiverUserId=${receiverUserId}`, {
         method: "POST",
+      });
+    },
+
+    /** Incoming pending message requests (for the recipient). */
+    async getMessageRequests(): Promise<any[]> {
+      const res = await request<any>("/Chat/get-message-requests");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    /** Accept a request: the chat moves to the normal inbox. */
+    async acceptMessageRequest(chatId: number): Promise<any> {
+      return request("/Chat/accept-message-request", {
+        method: "PUT",
+        body: JSON.stringify({ chatId }),
+      });
+    },
+
+    /** Decline a request: the chat and its messages are deleted. */
+    async declineMessageRequest(chatId: number): Promise<any> {
+      return request(`/Chat/decline-message-request?chatId=${chatId}`, {
+        method: "DELETE",
       });
     },
 
@@ -750,6 +810,12 @@ export const api = {
       });
     },
 
+    /** People to follow, ranked by mutual followers; excludes already-followed/blocked/self. */
+    async getSuggestedUsers(limit = 20): Promise<any[]> {
+      const res = await request<any>(`/User/get-suggested-users?limit=${limit}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
     /**
      * Records a recent search: a visited profile (`searchedUserId`) or a raw query (`queryText`).
      */
@@ -820,6 +886,42 @@ export const api = {
 
     async getBlockedUsers(): Promise<any[]> {
       const res = await request<any>("/User/get-blocked-users");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    // --- RESTRICT (item 7): hides the target's comments from everyone but the two of you ---
+    async restrictUser(restrictedId: string): Promise<any> {
+      return request(`/User/restrict-user?restrictedId=${restrictedId}`, {
+        method: "POST",
+      });
+    },
+
+    async unrestrictUser(restrictedId: string): Promise<any> {
+      return request(`/User/unrestrict-user?restrictedId=${restrictedId}`, {
+        method: "DELETE",
+      });
+    },
+
+    async getRestrictedUsers(): Promise<any[]> {
+      const res = await request<any>("/User/get-restricted-users");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    // --- MUTE (item 12): hide posts/stories without unfollowing ---
+    async muteUser(mutedUserId: string, muteType: "ALL" | "POSTS" | "STORIES"): Promise<any> {
+      return request(`/User/mute-user?mutedUserId=${mutedUserId}&muteType=${muteType}`, {
+        method: "POST",
+      });
+    },
+
+    async unmuteUser(mutedUserId: string): Promise<any> {
+      return request(`/User/unmute-user?mutedUserId=${mutedUserId}`, {
+        method: "DELETE",
+      });
+    },
+
+    async getMutedUsers(): Promise<any[]> {
+      const res = await request<any>("/User/get-muted-users");
       return Array.isArray(res) ? res : res?.data || [];
     },
 

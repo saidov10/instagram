@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { UserCheck, UserPlus, ArrowLeft } from "lucide-react";
 import SmartImage from "../../components/SmartImage";
+import { api, getFullImageUrl } from "../../services/api";
 
 interface Suggestion {
-  id: number;
+  id: string | number;
+  userId: string;
   username: string;
   name: string;
   avatar: string;
@@ -14,64 +17,63 @@ interface Suggestion {
   followed: boolean;
 }
 
+const formatSuggestion = (u: any, idx: number): Suggestion => {
+  const mutual = u.mutualFollowersCount ?? u.mutualFollowers ?? 0;
+  return {
+    id: u.id || u.userId || idx,
+    userId: u.id || u.userId || "",
+    username: u.userName || u.username || "user",
+    name: u.name || u.fullName || "",
+    avatar: getFullImageUrl(u.avatar || u.imagePath),
+    reason:
+      mutual > 0
+        ? `${mutual} ${mutual === 1 ? "общий подписчик" : "общих подписчиков"}`
+        : u.about || "Рекомендации для вас",
+    followed: false,
+  };
+};
+
 export default function SuggestionsPage() {
   const router = useRouter();
 
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([
-    {
-      id: 1,
-      username: "Ten_hood",
-      name: "Teymur H.",
-      avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120&h=120&fit=crop",
-      reason: "Подписаны: m.ibrohim и еще 3 человек",
-      followed: false
-    },
-    {
-      id: 2,
-      username: "malrlll7",
-      name: "Malika Rasulova",
-      avatar: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=120&h=120&fit=crop",
-      reason: "Рекомендации для вас",
-      followed: false
-    },
-    {
-      id: 3,
-      username: "#011",
-      name: "Ali Sherov",
-      avatar: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=120&h=120&fit=crop",
-      reason: "Подписаны: ilolov77 и еще 1 человек",
-      followed: false
-    },
-    {
-      id: 4,
-      username: "amira_3o_",
-      name: "Amira",
-      avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop",
-      reason: "Подписан(-а): _abrorov",
-      followed: false
-    },
-    {
-      id: 5,
-      username: "s.nazarov",
-      name: "Siyovush Nazarov",
-      avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&h=120&fit=crop",
-      reason: "Новый аккаунт на Instagram",
-      followed: false
-    },
-    {
-      id: 6,
-      username: "islom_id",
-      name: "Ислам Идигов",
-      avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&h=120&fit=crop",
-      reason: "Рекомендовано вам",
-      followed: false
-    }
-  ]);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const handleFollowToggle = (id: number) => {
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const users = await api.user.getSuggestedUsers(20);
+        if (active) setSuggestions((users || []).map(formatSuggestion));
+      } catch (err) {
+        console.error("Failed to load suggested users:", err);
+        if (active) setSuggestions([]);
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleFollowToggle = async (sug: Suggestion) => {
+    // Optimistic flip; revert on failure.
     setSuggestions((prev) =>
-      prev.map((sug) => (sug.id === id ? { ...sug, followed: !sug.followed } : sug))
+      prev.map((s) => (s.id === sug.id ? { ...s, followed: !s.followed } : s))
     );
+    try {
+      if (sug.followed) {
+        await api.following.unfollow(sug.userId);
+      } else {
+        await api.following.follow(sug.userId);
+      }
+    } catch (err) {
+      console.error("Failed to toggle follow:", err);
+      setSuggestions((prev) =>
+        prev.map((s) => (s.id === sug.id ? { ...s, followed: sug.followed } : s))
+      );
+    }
   };
 
   return (
@@ -96,12 +98,22 @@ export default function SuggestionsPage() {
         </div>
 
         <div className="flex flex-col">
-          {suggestions.map((sug) => (
+          {loading ? (
+            <p className="text-center text-sm text-zinc-400 py-16">Загрузка…</p>
+          ) : suggestions.length === 0 ? (
+            <p className="text-center text-sm text-zinc-400 py-16 px-6">
+              Пока нет рекомендаций. Подпишитесь на кого-нибудь, чтобы получить персональные советы.
+            </p>
+          ) : (
+            suggestions.map((sug) => (
             <div
               key={sug.id}
               className="flex items-center justify-between p-4 border-b border-zinc-100 dark:border-zinc-900/60 last:border-b-0"
             >
-              <div className="flex items-center gap-4.5 min-w-0 flex-1">
+              <Link
+                href={sug.userId ? `/u/${sug.userId}` : "#"}
+                className="flex items-center gap-4.5 min-w-0 flex-1"
+              >
                 <SmartImage
                   src={sug.avatar}
                   alt={sug.username}
@@ -109,22 +121,27 @@ export default function SuggestionsPage() {
                   height={96}
                   sizes="48px"
                   className="w-12 h-12 rounded-full object-cover border border-zinc-200 dark:border-zinc-800 flex-shrink-0"
+                  fallback={
+                    <div className="w-12 h-12 rounded-full bg-zinc-200 dark:bg-zinc-800 flex-shrink-0" />
+                  }
                 />
                 <div className="flex flex-col min-w-0 flex-1">
                   <span className="font-bold text-sm hover:underline cursor-pointer truncate">
                     {sug.username}
                   </span>
-                  <span className="text-zinc-400 dark:text-zinc-550 text-xs font-normal truncate">
-                    {sug.name}
-                  </span>
+                  {sug.name && (
+                    <span className="text-zinc-400 dark:text-zinc-550 text-xs font-normal truncate">
+                      {sug.name}
+                    </span>
+                  )}
                   <span className="text-zinc-500 dark:text-zinc-450 text-[10px] truncate mt-0.5">
                     {sug.reason}
                   </span>
                 </div>
-              </div>
+              </Link>
 
               <button
-                onClick={() => handleFollowToggle(sug.id)}
+                onClick={() => handleFollowToggle(sug)}
                 className={`font-bold text-xs px-5 py-2.5 rounded-lg cursor-pointer transition select-none flex items-center gap-1.5 ${
                   sug.followed
                     ? "bg-zinc-100 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 hover:opacity-80"
@@ -144,7 +161,8 @@ export default function SuggestionsPage() {
                 )}
               </button>
             </div>
-          ))}
+          ))
+          )}
         </div>
       </div>
 

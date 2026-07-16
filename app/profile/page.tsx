@@ -16,7 +16,10 @@ import {
   Smile,
   Music,
   Trash2,
-  Pencil
+  Pencil,
+  Clock,
+  UserSquare,
+  ArchiveRestore
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import { fetchMyProfile } from "../store/slices/authSlice";
@@ -24,6 +27,9 @@ import {
   fetchMyPosts,
   fetchPostFavorites,
   fetchSavedAudios,
+  fetchArchivedPosts,
+  fetchTaggedPosts,
+  archivePost,
   toggleLikePost,
   addPostFavorite,
   addComment,
@@ -42,9 +48,9 @@ export default function ProfilePage() {
   const dispatch = useDispatch<AppDispatch>();
   const { setCreateOpen } = useApp();
   const { currentUser, profileLoading, isLoggedIn } = useSelector((state: RootState) => state.auth);
-  const { myPosts, savedPosts, savedAudios } = useSelector((state: RootState) => state.posts);
+  const { myPosts, savedPosts, savedAudios, archivedPosts, taggedPosts } = useSelector((state: RootState) => state.posts);
 
-  const [activeTab, setActiveTab] = useState<"posts" | "saved" | "audios">("posts");
+  const [activeTab, setActiveTab] = useState<"posts" | "saved" | "audios" | "tagged" | "archived">("posts");
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
   const [newComment, setNewComment] = useState("");
 
@@ -61,6 +67,8 @@ export default function ProfilePage() {
       dispatch(fetchMyPosts());
       dispatch(fetchPostFavorites({}));
       dispatch(fetchSavedAudios());
+      dispatch(fetchArchivedPosts());
+      dispatch(fetchTaggedPosts(currentUser.id));
 
       // Fetch followers & following
       const loadRelations = async () => {
@@ -91,8 +99,18 @@ export default function ProfilePage() {
   }, [isLoggedIn, currentUser, dispatch]);
 
   const selectedPost =
-    myPosts.find((p) => p.id === selectedPostId) || savedPosts.find((p) => p.id === selectedPostId);
+    myPosts.find((p) => p.id === selectedPostId) ||
+    savedPosts.find((p) => p.id === selectedPostId) ||
+    taggedPosts.find((p) => p.id === selectedPostId);
   const isSelectedFromSaved = !myPosts.some((p) => p.id === selectedPostId) && !!selectedPost;
+
+  const handleUnarchive = async (postId: number) => {
+    try {
+      await dispatch(archivePost({ postId, isArchived: false })).unwrap();
+    } catch (err) {
+      console.error("Failed to unarchive post:", err);
+    }
+  };
 
   const handleLikePostDetail = (id: number) => {
     dispatch(toggleLikePost(id));
@@ -110,6 +128,15 @@ export default function ProfilePage() {
   const handleUnsave = (postId: number) => {
     dispatch(addPostFavorite(postId));
     setSelectedPostId(null);
+  };
+
+  const handleArchiveFromDetail = async (postId: number) => {
+    try {
+      await dispatch(archivePost({ postId, isArchived: true })).unwrap();
+      setSelectedPostId(null);
+    } catch (err) {
+      console.error("Failed to archive post:", err);
+    }
   };
 
   const handleDeletePost = async (postId: number) => {
@@ -180,6 +207,13 @@ export default function ProfilePage() {
               </button>
             </div>
             <button
+              onClick={() => setActiveTab(activeTab === "archived" ? "posts" : "archived")}
+              title="Архив"
+              className={`p-1 cursor-pointer ${activeTab === "archived" ? "text-black dark:text-white" : "hover:text-zinc-500"}`}
+            >
+              <Clock className="w-6 h-6 stroke-[1.5px]" />
+            </button>
+            <button
               onClick={() => router.push("/settings")}
               className="p-1 hover:text-zinc-500 cursor-pointer"
             >
@@ -247,6 +281,17 @@ export default function ProfilePage() {
           >
             <Music className="w-4 h-4" />
             <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Звуки</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("tagged")}
+            className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
+              activeTab === "tagged"
+                ? "border-black dark:border-white text-black dark:text-white"
+                : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
+            }`}
+          >
+            <UserSquare className="w-4 h-4" />
+            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Отмеченные</span>
           </button>
         </div>
 
@@ -352,6 +397,69 @@ export default function ProfilePage() {
                   {audio.audioUrl && (
                     <audio src={audio.audioUrl} controls className="h-9 max-w-[220px] flex-shrink-0" />
                   )}
+                </div>
+              ))}
+            </div>
+          )
+        )}
+
+        {activeTab === "tagged" && (
+          taggedPosts.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-4">
+              <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                <UserSquare className="w-8 h-8" />
+              </div>
+              <h3 className="text-2xl font-bold">Фото с вами</h3>
+              <p className="text-sm text-zinc-400 max-w-xs">
+                Когда вас отметят на фото, эти публикации появятся здесь.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-1 md:gap-7">
+              {taggedPosts.map((post) => (
+                <div
+                  key={post.id}
+                  onClick={() => setSelectedPostId(post.id)}
+                  className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                >
+                  <SmartImage src={post.image} alt="Tagged" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-105" />
+                  <div className="absolute top-2 right-2 text-white drop-shadow">
+                    <UserSquare className="w-5 h-5" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+
+        {activeTab === "archived" && (
+          archivedPosts.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-4">
+              <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                <Clock className="w-8 h-8" />
+              </div>
+              <h3 className="text-2xl font-bold">Архив пуст</h3>
+              <p className="text-sm text-zinc-400 max-w-xs">
+                Архивированные публикации видны только вам и не отображаются в профиле.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-1 md:gap-7">
+              {archivedPosts.map((post) => (
+                <div
+                  key={post.id}
+                  className="relative aspect-square group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                >
+                  <SmartImage src={post.image} alt="Archived" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover" />
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition duration-200 flex items-center justify-center">
+                    <button
+                      onClick={() => handleUnarchive(post.id)}
+                      className="flex items-center gap-1.5 bg-white/90 text-black text-xs font-bold px-3 py-2 rounded-full hover:bg-white cursor-pointer"
+                    >
+                      <ArchiveRestore className="w-4 h-4" />
+                      Показать в профиле
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -514,13 +622,22 @@ export default function ProfilePage() {
                     </button>
                   </div>
                   {!isSelectedFromSaved ? (
-                    <button
-                      onClick={() => handleDeletePost(selectedPost.id)}
-                      className="text-xs font-bold text-red-500 hover:text-red-400 cursor-pointer flex items-center gap-1.5"
-                      title="Удалить публикацию"
-                    >
-                      <Trash2 className="w-4 h-4" /> Удалить
-                    </button>
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={() => handleArchiveFromDetail(selectedPost.id)}
+                        className="text-xs font-bold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer flex items-center gap-1.5"
+                        title="Архивировать публикацию"
+                      >
+                        <Clock className="w-4 h-4" /> Архивировать
+                      </button>
+                      <button
+                        onClick={() => handleDeletePost(selectedPost.id)}
+                        className="text-xs font-bold text-red-500 hover:text-red-400 cursor-pointer flex items-center gap-1.5"
+                        title="Удалить публикацию"
+                      >
+                        <Trash2 className="w-4 h-4" /> Удалить
+                      </button>
+                    </div>
                   ) : (
                     <button
                       onClick={() => handleUnsave(selectedPost.id)}

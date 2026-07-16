@@ -143,10 +143,18 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
   const remoteRef = useRef<HTMLDivElement | null>(null);
   const localRef = useRef<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
+<<<<<<< HEAD
   // Latest onEnded, so the Agora event handlers (set up once inside the join effect) can end
   // the call without capturing a stale prop.
   const onEndedRef = useRef(onEnded);
   onEndedRef.current = onEnded;
+=======
+  // Guards the join effect so it runs exactly once per call. Using state (`joining`/`joined`)
+  // as the guard is a trap: setJoining(true) fires inside the effect, and if that state is in
+  // the dependency array the effect re-runs, its cleanup flips `cancelled`, and the original
+  // join() bails at its first `if (cancelled) return` — leaving the UI stuck on "Подключение…".
+  const joinStartedRef = useRef(false);
+>>>>>>> 0d5a517b0aa0973d785b6494174abdefbd0ec543
 
   const [joining, setJoining] = useState(false);
   const [joined, setJoined] = useState(false);
@@ -201,7 +209,8 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
 
   // ---- Agora join once we reach the connected phase ----
   useEffect(() => {
-    if (phase !== "connected" || joined || joining) return;
+    if (phase !== "connected" || joinStartedRef.current) return;
+    joinStartedRef.current = true;
 
     let cancelled = false;
 
@@ -307,7 +316,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
     return () => {
       cancelled = true;
     };
-  }, [phase, joined, joining, appId, call.channelName, call.rtcToken, call.type, call.uid]);
+  }, [phase, appId, call.channelName, call.rtcToken, call.type, call.uid]);
 
   // Always release the mic/camera when this panel unmounts.
   useEffect(() => {

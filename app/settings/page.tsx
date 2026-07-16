@@ -7,7 +7,7 @@ import { logout, updateProfile, updateAvatar, fetchMyProfile, updatePrivacy } fr
 import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
 import { api, getFullImageUrl } from "../services/api";
-import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone } from "lucide-react";
+import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone, UserX, VolumeX } from "lucide-react";
 import Avatar from "../components/Avatar";
 
 interface DeviceSession {
@@ -92,6 +92,8 @@ export default function SettingsPage() {
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [hiddenUsers, setHiddenUsers] = useState<any[]>([]);
+  const [restrictedUsers, setRestrictedUsers] = useState<any[]>([]);
+  const [mutedUsers, setMutedUsers] = useState<any[]>([]);
 
   // Login activity / device sessions
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
@@ -115,6 +117,12 @@ export default function SettingsPage() {
     api.story.getHiddenUsers()
       .then((list) => setHiddenUsers(list || []))
       .catch(() => setHiddenUsers([]));
+    api.user.getRestrictedUsers()
+      .then((list) => setRestrictedUsers(list || []))
+      .catch(() => setRestrictedUsers([]));
+    api.user.getMutedUsers()
+      .then((list) => setMutedUsers(list || []))
+      .catch(() => setMutedUsers([]));
   }, [activeSection]);
 
   useEffect(() => {
@@ -232,6 +240,24 @@ export default function SettingsPage() {
     try {
       await api.story.unhideStoryFrom(userId);
       setHiddenUsers((prev) => prev.filter((u) => (u.id || u.userId) !== userId));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUnrestrict = async (userId: string) => {
+    try {
+      await api.user.unrestrictUser(userId);
+      setRestrictedUsers((prev) => prev.filter((u) => (u.id || u.userId) !== userId));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUnmute = async (userId: string) => {
+    try {
+      await api.user.unmuteUser(userId);
+      setMutedUsers((prev) => prev.filter((u) => (u.id || u.userId) !== userId));
     } catch (err) {
       console.error(err);
     }
@@ -775,6 +801,80 @@ export default function SettingsPage() {
                         className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft cursor-pointer"
                       >
                         Показать снова
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Restricted accounts */}
+          <div>
+            <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+              <UserX className="w-4.5 h-4.5" /> Ограниченные аккаунты
+            </h3>
+            {restrictedUsers.length === 0 ? (
+              <p className="text-sm text-zinc-450">У вас нет ограниченных пользователей.</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {restrictedUsers.map((u) => {
+                  const uid = u.id || u.userId;
+                  return (
+                    <div key={uid} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Avatar
+                          src={getFullImageUrl(u.avatar || u.imagePath)}
+                          name={u.userName || u.username}
+                          className="w-10 h-10 border border-zinc-200 dark:border-zinc-800"
+                        />
+                        <span className="font-semibold text-sm">{u.userName || u.username}</span>
+                      </div>
+                      <button
+                        onClick={() => handleUnrestrict(uid)}
+                        className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft cursor-pointer"
+                      >
+                        Отменить
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Muted accounts */}
+          <div>
+            <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+              <VolumeX className="w-4.5 h-4.5" /> Скрытые аккаунты
+            </h3>
+            {mutedUsers.length === 0 ? (
+              <p className="text-sm text-zinc-450">Вы никого не скрывали.</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {mutedUsers.map((u) => {
+                  const uid = u.id || u.userId;
+                  const mt = u.muteType || "ALL";
+                  return (
+                    <div key={uid} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Avatar
+                          src={getFullImageUrl(u.avatar || u.imagePath)}
+                          name={u.userName || u.username}
+                          className="w-10 h-10 border border-zinc-200 dark:border-zinc-800"
+                        />
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-sm">{u.userName || u.username}</span>
+                          <span className="text-xs text-zinc-450">
+                            {mt === "ALL" ? "Публикации и истории" : mt === "POSTS" ? "Публикации" : "Истории"}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleUnmute(uid)}
+                        className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft cursor-pointer"
+                      >
+                        Показать
                       </button>
                     </div>
                   );

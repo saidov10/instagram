@@ -16,7 +16,8 @@ import {
   Star,
   Flag,
   MessageCircleOff,
-  Trash2
+  Trash2,
+  UserX
 } from "lucide-react";
 import { AppDispatch, RootState } from "./store/store";
 import {
@@ -28,6 +29,8 @@ import {
   togglePostComments,
   fetchComments,
   deleteComment,
+  updatePostCaption,
+  archivePost,
   Post
 } from "./store/slices/postsSlice";
 import {
@@ -81,6 +84,12 @@ export default function HomeFeed() {
   const [copied, setCopied] = useState(false);
   const [commentsBusy, setCommentsBusy] = useState(false);
 
+  // Edit-caption modal (owner only)
+  const [editPostId, setEditPostId] = useState<number | null>(null);
+  const [editCaption, setEditCaption] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const editPost = posts.find((p) => p.id === editPostId) || null;
+
   // Reporting (post / comment / story)
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
 
@@ -100,6 +109,18 @@ export default function HomeFeed() {
 
   const handleDeleteComment = (postId: number, commentId: number) => {
     dispatch(deleteComment({ postId, commentId }));
+  };
+
+  const [restrictedFromComment, setRestrictedFromComment] = useState<Set<string>>(new Set());
+
+  const handleRestrictFromComment = async (userId: string) => {
+    if (!userId) return;
+    try {
+      await api.user.restrictUser(userId);
+      setRestrictedFromComment((prev) => new Set(prev).add(userId));
+    } catch (err) {
+      console.error("Failed to restrict user:", err);
+    }
   };
 
   const handleAddCommentModal = (postId: number, e: React.FormEvent) => {
@@ -130,6 +151,34 @@ export default function HomeFeed() {
     setMenuPostId(null);
   };
 
+  const handleOpenEdit = (post: Post) => {
+    setEditPostId(post.id);
+    setEditCaption(post.caption || "");
+    setMenuPostId(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (editPostId === null || editBusy) return;
+    setEditBusy(true);
+    try {
+      await dispatch(updatePostCaption({ postId: editPostId, caption: editCaption.trim() })).unwrap();
+      setEditPostId(null);
+    } catch (err) {
+      console.error("Failed to update caption:", err);
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
+  const handleArchivePost = async (post: Post) => {
+    setMenuPostId(null);
+    try {
+      await dispatch(archivePost({ postId: post.id, isArchived: true })).unwrap();
+    } catch (err) {
+      console.error("Failed to archive post:", err);
+    }
+  };
+
   const handleToggleComments = async (post: Post) => {
     if (commentsBusy) return;
     setCommentsBusy(true);
@@ -152,15 +201,27 @@ export default function HomeFeed() {
       // Fetch suggestions
       const loadSuggestions = async () => {
         try {
-          const users = await api.user.getUsers({ pageSize: 5 });
-          const formatted = (users || []).map((u: any, idx: number) => ({
-            id: u.id || u.userId || idx,
-            userId: u.id || u.userId || "",
-            username: u.userName || u.username || "user",
-            avatar: getFullImageUrl(u.avatar || u.imagePath) || "",
-            subtitle: u.about || "Suggested for you",
-            followed: false
-          }));
+          // Ranked by mutual followers; falls back to a plain user list if unavailable.
+          let users: any[];
+          try {
+            users = await api.user.getSuggestedUsers(20);
+          } catch {
+            users = await api.user.getUsers({ pageSize: 5 });
+          }
+          const formatted = (users || []).map((u: any, idx: number) => {
+            const mutual = u.mutualFollowersCount ?? u.mutualFollowers ?? 0;
+            return {
+              id: u.id || u.userId || idx,
+              userId: u.id || u.userId || "",
+              username: u.userName || u.username || "user",
+              avatar: getFullImageUrl(u.avatar || u.imagePath) || "",
+              subtitle:
+                mutual > 0
+                  ? `${mutual} ${mutual === 1 ? "общий подписчик" : "общих подписчиков"}`
+                  : u.about || "Рекомендуем для вас",
+              followed: false,
+            };
+          });
           setSuggestions(formatted);
         } catch {
           // Fallback static suggestions if fails
@@ -226,6 +287,49 @@ export default function HomeFeed() {
       console.error(err);
     }
   };
+
+  // Horizontal "Suggestions for you" card row injected into the feed (Instagram-style).
+  const renderSuggestionsRow = () => (
+    <div className="border border-[var(--border)] rounded-xl overflow-hidden animate-fade-up">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-900/60">
+        <span className="text-sm font-semibold">Рекомендации для вас</span>
+        <Link href="/explore/people" className="text-xs font-semibold text-blue-500 hover:text-blue-300">
+          Смотреть все
+        </Link>
+      </div>
+      <div className="flex gap-3 overflow-x-auto no-scrollbar p-3">
+        {suggestions.slice(0, 10).map((sug) => (
+          <div
+            key={`row-${sug.id}`}
+            className="flex flex-col items-center gap-2 w-36 flex-shrink-0 border border-zinc-100 dark:border-zinc-900/60 rounded-xl p-3 text-center"
+          >
+            <Link href={sug.userId ? `/u/${sug.userId}` : "#"} className="shrink-0">
+              <Avatar src={sug.avatar} name={sug.username} className="w-16 h-16" />
+            </Link>
+            <Link
+              href={sug.userId ? `/u/${sug.userId}` : "#"}
+              className="font-semibold text-xs truncate max-w-full hover:opacity-60"
+            >
+              {sug.username}
+            </Link>
+            <span className="text-zinc-500 dark:text-zinc-400 text-[10px] leading-tight line-clamp-2 min-h-[24px]">
+              {sug.subtitle}
+            </span>
+            <button
+              onClick={() => handleFollowSuggestion(sug.id)}
+              className={`w-full font-semibold text-xs rounded-lg py-1.5 transition-colors cursor-pointer ${
+                sug.followed
+                  ? "glass text-black dark:text-white"
+                  : "btn-grad text-white hover:opacity-90"
+              }`}
+            >
+              {sug.followed ? "Подписан" : "Подписаться"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex-1 flex max-w-[935px] mx-auto w-full px-4 md:py-8 justify-between gap-16 select-none text-black dark:text-white transition-colors duration-200">
@@ -340,13 +444,14 @@ export default function HomeFeed() {
               <p className="text-sm text-zinc-500 mt-2 px-6">Ваша лента пока пуста. Подпишитесь на кого-нибудь, чтобы видеть их посты.</p>
             </div>
           ) : (
-            posts.map((post) => {
-              const authorStory = stories.find((s) => s.userId === post.userId) || 
+            posts.map((post, postIndex) => {
+              const authorStory = stories.find((s) => s.userId === post.userId) ||
                                   (post.userId === currentUser?.id && myStories.length > 0 ? myStories[0] : null);
               return (
+                <React.Fragment key={post.id}>
+                {postIndex === 2 && suggestions.length > 0 && renderSuggestionsRow()}
                 <article
-                  key={post.id}
-                  className="card lift md:rounded-3xl rounded-2xl overflow-hidden flex flex-col w-full animate-fade-up"
+                  className="border border-[var(--border)] rounded-xl overflow-hidden flex flex-col w-full animate-fade-up bg-transparent"
                 >
                   {/* Header */}
                   <div className="flex items-center justify-between p-3">
@@ -566,6 +671,7 @@ export default function HomeFeed() {
                   </div>
                 )}
               </article>
+              </React.Fragment>
             ); })
           )}
         </div>
@@ -675,6 +781,22 @@ export default function HomeFeed() {
             )}
             {isOwnMenuPost && (
               <button
+                onClick={() => handleOpenEdit(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Редактировать
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handleArchivePost(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Архивировать
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
                 onClick={() => handleToggleComments(menuPost)}
                 disabled={commentsBusy}
                 className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-60"
@@ -714,6 +836,52 @@ export default function HomeFeed() {
             >
               Отмена
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- EDIT CAPTION MODAL ----------------- */}
+      {editPost && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-60 flex items-center justify-center p-4"
+          onClick={() => !editBusy && setEditPostId(null)}
+        >
+          <div
+            className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <button
+                onClick={() => setEditPostId(null)}
+                disabled={editBusy}
+                className="text-sm text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer disabled:opacity-60"
+              >
+                Отмена
+              </button>
+              <span className="text-sm font-bold">Редактировать</span>
+              <button
+                onClick={handleSaveEdit}
+                disabled={editBusy}
+                className="text-sm font-bold text-blue-500 hover:text-blue-300 cursor-pointer disabled:opacity-60"
+              >
+                {editBusy ? "Сохранение…" : "Готово"}
+              </button>
+            </div>
+            <div className="flex gap-3 p-4">
+              <SmartImage
+                src={editPost.image}
+                alt=""
+                className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
+              />
+              <textarea
+                value={editCaption}
+                onChange={(e) => setEditCaption(e.target.value)}
+                placeholder="Добавьте подпись…"
+                rows={4}
+                autoFocus
+                className="flex-1 bg-transparent text-sm resize-none outline-none placeholder:text-zinc-400"
+              />
+            </div>
           </div>
         </div>
       )}
@@ -791,16 +959,29 @@ export default function HomeFeed() {
                       <span className="text-[10px] text-zinc-400 mt-1 block">Just now</span>
                     </div>
 
-                    {/* Delete action */}
-                    {currentUser && (comment.userId === currentUser.id || activeCommentsPost.userId === currentUser.id) && (
-                      <button
-                        onClick={() => handleDeleteComment(activeCommentsPost.id, comment.id)}
-                        className="p-1 hover:text-red-500 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer text-zinc-400 flex-shrink-0 animate-in fade-in"
-                        title="Удалить комментарий"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Restrict action — for other people's comments */}
+                      {currentUser && comment.userId && comment.userId !== currentUser.id && (
+                        <button
+                          onClick={() => handleRestrictFromComment(comment.userId)}
+                          disabled={restrictedFromComment.has(comment.userId)}
+                          className="p-1 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer text-zinc-400 hover:text-black dark:hover:text-white animate-in fade-in disabled:opacity-40 disabled:cursor-default"
+                          title={restrictedFromComment.has(comment.userId) ? "Пользователь ограничен" : "Ограничить пользователя"}
+                        >
+                          <UserX className="w-4 h-4" />
+                        </button>
+                      )}
+                      {/* Delete action */}
+                      {currentUser && (comment.userId === currentUser.id || activeCommentsPost.userId === currentUser.id) && (
+                        <button
+                          onClick={() => handleDeleteComment(activeCommentsPost.id, comment.id)}
+                          className="p-1 hover:text-red-500 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer text-zinc-400 animate-in fade-in"
+                          title="Удалить комментарий"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))
               )}

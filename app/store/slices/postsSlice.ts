@@ -7,6 +7,12 @@ export interface Comment {
   text: string;
 }
 
+export interface TaggedUser {
+  userId: string;
+  username: string;
+  avatar: string;
+}
+
 export interface Post {
   id: number;
   userId: string;
@@ -23,6 +29,8 @@ export interface Post {
   comments: Comment[];
   collabUser?: string;
   isVerified?: boolean;
+  isArchived?: boolean;
+  taggedUsers?: TaggedUser[];
 }
 
 export interface SavedAudio {
@@ -37,6 +45,8 @@ interface PostsState {
   reels: any[];
   myPosts: Post[];
   savedPosts: Post[];
+  archivedPosts: Post[];
+  taggedPosts: Post[];
   savedAudios: SavedAudio[];
   loading: boolean;
   error: string | null;
@@ -47,6 +57,8 @@ const initialState: PostsState = {
   reels: [],
   myPosts: [],
   savedPosts: [],
+  archivedPosts: [],
+  taggedPosts: [],
   savedAudios: [],
   loading: false,
   error: null,
@@ -72,6 +84,12 @@ export const formatBackendPost = (p: any): Post => {
     isSaved: !!p.isSaved,
     // Comments are open unless the author explicitly disabled them.
     allowComments: p.allowComments !== false,
+    isArchived: !!p.isArchived,
+    taggedUsers: (p.taggedUsers || p.tags || []).map((t: any): TaggedUser => ({
+      userId: t.userId || t.id || "",
+      username: t.userName || t.username || "user",
+      avatar: getFullImageUrl(t.userAvatar || t.avatar || t.userImage),
+    })),
     comments: (p.comments || []).map((c: any) => ({
       id: c.id || c.commentId,
       userId: c.userId || "",
@@ -194,7 +212,7 @@ export const saveAudio = createAsyncThunk(
 
 export const createPost = createAsyncThunk(
   "posts/create",
-  async (data: { title: string; content: string; images: File[]; isReel?: boolean }, { dispatch, rejectWithValue }) => {
+  async (data: { title: string; content: string; images: File[]; isReel?: boolean; taggedUserIds?: string[] }, { dispatch, rejectWithValue }) => {
     try {
       const res = await api.post.addPost(data);
       dispatch(fetchFollowingPosts({}));
@@ -298,6 +316,54 @@ export const deletePost = createAsyncThunk(
       return postId;
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to delete post.");
+    }
+  }
+);
+
+export const updatePostCaption = createAsyncThunk(
+  "posts/updateCaption",
+  async ({ postId, caption }: { postId: number; caption: string }, { rejectWithValue }) => {
+    try {
+      await api.post.updatePost({ postId, title: caption, content: caption });
+      return { postId, caption };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to update post.");
+    }
+  }
+);
+
+export const archivePost = createAsyncThunk(
+  "posts/archive",
+  async ({ postId, isArchived }: { postId: number; isArchived: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.archivePost(postId, isArchived);
+      return { postId, isArchived };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to archive post.");
+    }
+  }
+);
+
+export const fetchArchivedPosts = createAsyncThunk(
+  "posts/fetchArchived",
+  async (_, { rejectWithValue }) => {
+    try {
+      const list = await api.post.getArchivedPosts();
+      return list.map(formatBackendPost);
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to load archived posts.");
+    }
+  }
+);
+
+export const fetchTaggedPosts = createAsyncThunk(
+  "posts/fetchTagged",
+  async (userId: string, { rejectWithValue }) => {
+    try {
+      const list = await api.post.getTaggedPosts(userId);
+      return list.map(formatBackendPost);
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to load tagged posts.");
     }
   }
 );
@@ -429,6 +495,47 @@ const postsSlice = createSlice({
         state.posts = state.posts.filter((p) => p.id !== action.payload);
         state.myPosts = state.myPosts.filter((p) => p.id !== action.payload);
         state.savedPosts = state.savedPosts.filter((p) => p.id !== action.payload);
+        state.archivedPosts = state.archivedPosts.filter((p) => p.id !== action.payload);
+      })
+
+      // Edit caption
+      .addCase(updatePostCaption.fulfilled, (state, action) => {
+        const { postId, caption } = action.payload;
+        [state.posts, state.myPosts, state.savedPosts, state.archivedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) post.caption = caption;
+        });
+      })
+
+      // Archive / unarchive
+      .addCase(archivePost.fulfilled, (state, action) => {
+        const { postId, isArchived } = action.payload;
+        if (isArchived) {
+          // Moving a post into the archive hides it from every visible feed.
+          const moved = state.myPosts.find((p) => p.id === postId);
+          state.posts = state.posts.filter((p) => p.id !== postId);
+          state.myPosts = state.myPosts.filter((p) => p.id !== postId);
+          if (moved && !state.archivedPosts.some((p) => p.id === postId)) {
+            state.archivedPosts.unshift({ ...moved, isArchived: true });
+          }
+        } else {
+          // Restoring pulls it back onto the profile grid.
+          const moved = state.archivedPosts.find((p) => p.id === postId);
+          state.archivedPosts = state.archivedPosts.filter((p) => p.id !== postId);
+          if (moved && !state.myPosts.some((p) => p.id === postId)) {
+            state.myPosts.unshift({ ...moved, isArchived: false });
+          }
+        }
+      })
+
+      // Fetch archived posts
+      .addCase(fetchArchivedPosts.fulfilled, (state, action: PayloadAction<Post[]>) => {
+        state.archivedPosts = action.payload;
+      })
+
+      // Fetch tagged posts
+      .addCase(fetchTaggedPosts.fulfilled, (state, action: PayloadAction<Post[]>) => {
+        state.taggedPosts = action.payload;
       });
   },
 });
