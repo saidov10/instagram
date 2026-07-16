@@ -19,7 +19,13 @@ import {
   Pencil,
   Clock,
   UserSquare,
-  ArchiveRestore
+  ArchiveRestore,
+  ChevronLeft,
+  BarChart3,
+  Eye,
+  TrendingUp,
+  ChevronDown,
+  Plus as PlusIcon
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import { fetchMyProfile } from "../store/slices/authSlice";
@@ -29,11 +35,15 @@ import {
   fetchSavedAudios,
   fetchArchivedPosts,
   fetchTaggedPosts,
+  fetchCollections,
+  createCollection,
+  deleteCollection,
   archivePost,
   toggleLikePost,
   addPostFavorite,
   addComment,
   deletePost,
+  Collection,
 } from "../store/slices/postsSlice";
 import { api, getFullImageUrl } from "../services/api";
 import { ProfileSkeleton } from "../components/SkeletonLoader";
@@ -42,16 +52,92 @@ import { Bookmark as BookmarkIcon } from "lucide-react";
 import Avatar from "../components/Avatar";
 import SmartImage from "../components/SmartImage";
 import Highlights from "../components/Highlights";
+import VerifiedBadge from "../components/VerifiedBadge";
 
 export default function ProfilePage() {
   const router = useRouter();
   const dispatch = useDispatch<AppDispatch>();
   const { setCreateOpen } = useApp();
   const { currentUser, profileLoading, isLoggedIn } = useSelector((state: RootState) => state.auth);
-  const { myPosts, savedPosts, savedAudios, archivedPosts, taggedPosts } = useSelector((state: RootState) => state.posts);
+  const { myPosts, savedPosts, savedAudios, archivedPosts, taggedPosts, collections } = useSelector((state: RootState) => state.posts);
+
+  // Saved tab: null = folder grid; "all" or a collection id = viewing that folder's posts.
+  const [openCollection, setOpenCollection] = useState<"all" | number | null>(null);
+  const [newCollectionName, setNewCollectionName] = useState("");
+  const [showNewCollection, setShowNewCollection] = useState(false);
+
+  // Tag / collaborator requests (#15/#16)
+  const [tagRequests, setTagRequests] = useState<any[]>([]);
+  const [collabRequests, setCollabRequests] = useState<any[]>([]);
+  const [showRequests, setShowRequests] = useState(false);
+
+  // Multi-account switcher (#23)
+  const [showSwitcher, setShowSwitcher] = useState(false);
+  const [linkedAccounts, setLinkedAccounts] = useState<any[]>([]);
+  const [addMode, setAddMode] = useState(false);
+  const [addUsername, setAddUsername] = useState("");
+  const [addPassword, setAddPassword] = useState("");
+  const [switchBusy, setSwitchBusy] = useState(false);
+
+  const handleOpenSwitcher = () => {
+    setShowSwitcher(true);
+    setAddMode(false);
+    api.account.getLinkedAccounts().then((l) => setLinkedAccounts(l || [])).catch(() => setLinkedAccounts([]));
+  };
+
+  const handleSwitchAccount = async (userId: string) => {
+    setSwitchBusy(true);
+    try {
+      await api.account.switchAccount(userId);
+      await dispatch(fetchMyProfile());
+      setShowSwitcher(false);
+      // Re-fetch this profile's data under the new session.
+      window.location.reload();
+    } catch (err) {
+      console.error("Failed to switch account:", err);
+    } finally {
+      setSwitchBusy(false);
+    }
+  };
+
+  const handleAddAccount = async () => {
+    if (!addUsername.trim() || !addPassword) return;
+    setSwitchBusy(true);
+    try {
+      await api.account.addLinkedAccount(addUsername.trim(), addPassword);
+      const l = await api.account.getLinkedAccounts();
+      setLinkedAccounts(l || []);
+      setAddMode(false);
+      setAddUsername("");
+      setAddPassword("");
+    } catch (err) {
+      console.error("Failed to add account:", err);
+    } finally {
+      setSwitchBusy(false);
+    }
+  };
+
+  // Insights (#20) — Business/Creator accounts
+  const [showInsights, setShowInsights] = useState(false);
+  const [insights, setInsights] = useState<any | null>(null);
+  const isProfessional = currentUser?.accountType === "BUSINESS" || currentUser?.accountType === "CREATOR";
+
+  const handleOpenInsights = async () => {
+    setShowInsights(true);
+    try {
+      const data = await api.profile.getInsights();
+      setInsights(data);
+    } catch (err) {
+      console.error("Failed to load insights:", err);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<"posts" | "saved" | "audios" | "tagged" | "archived">("posts");
-  const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
+  // The backend can hand out duplicate post ids, so we select by (list + index)
+  // instead of by id — otherwise `find(by id)` always resolves to the first match
+  // and every grid thumbnail would open the same post. Index-based selection is also
+  // re-read from the store each render, so likes/comments stay fresh.
+  const [selected, setSelected] = useState<{ source: "my" | "saved" | "tagged"; index: number } | null>(null);
   const [newComment, setNewComment] = useState("");
 
   // Modal lists
@@ -69,6 +155,9 @@ export default function ProfilePage() {
       dispatch(fetchSavedAudios());
       dispatch(fetchArchivedPosts());
       dispatch(fetchTaggedPosts(currentUser.id));
+      dispatch(fetchCollections());
+      api.post.getTagRequests().then((l) => setTagRequests(l || [])).catch(() => setTagRequests([]));
+      api.post.getCollabRequests().then((l) => setCollabRequests(l || [])).catch(() => setCollabRequests([]));
 
       // Fetch followers & following
       const loadRelations = async () => {
@@ -98,17 +187,67 @@ export default function ProfilePage() {
     }
   }, [isLoggedIn, currentUser, dispatch]);
 
-  const selectedPost =
-    myPosts.find((p) => p.id === selectedPostId) ||
-    savedPosts.find((p) => p.id === selectedPostId) ||
-    taggedPosts.find((p) => p.id === selectedPostId);
-  const isSelectedFromSaved = !myPosts.some((p) => p.id === selectedPostId) && !!selectedPost;
+  const selectedList =
+    selected?.source === "saved" ? savedPosts : selected?.source === "tagged" ? taggedPosts : myPosts;
+  const selectedPost = selected ? selectedList[selected.index] || null : null;
+  const isSelectedFromSaved = selected?.source === "saved";
 
   const handleUnarchive = async (postId: number) => {
     try {
       await dispatch(archivePost({ postId, isArchived: false })).unwrap();
     } catch (err) {
       console.error("Failed to unarchive post:", err);
+    }
+  };
+
+  const handleTagRequest = async (postId: number, approve: boolean) => {
+    try {
+      if (approve) {
+        await api.post.approveTag(postId);
+        if (currentUser) dispatch(fetchTaggedPosts(currentUser.id));
+      } else {
+        await api.post.rejectTag(postId);
+      }
+      setTagRequests((prev) => prev.filter((r) => (r.id ?? r.postId) !== postId));
+    } catch (err) {
+      console.error("Failed to handle tag request:", err);
+    }
+  };
+
+  const handleCollabRequest = async (postId: number, approve: boolean) => {
+    try {
+      if (approve) await api.post.approveCollab(postId);
+      else await api.post.rejectCollab(postId);
+      setCollabRequests((prev) => prev.filter((r) => (r.id ?? r.postId) !== postId));
+    } catch (err) {
+      console.error("Failed to handle collab request:", err);
+    }
+  };
+
+  const handleOpenCollection = (target: "all" | number) => {
+    setOpenCollection(target);
+    dispatch(fetchPostFavorites(target === "all" ? {} : { collectionId: target }));
+  };
+
+  const handleCreateCollection = async () => {
+    const name = newCollectionName.trim();
+    if (!name) return;
+    try {
+      await dispatch(createCollection(name)).unwrap();
+      setNewCollectionName("");
+      setShowNewCollection(false);
+    } catch (err) {
+      console.error("Failed to create collection:", err);
+    }
+  };
+
+  const handleDeleteCollection = async (collectionId: number) => {
+    if (!window.confirm("Удалить эту коллекцию?")) return;
+    try {
+      await dispatch(deleteCollection(collectionId)).unwrap();
+      if (openCollection === collectionId) setOpenCollection(null);
+    } catch (err) {
+      console.error("Failed to delete collection:", err);
     }
   };
 
@@ -127,13 +266,13 @@ export default function ProfilePage() {
 
   const handleUnsave = (postId: number) => {
     dispatch(addPostFavorite(postId));
-    setSelectedPostId(null);
+    setSelected(null);
   };
 
   const handleArchiveFromDetail = async (postId: number) => {
     try {
       await dispatch(archivePost({ postId, isArchived: true })).unwrap();
-      setSelectedPostId(null);
+      setSelected(null);
     } catch (err) {
       console.error("Failed to archive post:", err);
     }
@@ -143,7 +282,7 @@ export default function ProfilePage() {
     if (window.confirm("Вы уверены, что хотите удалить эту публикацию?")) {
       try {
         await dispatch(deletePost(postId)).unwrap();
-        setSelectedPostId(null);
+        setSelected(null);
       } catch (err) {
         console.error("Failed to delete post:", err);
       }
@@ -195,9 +334,13 @@ export default function ProfilePage() {
         <div className="flex-1 flex flex-col gap-5 w-full text-left">
           {/* Row 1: Username & Settings */}
           <div className="flex items-center gap-4 flex-wrap">
-            <h2 className="text-xl font-normal flex items-center gap-1.5">
-              {currentUser.username}
-            </h2>
+            <button onClick={handleOpenSwitcher} className="flex items-center gap-1.5 cursor-pointer group">
+              <h2 className="text-xl font-normal flex items-center gap-1.5">
+                {currentUser.username}
+                {currentUser.isVerified && <VerifiedBadge className="w-[18px] h-[18px]" />}
+              </h2>
+              <ChevronDown className="w-5 h-5 text-zinc-500 group-hover:text-black dark:group-hover:text-white" />
+            </button>
             <div className="flex gap-2 text-sm font-semibold select-none">
               <button
                 onClick={() => router.push("/settings")}
@@ -206,6 +349,15 @@ export default function ProfilePage() {
                 Редактировать профиль
               </button>
             </div>
+            {isProfessional && (
+              <button
+                onClick={handleOpenInsights}
+                title="Статистика"
+                className="p-1 hover:text-zinc-500 cursor-pointer"
+              >
+                <BarChart3 className="w-6 h-6 stroke-[1.5px]" />
+              </button>
+            )}
             <button
               onClick={() => setActiveTab(activeTab === "archived" ? "posts" : "archived")}
               title="Архив"
@@ -314,10 +466,10 @@ export default function ProfilePage() {
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-1 md:gap-7">
-                {myPosts.map((post) => (
+                {myPosts.map((post, index) => (
                   <div
-                    key={post.id}
-                    onClick={() => setSelectedPostId(post.id)}
+                    key={index}
+                    onClick={() => setSelected({ source: "my", index })}
                     className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
                   >
                     <SmartImage src={post.image} alt="Grid thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
@@ -340,34 +492,91 @@ export default function ProfilePage() {
         )}
 
         {activeTab === "saved" && (
-          savedPosts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-4">
-              <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
-                <BookmarkIcon className="w-8 h-8" />
-              </div>
-              <h3 className="text-2xl font-bold">Сохранёнными не поделишься</h3>
-              <p className="text-sm text-zinc-400 max-w-xs">
-                Нажимайте на значок закладки под публикациями — они появятся здесь, видны только вам.
-              </p>
+          openCollection === null ? (
+            /* ---- Folder grid: All Posts + collections + New ---- */
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
+              {/* All Posts default folder */}
+              <button
+                onClick={() => handleOpenCollection("all")}
+                className="relative aspect-square overflow-hidden rounded-2xl bg-zinc-100 dark:bg-zinc-950 lift shadow-soft text-left group"
+              >
+                {savedPosts[0] ? (
+                  <SmartImage src={savedPosts[0].image} alt="" fill sizes="(max-width:768px) 50vw, 300px" className="object-cover group-hover:scale-105 transition duration-300" />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center"><BookmarkIcon className="w-8 h-8 text-zinc-400" /></div>
+                )}
+                <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/70 to-transparent">
+                  <span className="block text-white font-semibold text-sm">Все публикации</span>
+                </div>
+              </button>
+
+              {collections.map((col) => (
+                <button
+                  key={col.id}
+                  onClick={() => handleOpenCollection(col.id)}
+                  className="relative aspect-square overflow-hidden rounded-2xl bg-zinc-100 dark:bg-zinc-950 lift shadow-soft text-left group"
+                >
+                  {col.cover ? (
+                    <SmartImage src={col.cover} alt="" fill sizes="(max-width:768px) 50vw, 300px" className="object-cover group-hover:scale-105 transition duration-300" />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center"><BookmarkIcon className="w-8 h-8 text-zinc-400" /></div>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/70 to-transparent">
+                    <span className="block text-white font-semibold text-sm truncate">{col.name}</span>
+                    <span className="block text-white/70 text-xs">{col.count}</span>
+                  </div>
+                  <span
+                    onClick={(e) => { e.stopPropagation(); handleDeleteCollection(col.id); }}
+                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition cursor-pointer hover:bg-black/60"
+                    title="Удалить коллекцию"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </span>
+                </button>
+              ))}
+
+              {/* New collection tile */}
+              <button
+                onClick={() => setShowNewCollection(true)}
+                className="aspect-square rounded-2xl border-2 border-dashed border-zinc-300 dark:border-zinc-700 flex flex-col items-center justify-center gap-2 text-zinc-400 hover:border-zinc-400 hover:text-zinc-500 transition cursor-pointer"
+              >
+                <Plus className="w-7 h-7" />
+                <span className="text-xs font-semibold">Новая коллекция</span>
+              </button>
             </div>
           ) : (
-            <div className="grid grid-cols-3 gap-1 md:gap-7">
-              {savedPosts.map((post) => (
-                <div
-                  key={post.id}
-                  onClick={() => setSelectedPostId(post.id)}
-                  className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
-                >
-                  {post.image.toLowerCase().match(/\.(mp4|mov|webm)$/) ? (
-                    <video src={post.image} className="w-full h-full object-cover" muted playsInline />
-                  ) : (
-                    <SmartImage src={post.image} alt="Saved" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-105" />
-                  )}
-                  <div className="absolute top-2 right-2 text-white drop-shadow">
-                    <BookmarkIcon className="w-5 h-5 fill-white" />
-                  </div>
+            /* ---- Inside a folder ---- */
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <button onClick={() => { setOpenCollection(null); dispatch(fetchPostFavorites({})); }} className="hover:opacity-60 cursor-pointer">
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <h3 className="font-bold text-base">
+                  {openCollection === "all" ? "Все публикации" : collections.find((c) => c.id === openCollection)?.name || "Коллекция"}
+                </h3>
+              </div>
+              {savedPosts.length === 0 ? (
+                <p className="text-sm text-zinc-400 text-center py-16">В этой коллекции пока нет публикаций.</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-1 md:gap-7">
+                  {savedPosts.map((post, index) => (
+                    <div
+                      key={index}
+                      onClick={() => setSelected({ source: "saved", index })}
+                      className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                    >
+                      {post.image.toLowerCase().match(/\.(mp4|mov|webm)$/) ? (
+                        <video src={post.image} className="w-full h-full object-cover" muted playsInline />
+                      ) : (
+                        <SmartImage src={post.image} alt="Saved" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-105" />
+                      )}
+                      <div className="absolute top-2 right-2 text-white drop-shadow">
+                        <BookmarkIcon className="w-5 h-5 fill-white" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
           )
         )}
@@ -404,7 +613,19 @@ export default function ProfilePage() {
         )}
 
         {activeTab === "tagged" && (
-          taggedPosts.length === 0 ? (
+          <>
+          {(tagRequests.length + collabRequests.length) > 0 && (
+            <button
+              onClick={() => setShowRequests(true)}
+              className="w-full flex items-center justify-between glass rounded-2xl px-4 py-3 mb-4 hover:shadow-soft transition cursor-pointer"
+            >
+              <span className="text-sm font-semibold">Запросы на отметку и соавторство</span>
+              <span className="text-xs font-bold text-white btn-grad rounded-full px-2 py-0.5">
+                {tagRequests.length + collabRequests.length}
+              </span>
+            </button>
+          )}
+          {taggedPosts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-4">
               <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
                 <UserSquare className="w-8 h-8" />
@@ -416,10 +637,10 @@ export default function ProfilePage() {
             </div>
           ) : (
             <div className="grid grid-cols-3 gap-1 md:gap-7">
-              {taggedPosts.map((post) => (
+              {taggedPosts.map((post, index) => (
                 <div
-                  key={post.id}
-                  onClick={() => setSelectedPostId(post.id)}
+                  key={index}
+                  onClick={() => setSelected({ source: "tagged", index })}
                   className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
                 >
                   <SmartImage src={post.image} alt="Tagged" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-105" />
@@ -429,7 +650,8 @@ export default function ProfilePage() {
                 </div>
               ))}
             </div>
-          )
+          )}
+          </>
         )}
 
         {activeTab === "archived" && (
@@ -445,9 +667,9 @@ export default function ProfilePage() {
             </div>
           ) : (
             <div className="grid grid-cols-3 gap-1 md:gap-7">
-              {archivedPosts.map((post) => (
+              {archivedPosts.map((post, index) => (
                 <div
-                  key={post.id}
+                  key={index}
                   className="relative aspect-square group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
                 >
                   <SmartImage src={post.image} alt="Archived" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover" />
@@ -466,6 +688,213 @@ export default function ProfilePage() {
           )
         )}
       </div>
+
+      {/* ----------------- ACCOUNT SWITCHER (#23) ----------------- */}
+      {showSwitcher && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setShowSwitcher(false)}>
+          <div className="glass-strong w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-soft-lg animate-in slide-in-from-bottom sm:zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-center p-4 border-b border-zinc-200 dark:border-zinc-700/60 relative">
+              <span className="text-sm font-bold">{addMode ? "Добавить аккаунт" : "Сменить аккаунт"}</span>
+              <button onClick={() => setShowSwitcher(false)} className="absolute right-4 hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            {addMode ? (
+              <div className="p-4 flex flex-col gap-3">
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Имя пользователя"
+                  value={addUsername}
+                  onChange={(e) => setAddUsername(e.target.value)}
+                  className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl px-3 py-2.5 text-sm outline-none"
+                />
+                <input
+                  type="password"
+                  placeholder="Пароль"
+                  value={addPassword}
+                  onChange={(e) => setAddPassword(e.target.value)}
+                  className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl px-3 py-2.5 text-sm outline-none"
+                />
+                <button
+                  onClick={handleAddAccount}
+                  disabled={switchBusy || !addUsername.trim() || !addPassword}
+                  className="btn-primary py-2.5 text-sm disabled:opacity-50"
+                >
+                  Войти и связать
+                </button>
+                <button onClick={() => setAddMode(false)} className="text-sm text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer">
+                  Назад
+                </button>
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto">
+                {/* Current account */}
+                <div className="flex items-center gap-3 p-3.5 bg-black/[0.02] dark:bg-white/[0.03]">
+                  <Avatar src={getFullImageUrl(currentUser.avatar)} name={currentUser.username} className="w-11 h-11" />
+                  <span className="flex-1 text-sm font-semibold">{currentUser.username}</span>
+                  <span className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                </div>
+                {linkedAccounts
+                  .filter((a) => (a.id || a.userId) !== currentUser.id)
+                  .map((a) => {
+                    const uid = a.id || a.userId;
+                    return (
+                      <button key={uid} onClick={() => handleSwitchAccount(uid)} disabled={switchBusy} className="w-full flex items-center gap-3 p-3.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition cursor-pointer text-left">
+                        <Avatar src={getFullImageUrl(a.avatar || a.imagePath)} name={a.userName || a.username} className="w-11 h-11" />
+                        <span className="flex-1 text-sm font-semibold truncate">{a.userName || a.username}</span>
+                      </button>
+                    );
+                  })}
+                <button onClick={() => setAddMode(true)} className="w-full flex items-center gap-3 p-3.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition cursor-pointer text-left">
+                  <span className="w-11 h-11 rounded-full border-2 border-dashed border-zinc-300 dark:border-zinc-600 flex items-center justify-center flex-shrink-0">
+                    <PlusIcon className="w-5 h-5 text-zinc-400" />
+                  </span>
+                  <span className="text-sm font-semibold text-blue-500">Добавить аккаунт</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- INSIGHTS MODAL (#20) ----------------- */}
+      {showInsights && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowInsights(false)}>
+          <div className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-700/60">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" />
+                <span className="text-base font-bold">Статистика</span>
+              </div>
+              <button onClick={() => setShowInsights(false)} className="hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            {!insights ? (
+              <div className="py-16 flex items-center justify-center">
+                <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-800 rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="p-5 flex flex-col gap-4">
+                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">
+                  {insights.accountType === "CREATOR" ? "Аккаунт автора" : "Бизнес-аккаунт"}
+                </span>
+                {/* KPI tiles — neutral grayscale per the design system (content stays the focus) */}
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { icon: Eye, label: "Посещений профиля", value: insights.profileVisitCount },
+                    { icon: TrendingUp, label: "Охват", value: insights.estimatedReach },
+                    { icon: Heart, label: "Всего отметок «Нравится»", value: insights.totalLikes },
+                    { icon: MessageCircle, label: "Всего комментариев", value: insights.totalComments },
+                  ].map((t) => (
+                    <div key={t.label} className="flex flex-col gap-1 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4">
+                      <t.icon className="w-4 h-4 text-zinc-400" />
+                      <span className="text-2xl font-bold tabular-nums">{(t.value ?? 0).toLocaleString()}</span>
+                      <span className="text-[11px] text-zinc-500 leading-tight">{t.label}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-3 gap-3 pt-1">
+                  {[
+                    { label: "Публикаций", value: insights.postsCount },
+                    { label: "Подписчиков", value: insights.followersCount },
+                    { label: "Подписок", value: insights.followingCount },
+                  ].map((t) => (
+                    <div key={t.label} className="flex flex-col items-center">
+                      <span className="text-lg font-bold tabular-nums">{(t.value ?? 0).toLocaleString()}</span>
+                      <span className="text-[10px] text-zinc-500">{t.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- TAG / COLLAB REQUESTS MODAL ----------------- */}
+      {showRequests && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowRequests(false)}>
+          <div className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg flex flex-col max-h-[80vh] animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <span className="text-sm font-bold">Запросы</span>
+              <button onClick={() => setShowRequests(false)} className="hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
+              {tagRequests.length === 0 && collabRequests.length === 0 && (
+                <p className="text-center text-sm text-zinc-400 py-10">Новых запросов нет.</p>
+              )}
+              {tagRequests.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs font-bold text-zinc-500 uppercase tracking-wide">Отметки на фото</span>
+                  {tagRequests.map((r) => {
+                    const pid = r.id ?? r.postId;
+                    const img = getFullImageUrl((r.images && r.images[0]) || r.filePath || r.imagePath || r.image);
+                    return (
+                      <div key={pid} className="flex items-center gap-3">
+                        <span className="w-12 h-12 rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex-shrink-0">
+                          {img && <SmartImage src={img} alt="" className="w-full h-full object-cover" />}
+                        </span>
+                        <span className="flex-1 text-sm min-w-0 truncate">
+                          <span className="font-semibold">{r.userName || r.username || "Пользователь"}</span> отметил(а) вас
+                        </span>
+                        <button onClick={() => handleTagRequest(pid, true)} className="text-xs font-bold btn-grad text-white px-3 py-1.5 rounded-lg cursor-pointer">Принять</button>
+                        <button onClick={() => handleTagRequest(pid, false)} className="text-xs font-bold glass px-3 py-1.5 rounded-lg cursor-pointer">Удалить</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {collabRequests.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs font-bold text-zinc-500 uppercase tracking-wide">Соавторство</span>
+                  {collabRequests.map((r) => {
+                    const pid = r.id ?? r.postId;
+                    const img = getFullImageUrl((r.images && r.images[0]) || r.filePath || r.imagePath || r.image);
+                    return (
+                      <div key={pid} className="flex items-center gap-3">
+                        <span className="w-12 h-12 rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex-shrink-0">
+                          {img && <SmartImage src={img} alt="" className="w-full h-full object-cover" />}
+                        </span>
+                        <span className="flex-1 text-sm min-w-0 truncate">
+                          <span className="font-semibold">{r.userName || r.username || "Пользователь"}</span> приглашает в соавторы
+                        </span>
+                        <button onClick={() => handleCollabRequest(pid, true)} className="text-xs font-bold btn-grad text-white px-3 py-1.5 rounded-lg cursor-pointer">Принять</button>
+                        <button onClick={() => handleCollabRequest(pid, false)} className="text-xs font-bold glass px-3 py-1.5 rounded-lg cursor-pointer">Удалить</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- NEW COLLECTION MODAL ----------------- */}
+      {showNewCollection && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowNewCollection(false)}>
+          <div className="glass-strong w-full max-w-xs rounded-3xl overflow-hidden shadow-soft-lg animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 flex flex-col gap-4 text-center">
+              <h3 className="font-bold text-base">Новая коллекция</h3>
+              <input
+                type="text"
+                autoFocus
+                placeholder="Название"
+                value={newCollectionName}
+                onChange={(e) => setNewCollectionName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreateCollection()}
+                className="w-full text-center border-b border-zinc-200 dark:border-zinc-700 bg-transparent py-2 text-sm outline-none focus:border-zinc-400"
+              />
+            </div>
+            <div className="flex divide-x divide-zinc-200 dark:divide-zinc-700/60 border-t border-zinc-200 dark:border-zinc-700/60">
+              <button onClick={() => { setShowNewCollection(false); setNewCollectionName(""); }} className="flex-1 py-3 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer">
+                Отмена
+              </button>
+              <button onClick={handleCreateCollection} disabled={!newCollectionName.trim()} className="flex-1 py-3 text-sm font-bold text-blue-500 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer disabled:opacity-50">
+                Создать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ----------------- FOLLOWERS MODAL ----------------- */}
       {showFollowersList && (
@@ -561,7 +990,7 @@ export default function ProfilePage() {
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-2xl flex flex-col md:flex-row w-full max-w-4xl max-h-[85vh] relative animate-in zoom-in-95 duration-150">
             {/* Close button outside details */}
             <button
-              onClick={() => setSelectedPostId(null)}
+              onClick={() => setSelected(null)}
               className="absolute top-4 right-4 text-white md:text-zinc-500 hover:text-zinc-300 p-2 z-55"
             >
               <X className="w-6 h-6" />

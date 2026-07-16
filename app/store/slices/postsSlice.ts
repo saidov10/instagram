@@ -1,11 +1,40 @@
-import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
+import { createSlice, createAsyncThunk, createAction, PayloadAction } from "@reduxjs/toolkit";
 import { api, getFullImageUrl } from "../../services/api";
 export interface Comment {
   id: number;
   userId: string;
   username: string;
+  avatar?: string;
   text: string;
+  likeCount: number;
+  isLiked: boolean;
+  /** Author-pinned comment (feature #13). Top-level only. */
+  isPinned?: boolean;
+  parentCommentId?: number | null;
+  replyCount: number;
+  replies: Comment[];
 }
+
+/**
+ * Normalizes a backend comment (and its nested replies) into the tree shape the UI expects.
+ * The backend returns top-level comments each carrying a `replies` array.
+ */
+export const formatComment = (c: any): Comment => {
+  const replies = Array.isArray(c.replies) ? c.replies.map(formatComment) : [];
+  return {
+    id: c.id ?? c.commentId,
+    userId: c.userId || "",
+    username: c.userName || c.username || "commenter",
+    avatar: getFullImageUrl(c.userAvatar || c.avatar || c.userImage),
+    text: c.comment ?? c.text ?? "",
+    likeCount: typeof c.likeCount === "number" ? c.likeCount : (Array.isArray(c.likes) ? c.likes.length : 0),
+    isLiked: !!c.isLiked,
+    isPinned: !!c.isPinned,
+    parentCommentId: c.parentCommentId ?? null,
+    replyCount: typeof c.replyCount === "number" ? c.replyCount : replies.length,
+    replies,
+  };
+};
 
 export interface TaggedUser {
   userId: string;
@@ -31,6 +60,16 @@ export interface Post {
   isVerified?: boolean;
   isArchived?: boolean;
   taggedUsers?: TaggedUser[];
+  /** #14 — owner hid the like count; viewers get likeCount: null from the backend. */
+  hideLikeCount?: boolean;
+  /** #24 — owner flagged the post sensitive; isBlurred is the viewer-resolved blur state. */
+  isSensitive?: boolean;
+  isBlurred?: boolean;
+  /** #17 — when this is a repost, the original author it was reposted from. */
+  repostedFrom?: string;
+  repostedFromUserId?: string;
+  /** #16 — approved collaborators shown alongside the author in the header. */
+  collaborators?: TaggedUser[];
 }
 
 export interface SavedAudio {
@@ -40,6 +79,20 @@ export interface SavedAudio {
   audioUrl: string;
 }
 
+export interface Collection {
+  id: number;
+  name: string;
+  cover: string;
+  count: number;
+}
+
+export const formatCollection = (c: any): Collection => ({
+  id: c.id ?? c.collectionId,
+  name: c.name || "Коллекция",
+  cover: getFullImageUrl(c.cover || c.coverImage || c.thumbnail || (c.posts && c.posts[0]?.images?.[0])),
+  count: typeof c.count === "number" ? c.count : (c.postCount ?? c.posts?.length ?? 0),
+});
+
 interface PostsState {
   posts: Post[];
   reels: any[];
@@ -48,6 +101,7 @@ interface PostsState {
   archivedPosts: Post[];
   taggedPosts: Post[];
   savedAudios: SavedAudio[];
+  collections: Collection[];
   loading: boolean;
   error: string | null;
 }
@@ -60,6 +114,7 @@ const initialState: PostsState = {
   archivedPosts: [],
   taggedPosts: [],
   savedAudios: [],
+  collections: [],
   loading: false,
   error: null,
 };
@@ -67,6 +122,8 @@ const initialState: PostsState = {
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
 export const formatBackendPost = (p: any): Post => {
+  // A null/undefined likeCount means the owner hid it (viewers only). Numeric → visible.
+  const likeHidden = p.hideLikeCount === true || p.likeCount === null;
   const likeCount = typeof p.likeCount === "number" ? p.likeCount : (Array.isArray(p.likes) ? p.likes.length : 0);
 
   return {
@@ -85,17 +142,25 @@ export const formatBackendPost = (p: any): Post => {
     // Comments are open unless the author explicitly disabled them.
     allowComments: p.allowComments !== false,
     isArchived: !!p.isArchived,
+    hideLikeCount: likeHidden,
+    isSensitive: !!p.isSensitive,
+    isBlurred: !!p.isBlurred,
+    repostedFrom: p.originalPost?.userName || p.repostedFrom || p.originalAuthor || undefined,
+    repostedFromUserId: p.originalPost?.userId || p.repostedFromUserId || undefined,
+    collabUser: (p.collaborators && p.collaborators[0])
+      ? (p.collaborators[0].userName || p.collaborators[0].username)
+      : p.collabUser,
+    collaborators: (p.collaborators || []).map((t: any): TaggedUser => ({
+      userId: t.userId || t.id || "",
+      username: t.userName || t.username || "user",
+      avatar: getFullImageUrl(t.userAvatar || t.avatar || t.userImage),
+    })),
     taggedUsers: (p.taggedUsers || p.tags || []).map((t: any): TaggedUser => ({
       userId: t.userId || t.id || "",
       username: t.userName || t.username || "user",
       avatar: getFullImageUrl(t.userAvatar || t.avatar || t.userImage),
     })),
-    comments: (p.comments || []).map((c: any) => ({
-      id: c.id || c.commentId,
-      userId: c.userId || "",
-      username: c.userName || c.username || "commenter",
-      text: c.comment || c.text || "",
-    })),
+    comments: (p.comments || []).map(formatComment),
   };
 };
 
@@ -144,13 +209,50 @@ export const fetchMyPosts = createAsyncThunk(
 
 export const fetchPostFavorites = createAsyncThunk(
   "posts/fetchFavorites",
-  async (params: { pageNumber?: number; pageSize?: number } = {}, { rejectWithValue }) => {
+  async (params: { pageNumber?: number; pageSize?: number; collectionId?: number } = {}, { rejectWithValue }) => {
     try {
-      const res = await api.profile.getPostFavorites(params.pageNumber, params.pageSize);
+      const res = await api.profile.getPostFavorites(params.pageNumber, params.pageSize, params.collectionId);
       const list = Array.isArray(res) ? res : res?.data || [];
       return list.map(formatBackendPost);
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load saved posts.");
+    }
+  }
+);
+
+export const fetchCollections = createAsyncThunk(
+  "posts/fetchCollections",
+  async (_, { rejectWithValue }) => {
+    try {
+      const list = await api.collection.getCollections();
+      return list.map(formatCollection);
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to load collections.");
+    }
+  }
+);
+
+export const createCollection = createAsyncThunk(
+  "posts/createCollection",
+  async (name: string, { dispatch, rejectWithValue }) => {
+    try {
+      const res = await api.collection.createCollection(name);
+      dispatch(fetchCollections());
+      return res;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to create collection.");
+    }
+  }
+);
+
+export const deleteCollection = createAsyncThunk(
+  "posts/deleteCollection",
+  async (collectionId: number, { rejectWithValue }) => {
+    try {
+      await api.collection.deleteCollection(collectionId);
+      return collectionId;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to delete collection.");
     }
   }
 );
@@ -212,7 +314,19 @@ export const saveAudio = createAsyncThunk(
 
 export const createPost = createAsyncThunk(
   "posts/create",
-  async (data: { title: string; content: string; images: File[]; isReel?: boolean; taggedUserIds?: string[] }, { dispatch, rejectWithValue }) => {
+  async (
+    data: {
+      title: string;
+      content: string;
+      images: File[];
+      isReel?: boolean;
+      taggedUserIds?: string[];
+      collaboratorIds?: string[];
+      isSensitive?: boolean;
+      hideLikeCount?: boolean;
+    },
+    { dispatch, rejectWithValue }
+  ) => {
     try {
       const res = await api.post.addPost(data);
       dispatch(fetchFollowingPosts({}));
@@ -268,12 +382,36 @@ export const toggleLikePost = createAsyncThunk(
 
 export const addComment = createAsyncThunk(
   "posts/addComment",
-  async (data: { postId: number; comment: string; username: string; userId: string }, { rejectWithValue }) => {
+  async (
+    data: { postId: number; comment: string; username: string; userId: string; parentCommentId?: number },
+    { rejectWithValue }
+  ) => {
     try {
-      await api.post.addComment({ postId: data.postId, comment: data.comment });
-      return { postId: data.postId, comment: data.comment, username: data.username, userId: data.userId };
+      const res = await api.post.addComment({
+        postId: data.postId,
+        comment: data.comment,
+        parentCommentId: data.parentCommentId,
+      });
+      // Prefer the server-assigned id so a fresh comment/reply can be liked immediately.
+      const newId = res?.id ?? res?.commentId ?? res?.data?.id ?? Date.now();
+      return { ...data, id: newId };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to add comment.");
+    }
+  }
+);
+
+export const likeComment = createAsyncThunk(
+  "posts/likeComment",
+  async (
+    { postId, commentId, wasLiked }: { postId: number; commentId: number; wasLiked: boolean },
+    { rejectWithValue }
+  ) => {
+    try {
+      await api.post.likeComment(commentId);
+      return { postId, commentId, isLiked: !wasLiked };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to like comment.");
     }
   }
 );
@@ -283,12 +421,7 @@ export const fetchComments = createAsyncThunk(
   async (postId: number, { rejectWithValue }) => {
     try {
       const list = await api.post.getComments(postId);
-      const comments = (list || []).map((c: any) => ({
-        id: c.id || c.commentId,
-        userId: c.userId || "",
-        username: c.userName || c.username || "commenter",
-        text: c.comment || c.text || "",
-      }));
+      const comments = (list || []).map(formatComment);
       return { postId, comments };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to fetch comments.");
@@ -319,6 +452,61 @@ export const deletePost = createAsyncThunk(
     }
   }
 );
+
+export const repostPost = createAsyncThunk(
+  "posts/repost",
+  async ({ postId, caption }: { postId: number; caption?: string }, { dispatch, rejectWithValue }) => {
+    try {
+      const res = await api.post.repost({ postId, caption });
+      dispatch(fetchFollowingPosts({}));
+      return res;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to repost.");
+    }
+  }
+);
+
+export const pinComment = createAsyncThunk(
+  "posts/pinComment",
+  async (
+    { postId, commentId, isPinned }: { postId: number; commentId: number; isPinned: boolean },
+    { rejectWithValue }
+  ) => {
+    try {
+      await api.post.pinComment(commentId, isPinned);
+      return { postId, commentId, isPinned };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to pin comment.");
+    }
+  }
+);
+
+export const toggleLikeCountVisibility = createAsyncThunk(
+  "posts/toggleLikeCount",
+  async ({ postId, hideLikeCount }: { postId: number; hideLikeCount: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.toggleLikeCount(postId, hideLikeCount);
+      return { postId, hideLikeCount };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle like count.");
+    }
+  }
+);
+
+export const toggleSensitive = createAsyncThunk(
+  "posts/toggleSensitive",
+  async ({ postId, isSensitive }: { postId: number; isSensitive: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.toggleSensitive(postId, isSensitive);
+      return { postId, isSensitive };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle sensitive.");
+    }
+  }
+);
+
+/** Locally lift the blur on a post the viewer chose to "View anyway". */
+export const revealSensitivePost = createAction<number>("posts/revealSensitive");
 
 export const updatePostCaption = createAsyncThunk(
   "posts/updateCaption",
@@ -370,9 +558,12 @@ export const fetchTaggedPosts = createAsyncThunk(
 
 export const addPostFavorite = createAsyncThunk(
   "posts/favorite",
-  async (postId: number, { rejectWithValue }) => {
+  // Accepts a bare postId (back-compat) or { postId, collectionId } to save into a folder.
+  async (arg: number | { postId: number; collectionId?: number }, { rejectWithValue }) => {
+    const postId = typeof arg === "number" ? arg : arg.postId;
+    const collectionId = typeof arg === "number" ? undefined : arg.collectionId;
     try {
-      await api.post.addPostFavorite({ postId });
+      await api.post.addPostFavorite({ postId, collectionId });
       return postId;
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to save post.");
@@ -425,6 +616,14 @@ const postsSlice = createSlice({
         state.savedAudios = action.payload;
       })
 
+      // Saved collections
+      .addCase(fetchCollections.fulfilled, (state, action: PayloadAction<Collection[]>) => {
+        state.collections = action.payload;
+      })
+      .addCase(deleteCollection.fulfilled, (state, action: PayloadAction<number>) => {
+        state.collections = state.collections.filter((c) => c.id !== action.payload);
+      })
+
       // Toggle Comments (author only)
       .addCase(togglePostComments.fulfilled, (state, action) => {
         [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
@@ -455,28 +654,71 @@ const postsSlice = createSlice({
         });
       })
 
-      // Add Comment
+      // Add Comment (top-level) or Reply (when parentCommentId is set)
       .addCase(addComment.fulfilled, (state, action) => {
+        const { postId, parentCommentId, id, userId, username, comment } = action.payload;
+        const newComment: Comment = {
+          id,
+          userId,
+          username,
+          text: comment,
+          likeCount: 0,
+          isLiked: false,
+          parentCommentId: parentCommentId ?? null,
+          replyCount: 0,
+          replies: [],
+        };
         [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
-          const post = list.find((p) => p.id === action.payload.postId);
-          if (post) {
-            post.comments.push({
-              id: Date.now(),
-              userId: action.payload.userId,
-              username: action.payload.username,
-              text: action.payload.comment,
-            });
+          const post = list.find((p) => p.id === postId);
+          if (!post) return;
+          if (parentCommentId != null) {
+            const parent = post.comments.find((c) => c.id === parentCommentId);
+            if (parent) {
+              parent.replies.push(newComment);
+              parent.replyCount += 1;
+            }
+          } else {
+            post.comments.push(newComment);
           }
         });
       })
 
-      // Delete Comment
+      // Like / unlike a comment or reply (backend toggles)
+      .addCase(likeComment.fulfilled, (state, action) => {
+        const { postId, commentId, isLiked } = action.payload;
+        const apply = (c: Comment) => {
+          c.isLiked = isLiked;
+          c.likeCount = Math.max(0, c.likeCount + (isLiked ? 1 : -1));
+        };
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (!post) return;
+          for (const c of post.comments) {
+            if (c.id === commentId) { apply(c); return; }
+            const reply = c.replies.find((r) => r.id === commentId);
+            if (reply) { apply(reply); return; }
+          }
+        });
+      })
+
+      // Delete Comment or reply
       .addCase(deleteComment.fulfilled, (state, action) => {
         const { postId, commentId } = action.payload;
         [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
           const post = list.find((p) => p.id === postId);
-          if (post) {
-            post.comments = post.comments.filter((c) => c.id !== commentId);
+          if (!post) return;
+          const before = post.comments.length;
+          post.comments = post.comments.filter((c) => c.id !== commentId);
+          if (post.comments.length === before) {
+            // Not a top-level comment — try removing it from a parent's replies.
+            for (const c of post.comments) {
+              const idx = c.replies.findIndex((r) => r.id === commentId);
+              if (idx !== -1) {
+                c.replies.splice(idx, 1);
+                c.replyCount = Math.max(0, c.replyCount - 1);
+                break;
+              }
+            }
           }
         });
       })
@@ -504,6 +746,49 @@ const postsSlice = createSlice({
         [state.posts, state.myPosts, state.savedPosts, state.archivedPosts].forEach((list) => {
           const post = list.find((p) => p.id === postId);
           if (post) post.caption = caption;
+        });
+      })
+
+      // #13 Pin / unpin a comment — set the flag and float pinned comments to the top.
+      .addCase(pinComment.fulfilled, (state, action) => {
+        const { postId, commentId, isPinned } = action.payload;
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (!post) return;
+          const c = post.comments.find((x) => x.id === commentId);
+          if (c) c.isPinned = isPinned;
+          post.comments = [...post.comments].sort(
+            (a, b) => Number(!!b.isPinned) - Number(!!a.isPinned)
+          );
+        });
+      })
+
+      // #14 Hide / show like count
+      .addCase(toggleLikeCountVisibility.fulfilled, (state, action) => {
+        const { postId, hideLikeCount } = action.payload;
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) post.hideLikeCount = hideLikeCount;
+        });
+      })
+
+      // #24 Mark / unmark sensitive
+      .addCase(toggleSensitive.fulfilled, (state, action) => {
+        const { postId, isSensitive } = action.payload;
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) {
+            post.isSensitive = isSensitive;
+            post.isBlurred = isSensitive;
+          }
+        });
+      })
+
+      // #24 Viewer chose "View anyway" — lift the blur locally
+      .addCase(revealSensitivePost, (state, action: PayloadAction<number>) => {
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === action.payload);
+          if (post) post.isBlurred = false;
         });
       })
 

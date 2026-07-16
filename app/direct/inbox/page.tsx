@@ -28,7 +28,12 @@ import {
   Users,
   Reply,
   Ghost,
-  Check
+  Check,
+  Undo2,
+  UserPlus,
+  UserMinus,
+  Shield,
+  LogOut
 } from "lucide-react";
 import { AppDispatch, RootState } from "../../store/store";
 import {
@@ -221,6 +226,14 @@ export default function InboxPage() {
   // Emoji / sticker picker + reactions
   const [showEmoji, setShowEmoji] = useState(false);
   const [reactionMsgId, setReactionMsgId] = useState<number | null>(null);
+
+  // #4 — typing indicator
+  const [otherTyping, setOtherTyping] = useState(false);
+
+  // #5 — group management panel
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [groupMemberSearch, setGroupMemberSearch] = useState("");
+  const [groupMemberResults, setGroupMemberResults] = useState<any[]>([]);
 
   // Calls (Agora)
   const [call, setCall] = useState<CallSession | null>(null);
@@ -488,7 +501,78 @@ export default function InboxPage() {
     if (currentUser) {
       dispatch(fetchChatById({ chatId: id, currentUserId: currentUser.id }));
     }
+    // #4 — mark the thread as read for the other participant.
+    api.chat.markMessagesSeen(id).catch(() => {});
   };
+
+  // #4 — poll the other participant's typing status every 2s for the open chat.
+  useEffect(() => {
+    if (selectedChatId === null) { setOtherTyping(false); return; }
+    let active = true;
+    const poll = () => {
+      api.chat.getTypingStatus(selectedChatId)
+        .then((res) => { if (active) setOtherTyping(!!(res?.isTyping ?? res?.typing ?? res)); })
+        .catch(() => {});
+    };
+    poll();
+    const t = setInterval(poll, 2000);
+    return () => { active = false; clearInterval(t); setOtherTyping(false); };
+  }, [selectedChatId]);
+
+  // #4 — broadcast our own typing state (debounced off after 2.5s idle).
+  useEffect(() => {
+    if (selectedChatId === null || !inputText.trim()) return;
+    api.chat.setTyping(selectedChatId, true).catch(() => {});
+    const off = setTimeout(() => {
+      api.chat.setTyping(selectedChatId!, false).catch(() => {});
+    }, 2500);
+    return () => clearTimeout(off);
+  }, [inputText, selectedChatId]);
+
+  // #5 — group management. The backend admin-gates these; we also hide controls unless we're an admin.
+  const isGroupAdmin = !!(activeChat?.groupInfo && currentUser && activeChat.groupInfo.adminIds.includes(currentUser.id));
+  const refreshActiveChat = () => {
+    if (activeChat && currentUser) dispatch(fetchChatById({ chatId: activeChat.id, currentUserId: currentUser.id }));
+  };
+  const handleAddGroupMember = async (userId: string) => {
+    if (!activeChat) return;
+    try {
+      await api.chat.addGroupMember(activeChat.id, userId);
+      setGroupMemberSearch("");
+      setGroupMemberResults([]);
+      refreshActiveChat();
+    } catch (err) { console.error("Failed to add member:", err); }
+  };
+  const handleRemoveGroupMember = async (userId: string) => {
+    if (!activeChat) return;
+    try { await api.chat.removeGroupMember(activeChat.id, userId); refreshActiveChat(); }
+    catch (err) { console.error("Failed to remove member:", err); }
+  };
+  const handlePromoteAdmin = async (userId: string) => {
+    if (!activeChat) return;
+    try { await api.chat.promoteAdmin(activeChat.id, userId); refreshActiveChat(); }
+    catch (err) { console.error("Failed to promote:", err); }
+  };
+  const handleLeaveGroup = async () => {
+    if (!activeChat || !window.confirm("Покинуть эту группу?")) return;
+    try {
+      await api.chat.leaveGroup(activeChat.id);
+      setShowGroupInfo(false);
+      setSelectedChatId(null);
+      if (currentUser) dispatch(fetchChats(currentUser.id));
+    } catch (err) { console.error("Failed to leave group:", err); }
+  };
+
+  // Debounced member search for the group "Add member" field.
+  useEffect(() => {
+    if (!showGroupInfo) return;
+    const q = groupMemberSearch.trim();
+    if (!q) { setGroupMemberResults([]); return; }
+    const t = setTimeout(() => {
+      api.user.getUsers({ userName: q }).then((u) => setGroupMemberResults(u || [])).catch(() => setGroupMemberResults([]));
+    }, 350);
+    return () => clearTimeout(t);
+  }, [groupMemberSearch, showGroupInfo]);
 
   // ---- Calls ----
   const handleStartCall = async (type: CallType) => {
@@ -1148,6 +1232,10 @@ export default function InboxPage() {
                     <Link href={`/u/${activeChat.otherUserId}`}>
                       <span className="font-semibold text-sm hover:underline cursor-pointer">{activeChat.username}</span>
                     </Link>
+                  ) : activeChat.isGroup ? (
+                    <button onClick={() => setShowGroupInfo(true)} className="font-semibold text-sm hover:underline cursor-pointer text-left">
+                      {activeChat.username}
+                    </button>
                   ) : (
                     <span className="font-semibold text-sm">{activeChat.username}</span>
                   )}
@@ -1347,13 +1435,22 @@ export default function InboxPage() {
                             <SmilePlus className="w-4 h-4" />
                           </button>
                           {isMe && (
-                            <button
-                              onClick={() => dispatch(deleteMessage({ messageId: msg.id, chatId: activeChat.id }))}
-                              className="p-1.5 glass rounded-full press hover:shadow-soft text-red-500 cursor-pointer"
-                              title="Удалить"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            <>
+                              <button
+                                onClick={() => dispatch(deleteMessage({ messageId: msg.id, chatId: activeChat.id, forEveryone: false }))}
+                                className="p-1.5 glass rounded-full press hover:shadow-soft cursor-pointer"
+                                title="Удалить у себя"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => dispatch(deleteMessage({ messageId: msg.id, chatId: activeChat.id, forEveryone: true }))}
+                                className="p-1.5 glass rounded-full press hover:shadow-soft text-red-500 cursor-pointer"
+                                title="Отменить отправку (у всех)"
+                              >
+                                <Undo2 className="w-4 h-4" />
+                              </button>
+                            </>
                           )}
                         </div>
 
@@ -1374,11 +1471,26 @@ export default function InboxPage() {
                       </div>
                       <span className={`text-[9px] text-zinc-400 select-none ${isMe ? "text-right" : "text-left"} ${msg.reaction ? "mt-2" : ""}`}>
                         {msg.time}
+                        {/* #4 read receipt — only under your own last, seen message */}
+                        {isMe &&
+                          (msg as any).isSeen &&
+                          activeChat.messages[activeChat.messages.length - 1]?.id === msg.id && (
+                            <span className="ml-1 font-semibold text-zinc-500">· Просмотрено</span>
+                          )}
                       </span>
                     </div>
                   </div>
                 );
               })}
+              {otherTyping && (
+                <div className="flex items-center gap-1.5 px-1">
+                  <div className="glass rounded-2xl rounded-bl-md px-3 py-2 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <span className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <span className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                  </div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
 
@@ -1538,6 +1650,85 @@ export default function InboxPage() {
           </div>
         )}
       </div>
+
+      {/* ----------------- GROUP INFO PANEL (#5) ----------------- */}
+      {showGroupInfo && activeChat?.groupInfo && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowGroupInfo(false)}>
+          <div className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg flex flex-col max-h-[85vh] animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <span className="text-sm font-bold">Информация о группе</span>
+              <button onClick={() => setShowGroupInfo(false)} className="hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex flex-col items-center gap-2 py-5 border-b border-zinc-100 dark:border-zinc-800">
+              <ChatAvatar isGroup avatar={activeChat.groupInfo.avatar} name={activeChat.groupInfo.name} className="w-20 h-20" />
+              <span className="font-bold text-lg">{activeChat.groupInfo.name}</span>
+              <span className="text-xs text-zinc-500">{participantsLabel(activeChat.groupInfo.participantsCount)}</span>
+            </div>
+
+            {/* Add member (admins only) */}
+            {isGroupAdmin && (
+              <div className="p-3 border-b border-zinc-100 dark:border-zinc-800">
+                <div className="flex items-center gap-2 glass rounded-xl px-3 py-2 mb-2">
+                  <UserPlus className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                  <input
+                    type="text"
+                    placeholder="Добавить участника…"
+                    value={groupMemberSearch}
+                    onChange={(e) => setGroupMemberSearch(e.target.value)}
+                    className="bg-transparent text-sm w-full outline-none placeholder-zinc-400"
+                  />
+                </div>
+                {groupMemberResults.length > 0 && (
+                  <div className="max-h-32 overflow-y-auto flex flex-col">
+                    {groupMemberResults.map((u) => {
+                      const uid = u.id || u.userId;
+                      return (
+                        <button key={uid} onClick={() => handleAddGroupMember(uid)} className="flex items-center gap-2 p-2 rounded-lg hover:bg-black/[0.03] dark:hover:bg-white/[0.04] cursor-pointer text-left">
+                          <Avatar src={getFullImageUrl(u.avatar || u.imagePath)} name={u.userName || u.username} className="w-8 h-8" />
+                          <span className="text-sm font-semibold flex-1 truncate">{u.userName || u.username}</span>
+                          <UserPlus className="w-4 h-4 text-blue-500" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Participants */}
+            <div className="flex-1 overflow-y-auto p-2">
+              <span className="text-xs font-bold text-zinc-500 uppercase tracking-wide px-2">Участники</span>
+              {activeChat.groupInfo.participants.map((p) => (
+                <div key={p.userId} className="flex items-center gap-3 p-2 rounded-xl">
+                  <Link href={`/u/${p.userId}`} onClick={() => setShowGroupInfo(false)}>
+                    <Avatar src={p.avatar} name={p.username} className="w-10 h-10" />
+                  </Link>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-semibold truncate block">{p.username}</span>
+                    {p.isAdmin && <span className="text-[10px] text-zinc-400">Администратор</span>}
+                  </div>
+                  {isGroupAdmin && currentUser && p.userId !== currentUser.id && (
+                    <div className="flex items-center gap-1">
+                      {!p.isAdmin && (
+                        <button onClick={() => handlePromoteAdmin(p.userId)} title="Назначить админом" className="p-1.5 hover:text-blue-500 cursor-pointer text-zinc-400">
+                          <Shield className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button onClick={() => handleRemoveGroupMember(p.userId)} title="Удалить" className="p-1.5 hover:text-red-500 cursor-pointer text-zinc-400">
+                        <UserMinus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <button onClick={handleLeaveGroup} className="flex items-center justify-center gap-2 p-4 border-t border-zinc-200 dark:border-zinc-700/60 text-sm font-bold text-red-500 hover:bg-red-500/5 cursor-pointer">
+              <LogOut className="w-4 h-4" /> Покинуть группу
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ----------------- CHAT NOTES DRAWER ----------------- */}
       {showNotes && (

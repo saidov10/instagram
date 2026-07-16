@@ -28,7 +28,7 @@ import {
   addPostFavorite,
 } from "../store/slices/postsSlice";
 import { useApp } from "../context/AppContext";
-import { getFullImageUrl } from "../services/api";
+import { api, getFullImageUrl } from "../services/api";
 import Avatar from "../components/Avatar";
 import SmartImage from "../components/SmartImage";
 import ReportModal, { ReportTarget } from "../components/ReportModal";
@@ -41,6 +41,7 @@ interface ReelComment {
   avatar: string;
   text: string;
   likes: number;
+  isLiked: boolean;
   time: string;
 }
 
@@ -118,7 +119,8 @@ export default function ReelsPage() {
           username: c.userName || c.username || "commenter",
           avatar: getFullImageUrl(c.userAvatar),
           text: c.comment || c.text || "",
-          likes: 0,
+          likes: typeof c.likeCount === "number" ? c.likeCount : 0,
+          isLiked: !!c.isLiked,
           time: "Just now",
         })),
       };
@@ -192,6 +194,7 @@ export default function ReelsPage() {
       avatar: getFullImageUrl(currentUser.avatar),
       text: newComment.trim(),
       likes: 0,
+      isLiked: false,
       time: "1s"
     };
 
@@ -209,6 +212,26 @@ export default function ReelsPage() {
     );
 
     setNewComment("");
+  };
+
+  // Optimistic like toggle for a reel comment; the backend endpoint toggles server-side.
+  const handleLikeReelComment = (commentId: number) => {
+    if (!currentReel) return;
+    setReels((prev) =>
+      prev.map((r) =>
+        r.id === currentReel.id
+          ? {
+              ...r,
+              comments: r.comments.map((c) =>
+                c.id === commentId
+                  ? { ...c, isLiked: !c.isLiked, likes: c.likes + (c.isLiked ? -1 : 1) }
+                  : c
+              ),
+            }
+          : r
+      )
+    );
+    api.post.likeComment(commentId).catch((err) => console.error("Failed to like comment:", err));
   };
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -455,20 +478,35 @@ export default function ReelsPage() {
                 </div>
               ) : (
                 currentReel.comments.map((comment) => (
-                  <div key={comment.id} className="flex items-start justify-between text-sm">
-                    <div className="flex items-start gap-3">
+                  <div key={comment.id} className="flex items-start justify-between text-sm gap-2">
+                    <div className="flex items-start gap-3 min-w-0">
                       <Link href={comment.userId ? `/u/${comment.userId}` : "#"}>
                         <Avatar src={comment.avatar} name={comment.username} className="w-8 h-8 border border-zinc-200" />
                       </Link>
-                      <div className="flex flex-col">
+                      <div className="flex flex-col min-w-0">
                         <Link href={comment.userId ? `/u/${comment.userId}` : "#"} className="font-bold text-zinc-900 dark:text-white hover:underline w-fit">{comment.username}</Link>
-                        <p className="text-zinc-800 dark:text-zinc-200 leading-snug mt-0.5">{comment.text}</p>
+                        <p className="text-zinc-800 dark:text-zinc-200 leading-snug mt-0.5 break-words">{comment.text}</p>
                         <div className="flex gap-3 text-[11px] text-zinc-400 mt-1">
                           <span>{comment.time}</span>
-                          <button className="font-bold cursor-pointer">Reply</button>
+                          {comment.likes > 0 && <span className="font-semibold">{comment.likes} отметок</span>}
+                          <button
+                            type="button"
+                            onClick={() => setNewComment(`@${comment.username} `)}
+                            className="font-bold cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-200"
+                          >
+                            Ответить
+                          </button>
                         </div>
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => handleLikeReelComment(comment.id)}
+                      className="p-1 flex-shrink-0 hover:scale-110 active:scale-90 transition cursor-pointer"
+                      title={comment.isLiked ? "Убрать отметку" : "Нравится"}
+                    >
+                      <Heart className={`w-3.5 h-3.5 ${comment.isLiked ? "fill-like text-like" : "text-zinc-400"}`} />
+                    </button>
                   </div>
                 ))
               )}

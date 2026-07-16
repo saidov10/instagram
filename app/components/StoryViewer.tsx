@@ -128,24 +128,10 @@ export default function StoryViewer({
 
   const storyDurationMs = React.useMemo(() => (story.musicTrack && story.musicTrack.durationMs) ? story.musicTrack.durationMs : 5000, [story.musicTrack]);
 
-  const mockViewers = React.useMemo(() => {
-    const realCount = story.viewCount || 0;
-    if (realCount === 0) return [];
-
-    const names = [
-      { username: "travel_explorer", name: "Алексей Иванов", reaction: "🔥" },
-      { username: "foodie_adventure", name: "Мария Смирнова", liked: true },
-      { username: "tech_pioneer", name: "Дмитрий Кузнецов" },
-      { username: "fitness_guru", name: "Елена Попова", reaction: "👏" },
-      { username: "nature_lover", name: "Игорь Васильев", liked: true },
-      { username: "art_creations", name: "Ольга Петрова" },
-      { username: "fashion_icon", name: "Анна Соколова", reaction: "😍" },
-      { username: "music_vibe", name: "Никита Михайлов" },
-      { username: "bookworm_escapes", name: "Юлия Федорова", liked: true },
-      { username: "gaming_pro", name: "Артем Морозов", reaction: "😂" },
-    ];
-    return names.slice(0, Math.min(realCount, names.length));
-  }, [story.id, story.viewCount]);
+  // Real viewers only — no fabricated names. The count prefers the server's
+  // de-duplicated viewCount, falling back to the length of the real viewers list.
+  const viewers = story.viewers || [];
+  const viewsTotal = story.viewCount ?? viewers.length;
 
   // Anything that demands the viewer's attention freezes the auto-advance,
   // otherwise the story would slide away mid-vote or mid-sentence.
@@ -403,6 +389,17 @@ export default function StoryViewer({
           ))}
         </div>
 
+        {/* ---- Mention sticker (#21) ---- */}
+        {story.mention?.userId && (
+          <Link
+            href={`/u/${story.mention.userId}`}
+            onClick={() => onClose()}
+            className="absolute left-1/2 -translate-x-1/2 bottom-28 z-30 bg-black/60 backdrop-blur-md text-white text-sm font-bold px-3.5 py-1.5 rounded-lg hover:bg-black/75 transition"
+          >
+            @{story.mention.username}
+          </Link>
+        )}
+
         {/* ---- Interactive sticker ---- */}
         {sticker && (
           <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 z-20 flex justify-center px-6">
@@ -503,7 +500,7 @@ export default function StoryViewer({
                 className="flex items-center gap-2 text-white bg-black/40 hover:bg-black/60 rounded-full px-4 py-2.5 transition cursor-pointer text-xs font-bold mr-auto active:scale-95"
               >
                 <Eye className="w-4 h-4 text-white" />
-                <span>Просмотры ({mockViewers.length})</span>
+                <span>Просмотры ({viewsTotal})</span>
               </button>
             ) : (
               <>
@@ -644,23 +641,28 @@ export default function StoryViewer({
               </div>
 
               <div className="flex flex-col gap-2.5 overflow-y-auto mt-2 text-white">
-                {mockViewers.length === 0 ? (
+                {viewsTotal === 0 ? (
                   <div className="flex flex-col items-center gap-2 py-8 text-zinc-400">
                     <Search className="w-8 h-8" />
                     <span className="text-sm">Просмотров пока нет.</span>
                   </div>
+                ) : viewers.length === 0 ? (
+                  // The backend gave a total but no per-viewer identities.
+                  <div className="flex flex-col items-center gap-2 py-8 text-zinc-400">
+                    <Eye className="w-8 h-8" />
+                    <span className="text-sm">
+                      {viewsTotal} {viewsTotal === 1 ? "просмотр" : "просмотров"}
+                    </span>
+                  </div>
                 ) : (
-                  mockViewers.map((viewer) => (
-                    <div key={viewer.username} className="flex items-center justify-between glass rounded-2xl p-3">
+                  viewers.map((viewer) => (
+                    <div key={viewer.userId || viewer.username} className="flex items-center justify-between glass rounded-2xl p-3">
                       <div className="flex items-center gap-3">
-                        <Avatar name={viewer.username} className="w-9 h-9 flex-shrink-0 border border-zinc-700" />
-                        <div className="flex flex-col text-left">
-                          <span className="text-xs font-semibold">{viewer.username}</span>
-                          <span className="text-[10px] text-zinc-400">{viewer.name}</span>
-                        </div>
+                        <Avatar src={viewer.avatar} name={viewer.username} className="w-9 h-9 flex-shrink-0 border border-zinc-700" />
+                        <span className="text-xs font-semibold text-left">{viewer.username}</span>
                       </div>
-                      
-                      {/* View/Like/Reaction details */}
+
+                      {/* Like / reaction details */}
                       <div className="flex items-center gap-2">
                         {viewer.liked && (
                           <Heart className="w-4 h-4 fill-red-500 text-red-500" />

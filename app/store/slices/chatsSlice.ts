@@ -26,11 +26,19 @@ export interface Message {
   senderAvatar?: string;
 }
 
+export interface GroupParticipant {
+  userId: string;
+  username: string;
+  avatar: string;
+  isAdmin: boolean;
+}
+
 export interface GroupInfo {
   name: string;
   avatar: string;
   adminIds: string[];
   participantsCount: number;
+  participants: GroupParticipant[];
 }
 
 export interface Chat {
@@ -87,12 +95,23 @@ const formatBackendChat = (c: any, currentUserId: string): Chat => {
   const rawGroup = c.groupInfo || {};
   const receiver = c.otherUser || c.users?.find((u: any) => u.id !== currentUserId) || c.user || {};
 
+  const adminIds: string[] = rawGroup.adminIds || [];
+  const rawParticipants = rawGroup.participants || rawGroup.members || c.users || [];
   const groupInfo: GroupInfo | null = isGroup
     ? {
         name: rawGroup.name || "Группа",
         avatar: getFullImageUrl(rawGroup.avatar),
-        adminIds: rawGroup.adminIds || [],
-        participantsCount: rawGroup.participantsCount || 0,
+        adminIds,
+        participantsCount: rawGroup.participantsCount || rawParticipants.length || 0,
+        participants: (rawParticipants as any[]).map((p: any): GroupParticipant => {
+          const uid = p.userId || p.id || "";
+          return {
+            userId: uid,
+            username: p.userName || p.username || "user",
+            avatar: getFullImageUrl(p.avatar || p.imagePath),
+            isAdmin: adminIds.includes(uid),
+          };
+        }),
       }
     : null;
 
@@ -261,9 +280,9 @@ export const reactToMessage = createAsyncThunk(
 
 export const deleteMessage = createAsyncThunk(
   "chats/deleteMessage",
-  async ({ messageId, chatId }: { messageId: number; chatId: number }, { rejectWithValue }) => {
+  async ({ messageId, chatId, forEveryone }: { messageId: number; chatId: number; forEveryone?: boolean }, { rejectWithValue }) => {
     try {
-      await api.chat.deleteMessage(messageId);
+      await api.chat.deleteMessage(messageId, forEveryone);
       return { messageId, chatId };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to delete message.");

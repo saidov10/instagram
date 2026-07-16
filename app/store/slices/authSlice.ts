@@ -9,6 +9,8 @@ export interface UserState {
   about: string;
   gender: number;
   isPrivate: boolean;
+  isVerified: boolean;
+  accountType: "PERSONAL" | "BUSINESS" | "CREATOR";
 }
 
 interface AuthState {
@@ -68,6 +70,8 @@ export const fetchMyProfile = createAsyncThunk(
         about: profile.about || "",
         gender: profile.gender || 0,
         isPrivate: !!profile.isPrivate,
+        isVerified: !!profile.isVerified,
+        accountType: (profile.accountType || "PERSONAL") as "PERSONAL" | "BUSINESS" | "CREATOR",
       };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load profile.");
