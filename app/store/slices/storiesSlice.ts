@@ -15,6 +15,15 @@ export interface StorySticker {
   myAnswer: string | null;
 }
 
+/** A real person who viewed the story, as reported by the backend. */
+export interface StoryViewer {
+  userId: string;
+  username: string;
+  avatar: string;
+  liked: boolean;
+  reaction: string | null;
+}
+
 export interface Story {
   id: number;
   username: string;
@@ -31,7 +40,29 @@ export interface Story {
   sticker: StorySticker | null;
   musicTrack?: { audioUrl: string; title: string; artist: string; durationMs: number } | null;
   viewCount?: number;
+  /** Real viewers list from the backend (empty when not provided). */
+  viewers?: StoryViewer[];
+  /** #21 — an @mention sticker tagging another user. */
+  mention?: { userId: string; username: string } | null;
 }
+
+/** Normalizes whatever shape the backend uses for the viewers list. */
+const formatViewers = (s: any): StoryViewer[] => {
+  const raw = s.viewers || s.storyViews || s.views || s.viewerDtos || [];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((v: any): StoryViewer => {
+      const u = v.user || v.viewer || v.userProfile || v;
+      return {
+        userId: u.userId || u.id || "",
+        username: u.userName || u.username || "user",
+        avatar: getFullImageUrl(u.avatar || u.imagePath || u.userAvatar),
+        liked: !!(v.isLiked ?? v.viewLike ?? u.isLiked),
+        reaction: v.reaction || u.reaction || null,
+      };
+    })
+    .filter((v: StoryViewer) => v.userId || v.username !== "user");
+};
 
 interface StoriesState {
   stories: Story[];
@@ -99,11 +130,18 @@ export const formatBackendStory = (s: any): Story => {
     isForCloseFriends: !!s.isForCloseFriends,
     userId: s.userId || "",
     likes: s.viewerDto?.viewLike || 0,
-    viewCount: s.viewerDto?.viewCount || 0,
+    viewCount: s.viewerDto?.viewCount ?? s.viewCount ?? 0,
+    viewers: formatViewers(s),
     createAt: s.createAt || "",
     isLiked: !!(s.isLiked ?? s.viewerDto?.isLiked),
     reaction: s.reaction || s.viewerDto?.reaction || null,
     sticker: formatSticker(s),
+    mention: (s.stickerMentionUserId || s.mentionUserId || s.mention)
+      ? {
+          userId: s.stickerMentionUserId || s.mentionUserId || s.mention?.userId || "",
+          username: s.mentionUsername || s.mention?.userName || s.mention?.username || "user",
+        }
+      : null,
     musicTrack: rawTrack?.musicTrack
       ? {
           audioUrl: getFullImageUrl(rawTrack.musicTrack.audioUrl || rawTrack.musicTrack.url),
@@ -175,18 +213,24 @@ export const createStory = createAsyncThunk(
       postId,
       isForCloseFriends = false,
       sticker,
+      mention,
       musicTrack,
     }: {
       file: File;
       postId?: number;
       isForCloseFriends?: boolean;
       sticker?: { type: StickerType; question: string; options?: string[] };
+      mention?: { userId: string; username: string };
       musicTrack?: { id: string; title: string; artist: string; audioUrl: string; coverUrl?: string; durationMs?: number } | null;
     },
     { dispatch, rejectWithValue }
   ) => {
     try {
-      const res = await api.story.addStory(file, postId, isForCloseFriends, sticker, musicTrack);
+      // A mention sticker (#21) and a poll/question sticker are mutually exclusive.
+      const stickerArg = mention
+        ? { type: "MENTION" as const, mentionUserId: mention.userId, mentionUsername: mention.username }
+        : sticker;
+      const res = await api.story.addStory(file, postId, isForCloseFriends, stickerArg, musicTrack);
       const secureUrl = typeof res === "string" ? res : res?.data || res?.secureUrl || "";
       if (secureUrl && musicTrack && typeof window !== "undefined") {
         try {
@@ -299,13 +343,14 @@ const storiesSlice = createSlice({
         state.myStories = action.payload;
       })
 
-      // View Story Local Mutation
+      // View Story Local Mutation — only flip the "viewed" flag. The real, de-duplicated
+      // view count comes from the server (viewerDto.viewCount); incrementing here would
+      // inflate it on every re-open, so we deliberately don't touch viewCount.
       .addCase(viewStory.fulfilled, (state, action: PayloadAction<number>) => {
         [state.stories, state.myStories].forEach((list) => {
           const story = list.find((s) => s.id === action.payload);
           if (story) {
             story.viewed = true;
-            story.viewCount = (story.viewCount || 0) + 1;
           }
         });
       })

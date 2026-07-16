@@ -7,7 +7,7 @@ import { logout, updateProfile, updateAvatar, fetchMyProfile, updatePrivacy } fr
 import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
 import { api, getFullImageUrl } from "../services/api";
-import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone, UserX, VolumeX } from "lucide-react";
+import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone, UserX, VolumeX, AlertTriangle, Briefcase } from "lucide-react";
 import Avatar from "../components/Avatar";
 
 interface DeviceSession {
@@ -94,6 +94,10 @@ export default function SettingsPage() {
   const [hiddenUsers, setHiddenUsers] = useState<any[]>([]);
   const [restrictedUsers, setRestrictedUsers] = useState<any[]>([]);
   const [mutedUsers, setMutedUsers] = useState<any[]>([]);
+  // Sensitive-content viewer preference (#24): Less=HIDE, Standard=BLUR, More=SHOW
+  const [sensitiveLevel, setSensitiveLevel] = useState<"HIDE" | "BLUR" | "SHOW">("BLUR");
+  const [sensitiveBusy, setSensitiveBusy] = useState(false);
+  const [accountBusy, setAccountBusy] = useState(false);
 
   // Login activity / device sessions
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
@@ -260,6 +264,45 @@ export default function SettingsPage() {
       setMutedUsers((prev) => prev.filter((u) => (u.id || u.userId) !== userId));
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleDeactivate = async () => {
+    if (!window.confirm("Ваш профиль будет скрыт, пока вы снова не войдёте. Продолжить?")) return;
+    try {
+      await api.account.deactivate();
+    } catch (err) {
+      console.error("Failed to deactivate:", err);
+    } finally {
+      // Server logs out all sessions; drop the local token and return to login.
+      dispatch(logout());
+      router.push("/login");
+    }
+  };
+
+  const handleAccountType = async (type: "PERSONAL" | "BUSINESS" | "CREATOR") => {
+    setAccountBusy(true);
+    try {
+      await api.profile.updateAccountType(type);
+      await dispatch(fetchMyProfile());
+    } catch (err) {
+      console.error("Failed to update account type:", err);
+    } finally {
+      setAccountBusy(false);
+    }
+  };
+
+  const handleSensitiveLevel = async (level: "HIDE" | "BLUR" | "SHOW") => {
+    const prev = sensitiveLevel;
+    setSensitiveLevel(level);
+    setSensitiveBusy(true);
+    try {
+      await api.profile.updateSensitiveContentSetting(level);
+    } catch (err) {
+      console.error("Failed to update sensitive content setting:", err);
+      setSensitiveLevel(prev);
+    } finally {
+      setSensitiveBusy(false);
     }
   };
 
@@ -469,6 +512,56 @@ export default function SettingsPage() {
           </div>
 
         </form>
+
+        {/* ----------------- ACCOUNT TYPE (#20) ----------------- */}
+        <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
+          <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+            <Briefcase className="w-5 h-5" /> Тип аккаунта
+          </h3>
+          <p className="text-sm text-zinc-450 mb-5">
+            Бизнес и авторские аккаунты получают доступ к статистике и профессиональным инструментам.
+          </p>
+          <div className="flex flex-col gap-2">
+            {([
+              { type: "PERSONAL", title: "Личный", desc: "Обычный аккаунт" },
+              { type: "BUSINESS", title: "Бизнес", desc: "Для компаний и брендов" },
+              { type: "CREATOR", title: "Автор", desc: "Для блогеров и создателей контента" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.type}
+                onClick={() => handleAccountType(opt.type)}
+                disabled={accountBusy}
+                className={`flex items-center justify-between p-3 rounded-xl border transition cursor-pointer text-left ${
+                  (currentUser.accountType || "PERSONAL") === opt.type
+                    ? "border-blue-500 bg-blue-500/5"
+                    : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                }`}
+              >
+                <div className="flex flex-col">
+                  <span className="font-semibold text-sm">{opt.title}</span>
+                  <span className="text-xs text-zinc-450">{opt.desc}</span>
+                </div>
+                <span className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${(currentUser.accountType || "PERSONAL") === opt.type ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-600"}`} />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ----------------- DEACTIVATE ACCOUNT (#22) ----------------- */}
+        <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
+          <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+            <Ban className="w-5 h-5" /> Временно деактивировать аккаунт
+          </h3>
+          <p className="text-sm text-zinc-450 mb-4">
+            Ваш профиль, публикации и комментарии будут скрыты, пока вы снова не войдёте. Аккаунт восстановится автоматически при следующем входе.
+          </p>
+          <button
+            onClick={handleDeactivate}
+            className="text-sm font-bold text-red-500 border border-red-500/40 hover:bg-red-500/5 px-5 py-2.5 rounded-lg transition cursor-pointer"
+          >
+            Деактивировать мой аккаунт
+          </button>
+        </div>
 
         {/* ----------------- CHANGE PASSWORD ----------------- */}
         <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
@@ -881,6 +974,40 @@ export default function SettingsPage() {
                 })}
               </div>
             )}
+          </div>
+
+          {/* Sensitive content control (#24) */}
+          <div>
+            <h3 className="text-base font-bold mb-2 flex items-center gap-2">
+              <AlertTriangle className="w-4.5 h-4.5" /> Контроль деликатного контента
+            </h3>
+            <p className="text-sm text-zinc-450 mb-4">
+              Управляйте тем, как часто вы видите деликатные материалы в «Интересном» и ленте.
+            </p>
+            <div className="flex flex-col gap-2">
+              {([
+                { level: "HIDE", title: "Меньше", desc: "Скрывать деликатный контент" },
+                { level: "BLUR", title: "Стандартно", desc: "Размывать деликатный контент" },
+                { level: "SHOW", title: "Больше", desc: "Показывать без предупреждений" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.level}
+                  onClick={() => handleSensitiveLevel(opt.level)}
+                  disabled={sensitiveBusy}
+                  className={`flex items-center justify-between p-3 rounded-xl border transition cursor-pointer text-left ${
+                    sensitiveLevel === opt.level
+                      ? "border-blue-500 bg-blue-500/5"
+                      : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                  }`}
+                >
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-sm">{opt.title}</span>
+                    <span className="text-xs text-zinc-450">{opt.desc}</span>
+                  </div>
+                  <span className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${sensitiveLevel === opt.level ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-600"}`} />
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         )}

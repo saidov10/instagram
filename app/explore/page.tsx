@@ -77,7 +77,13 @@ export default function ExplorePage() {
     const load = async () => {
       setLoading(true);
       try {
-        const posts = await api.post.getPosts({ pageSize: 30 });
+        // Explore ranks posts from people you don't follow by engagement; fall back to all posts.
+        let posts: any[];
+        try {
+          posts = await api.post.getExplorePosts(1, 30);
+        } catch {
+          posts = await api.post.getPosts({ pageSize: 30 });
+        }
         const myId = currentUser?.id || "";
         const mapped: ExploreItem[] = (posts || []).map((p: any, idx: number) => {
           const img = getFullImageUrl((p.images && p.images[0]) || p.filePath || p.imagePath || p.image) || DEFAULT_AVATAR;

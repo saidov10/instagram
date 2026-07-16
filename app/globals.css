@@ -5,45 +5,68 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  /* Base surfaces — Instagram light palette */
-  --background: #fafafa;      /* Instagram exact light background */
-  --foreground: #262626;      /* Instagram primary text */
+  /* Base surfaces — Instagram exact LIGHT palette (design spec) */
+  --background: #ffffff;      /* primary background */
+  --foreground: #262626;      /* primary text */
   --surface: #ffffff;         /* nav / panels */
   --surface-solid: #ffffff;   /* modals / dropdowns */
-  --surface-2: #fafafa;       /* subtle fills, message bubbles */
-  --muted: #8e8e8e;           /* Instagram secondary text */
-  --border: #dbdbdb;          /* Instagram divider */
+  --surface-2: #fafafa;       /* secondary surfaces, subtle fills, bubbles */
+  --muted: #8e8e8e;           /* secondary text */
+  --border: #dbdbdb;          /* divider */
   --border-strong: #c7c7c7;
 
-  /* Accent gradient (unique violet → fuchsia → amber) */
-  --accent-1: #7c3aed;
-  --accent-2: #ec4899;
-  --accent-3: #f59e0b;
-  --accent: #7c3aed;
-  --accent-blue: #3b82f6;
+  /* Instagram brand gradient stops (45deg: amber → orange → magenta → purple → indigo) */
+  --ig-1: #feda75;
+  --ig-2: #fa7e1e;
+  --ig-3: #d62976;
+  --ig-4: #962fbf;
+  --ig-5: #4f5bd5;
+  --ig-gradient: linear-gradient(45deg, #feda75, #fa7e1e, #d62976, #962fbf, #4f5bd5);
+  /* Back-compat aliases for existing utilities that referenced accent-1/2/3 */
+  --accent-1: #4f5bd5;
+  --accent-2: #d62976;
+  --accent-3: #fa7e1e;
+  --accent: #d62976;
+
+  /* Semantic slots — the ONLY saturated colors allowed by the design system */
+  --accent-blue: #0095f6;     /* link / primary action */
+  --like-red: #ed4956;        /* heart / destructive */
+  --verified-blue: #3897f0;   /* verified checkmark */
 
   /* Elevation */
   --shadow-sm: 0 1px 2px rgba(16, 16, 32, 0.06), 0 2px 8px rgba(16, 16, 32, 0.05);
   --shadow-md: 0 4px 16px rgba(16, 16, 32, 0.08), 0 12px 40px rgba(16, 16, 32, 0.08);
   --shadow-lg: 0 8px 30px rgba(16, 16, 32, 0.12), 0 24px 70px rgba(16, 16, 32, 0.14);
-  --glow: 0 0 0 1px rgba(124, 58, 237, 0.18), 0 8px 30px rgba(124, 58, 237, 0.22);
+  --glow: 0 0 0 1px rgba(214, 41, 118, 0.18), 0 8px 30px rgba(214, 41, 118, 0.22);
 }
 
 .dark {
-  /* Base surfaces — Instagram's actual dark palette (verified from Instagram's dark CSS) */
-  --background: #000000;      /* Instagram exact dark background — pure black */
+  /* Base surfaces — Instagram exact DARK palette (design spec) */
+  --background: #000000;      /* pure black */
   --foreground: #f5f5f5;
   --surface: #000000;         /* nav / panels — flat, same as bg + border */
-  --surface-solid: #1c1c1c;   /* modals / dropdowns / menus (elevated) */
-  --surface-2: #363636;       /* input fields, message bars, bubbles */
-  --muted: #a8a8a8;           /* Instagram secondary text (dark) */
-  --border: #262626;          /* subtle divider */
+  --surface-solid: #121212;   /* modals / dropdowns / menus (elevated) */
+  --surface-2: #121212;       /* secondary surfaces / panels */
+  --muted: #a8a8a8;           /* secondary text (dark) */
+  --border: #262626;          /* divider */
   --border-strong: #363636;
+
+  /* Blue lightens in dark mode for contrast; gradient + semantic reds stay. */
+  --accent-blue: #4da6ff;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 18px rgba(0, 0, 0, 0.5), 0 14px 44px rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 10px 34px rgba(0, 0, 0, 0.6), 0 28px 80px rgba(0, 0, 0, 0.7);
-  --glow: 0 0 0 1px rgba(236, 72, 153, 0.28), 0 10px 40px rgba(124, 58, 237, 0.35);
+  --glow: 0 0 0 1px rgba(214, 41, 118, 0.28), 0 10px 40px rgba(150, 47, 191, 0.35);
+}
+
+/* Dark input/bubble fill needs contrast against pure black — Instagram uses ~#262626 here,
+   not the #121212 panel color, so keep a dedicated token for form fields. */
+.dark {
+  --surface-input: #262626;
+}
+:root {
+  --surface-input: #efefef;
 }
 
 @theme inline {
@@ -103,31 +126,62 @@ body {
   box-shadow: var(--shadow-md);
 }
 
-/* Gradient text + brand */
+/* Gradient text + brand — Instagram brand gradient */
 .gradient-text {
-  background: linear-gradient(110deg, var(--accent-1), var(--accent-2) 55%, var(--accent-3));
+  background: var(--ig-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 .gradient-bg {
-  background: linear-gradient(120deg, var(--accent-1), var(--accent-2) 50%, var(--accent-3));
+  background: var(--ig-gradient);
 }
 
-/* Gradient ring (stories / avatars) */
+/* Gradient ring (stories / avatars) — the Instagram brand gradient at 45deg */
 .gradient-ring {
-  background: conic-gradient(from 210deg, var(--accent-3), var(--accent-2), var(--accent-1), var(--accent-3));
+  background: var(--ig-gradient);
 }
 
-/* Primary button */
+/* Gradient CTA button (used sparingly per the design system). Primary actions
+   (Follow / Post / Save / Send) should use .btn-primary — flat Instagram blue. */
 .btn-grad {
-  background: linear-gradient(120deg, var(--accent-1), var(--accent-2));
+  background: var(--ig-gradient);
   color: #fff;
-  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.35);
+  box-shadow: 0 6px 20px rgba(214, 41, 118, 0.3);
   transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
 }
-.btn-grad:hover { filter: brightness(1.07); box-shadow: 0 10px 28px rgba(124, 58, 237, 0.45); }
+.btn-grad:hover { filter: brightness(1.05); box-shadow: 0 10px 28px rgba(214, 41, 118, 0.4); }
 .btn-grad:active { transform: scale(0.97); }
+
+/* Flat primary button — the default Instagram action button */
+.btn-primary {
+  background: var(--accent-blue);
+  color: #fff;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled { opacity: 0.5; cursor: default; }
+
+/* Secondary button — light-gray fill / outline, same radius */
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 600;
+  transition: filter 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+.btn-secondary:hover { background: var(--border); }
+.btn-secondary:active { transform: scale(0.98); }
+
+/* Semantic color helpers */
+.text-like { color: var(--like-red); }
+.fill-like { fill: var(--like-red); }
+.text-link { color: var(--accent-blue); }
+.text-danger { color: var(--like-red); }
 
 /* Micro-interactions */
 .press { transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1); }

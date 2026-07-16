@@ -39,7 +39,8 @@ import {
   Star,
   Globe,
   Check,
-  Users
+  Users,
+  AtSign
 } from "lucide-react";
 
 /** One row of "Недавнее": either a visited profile or a raw text query. */
@@ -94,16 +95,30 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
   // Post-specific: people tagged in the photo
   const [taggedUsers, setTaggedUsers] = useState<{ id: string; username: string; avatar: string }[]>([]);
+  const [collaboratorIds, setCollaboratorIds] = useState<Set<string>>(new Set());
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
   const [tagResults, setTagResults] = useState<any[]>([]);
   const [tagLoading, setTagLoading] = useState(false);
+
+  // Post advanced settings (#14 hide like count, #24 sensitive)
+  const [postSensitive, setPostSensitive] = useState(false);
+  const [postHideLikes, setPostHideLikes] = useState(false);
+
+  // Drafts (#18)
+  const [drafts, setDrafts] = useState<any[]>([]);
+  const [showDrafts, setShowDrafts] = useState(false);
+  const [showSaveDraftPrompt, setShowSaveDraftPrompt] = useState(false);
 
   // Story-specific: share with everyone vs close friends only
   const [isForCloseFriends, setIsForCloseFriends] = useState(false);
 
   // Story-specific: optional interactive sticker (poll or open question)
   const [stickerKind, setStickerKind] = useState<"NONE" | "POLL" | "QUESTION">("NONE");
+
+  // Story-specific: @mention sticker (#21)
+  const [mentionUser, setMentionUser] = useState<{ id: string; username: string; avatar: string } | null>(null);
+  const [showMentionPicker, setShowMentionPicker] = useState(false);
   const [stickerQuestion, setStickerQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState<[string, string]>(["Да", "Нет"]);
   
@@ -156,9 +171,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     return () => clearTimeout(t);
   }, [searchQuery, showSearchPanel]);
 
-  // Debounced user search for the "Tag people" picker
+  // Debounced user search for the "Tag people" / "Mention" pickers
   React.useEffect(() => {
-    if (!showTagPicker) return;
+    if (!showTagPicker && !showMentionPicker) return;
     const q = tagQuery.trim();
     if (!q) {
       setTagResults([]);
@@ -177,23 +192,79 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [tagQuery, showTagPicker]);
+  }, [tagQuery, showTagPicker, showMentionPicker]);
 
   const toggleTaggedUser = (user: any) => {
     const uid = user.id || user.userId;
     if (!uid) return;
-    setTaggedUsers((prev) =>
-      prev.some((u) => u.id === uid)
-        ? prev.filter((u) => u.id !== uid)
-        : [
-            ...prev,
-            {
-              id: uid,
-              username: user.userName || user.username || "user",
-              avatar: getFullImageUrl(user.avatar || user.imagePath),
-            },
-          ]
-    );
+    setTaggedUsers((prev) => {
+      if (prev.some((u) => u.id === uid)) {
+        // Unselecting also clears any collaborator invite for that user.
+        setCollaboratorIds((c) => {
+          const next = new Set(c);
+          next.delete(uid);
+          return next;
+        });
+        return prev.filter((u) => u.id !== uid);
+      }
+      return [
+        ...prev,
+        {
+          id: uid,
+          username: user.userName || user.username || "user",
+          avatar: getFullImageUrl(user.avatar || user.imagePath),
+        },
+      ];
+    });
+  };
+
+  const toggleCollaborator = (uid: string) => {
+    setCollaboratorIds((prev) => {
+      const next = new Set(prev);
+      next.has(uid) ? next.delete(uid) : next.add(uid);
+      return next;
+    });
+  };
+
+  // ---- Drafts (#18) ----
+  const refreshDrafts = () => {
+    api.post.getDrafts().then((list) => setDrafts(list || [])).catch(() => setDrafts([]));
+  };
+
+  const handleSaveDraft = async () => {
+    if (!imageFile) { resetCreateModal(); return; }
+    try {
+      await api.post.saveDraft({
+        title: caption || "Draft",
+        content: caption,
+        images: [imageFile],
+        isReel: createType === "reel",
+      });
+    } catch (err) {
+      console.error("Failed to save draft:", err);
+    } finally {
+      resetCreateModal();
+    }
+  };
+
+  const handleDeleteDraft = async (draftId: number) => {
+    try {
+      await api.post.deleteDraft(draftId);
+      setDrafts((prev) => prev.filter((d) => (d.id ?? d.draftId) !== draftId));
+    } catch (err) {
+      console.error("Failed to delete draft:", err);
+    }
+  };
+
+  const handlePublishDraft = async (draftId: number) => {
+    try {
+      await api.post.publishDraft(draftId);
+      setDrafts((prev) => prev.filter((d) => (d.id ?? d.draftId) !== draftId));
+      setShowDrafts(false);
+      dispatch(fetchMyProfile());
+    } catch (err) {
+      console.error("Failed to publish draft:", err);
+    }
   };
 
   const handleFollowToggle = async (user: any) => {
@@ -378,12 +449,27 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     setStickerKind("NONE");
     setStickerQuestion("");
     setPollOptions(["Да", "Нет"]);
+    setMentionUser(null);
+    setShowMentionPicker(false);
     setTaggedUsers([]);
+    setCollaboratorIds(new Set());
     setShowTagPicker(false);
     setTagQuery("");
     setTagResults([]);
+    setPostSensitive(false);
+    setPostHideLikes(false);
+    setShowSaveDraftPrompt(false);
     setUploadSuccess(false);
     setUploadError(null);
+  };
+
+  // Closing with an unpublished post/reel offers to keep it as a draft (#18).
+  const handleCloseComposer = () => {
+    if (imageFile && createType !== "story" && !uploadSuccess) {
+      setShowSaveDraftPrompt(true);
+    } else {
+      resetCreateModal();
+    }
   };
 
   const handleShare = async () => {
@@ -408,7 +494,13 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
             }
           : null;
 
-        await dispatch(createStory({ file: imageFile, isForCloseFriends, sticker, musicTrack: finalTrack })).unwrap();
+        await dispatch(createStory({
+          file: imageFile,
+          isForCloseFriends,
+          sticker,
+          mention: mentionUser ? { userId: mentionUser.id, username: mentionUser.username } : undefined,
+          musicTrack: finalTrack,
+        })).unwrap();
       } else if (createType === "reel") {
         await dispatch(createReel({
           file: imageFile,
@@ -424,6 +516,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           images: [imageFile],
           isReel: false,
           taggedUserIds: taggedUsers.map((u) => u.id),
+          collaboratorIds: Array.from(collaboratorIds),
+          isSensitive: postSensitive,
+          hideLikeCount: postHideLikes,
         })).unwrap();
       }
 
@@ -837,26 +932,158 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 tagResults.map((u) => {
                   const uid = u.id || u.userId;
                   const selected = taggedUsers.some((t) => t.id === uid);
+                  const isCollab = collaboratorIds.has(uid);
                   return (
-                    <button
+                    <div
                       key={uid}
-                      onClick={() => toggleTaggedUser(u)}
-                      className="flex items-center gap-3 w-full p-2 rounded-xl hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition cursor-pointer"
+                      className="flex items-center gap-3 w-full p-2 rounded-xl hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition"
                     >
-                      <Avatar src={getFullImageUrl(u.avatar || u.imagePath)} name={u.userName || u.username} className="w-10 h-10" />
-                      <span className="flex-1 text-left text-sm font-semibold truncate">
-                        {u.userName || u.username || "user"}
-                      </span>
-                      <span
-                        className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      <button onClick={() => toggleTaggedUser(u)} className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer text-left">
+                        <Avatar src={getFullImageUrl(u.avatar || u.imagePath)} name={u.userName || u.username} className="w-10 h-10" />
+                        <span className="flex-1 text-sm font-semibold truncate">
+                          {u.userName || u.username || "user"}
+                        </span>
+                      </button>
+                      {/* Invite as collaborator (#16) — only meaningful once tagged */}
+                      {selected && (
+                        <button
+                          onClick={() => toggleCollaborator(uid)}
+                          className={`text-[10px] font-bold px-2 py-1 rounded-full flex-shrink-0 transition cursor-pointer ${
+                            isCollab ? "btn-grad text-white" : "glass text-zinc-500"
+                          }`}
+                          title="Пригласить как соавтора"
+                        >
+                          Соавтор
+                        </button>
+                      )}
+                      <button
+                        onClick={() => toggleTaggedUser(u)}
+                        className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer ${
                           selected ? "bg-blue-500 text-white" : "border border-zinc-300 dark:border-zinc-600"
                         }`}
                       >
                         {selected && <Check className="w-3 h-3" />}
-                      </span>
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- STORY MENTION PICKER (#21) ----------------- */}
+      {showMentionPicker && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4"
+          onClick={() => setShowMentionPicker(false)}
+        >
+          <div
+            className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg flex flex-col max-h-[80vh] animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <span className="text-sm font-bold">Упомянуть человека</span>
+              <button onClick={() => setShowMentionPicker(false)} className="hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <div className="flex items-center gap-2 glass rounded-xl px-3 py-2">
+                <Search className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Поиск людей…"
+                  value={tagQuery}
+                  onChange={(e) => setTagQuery(e.target.value)}
+                  className="bg-transparent text-sm w-full outline-none placeholder-zinc-400"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {tagLoading ? (
+                <p className="text-center text-sm text-zinc-400 py-8">Поиск…</p>
+              ) : tagResults.length === 0 ? (
+                <p className="text-center text-sm text-zinc-400 py-8">
+                  {tagQuery.trim() ? "Никого не найдено" : "Начните вводить имя пользователя"}
+                </p>
+              ) : (
+                tagResults.map((u) => {
+                  const uid = u.id || u.userId;
+                  return (
+                    <button
+                      key={uid}
+                      onClick={() => {
+                        setMentionUser({ id: uid, username: u.userName || u.username || "user", avatar: getFullImageUrl(u.avatar || u.imagePath) });
+                        setShowMentionPicker(false);
+                      }}
+                      className="flex items-center gap-3 w-full p-2 rounded-xl hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition cursor-pointer text-left"
+                    >
+                      <Avatar src={getFullImageUrl(u.avatar || u.imagePath)} name={u.userName || u.username} className="w-10 h-10" />
+                      <span className="flex-1 text-sm font-semibold truncate">{u.userName || u.username || "user"}</span>
                     </button>
                   );
                 })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- SAVE DRAFT PROMPT ----------------- */}
+      {showSaveDraftPrompt && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4" onClick={() => setShowSaveDraftPrompt(false)}>
+          <div className="glass-strong w-full max-w-xs rounded-3xl overflow-hidden shadow-soft-lg animate-pop-in text-center" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5">
+              <h3 className="font-bold text-base mb-1">Сохранить черновик?</h3>
+              <p className="text-sm text-zinc-500">Вы сможете вернуться к публикации позже.</p>
+            </div>
+            <div className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-700/60 border-t border-zinc-200 dark:border-zinc-700/60">
+              <button onClick={handleSaveDraft} className="py-3 text-sm font-bold text-blue-500 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer">
+                Сохранить черновик
+              </button>
+              <button onClick={resetCreateModal} className="py-3 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer">
+                Удалить
+              </button>
+              <button onClick={() => setShowSaveDraftPrompt(false)} className="py-3 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer">
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- DRAFTS LIST ----------------- */}
+      {showDrafts && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[75] flex items-center justify-center p-4" onClick={() => setShowDrafts(false)}>
+          <div className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg flex flex-col max-h-[80vh] animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <span className="text-sm font-bold">Черновики</span>
+              <button onClick={() => setShowDrafts(false)} className="hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {drafts.length === 0 ? (
+                <p className="text-center text-sm text-zinc-400 py-12">Черновиков пока нет.</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-2">
+                  {drafts.map((d) => {
+                    const did = d.id ?? d.draftId;
+                    const img = getFullImageUrl((d.images && d.images[0]) || d.filePath || d.imagePath || d.image);
+                    return (
+                      <div key={did} className="relative aspect-square rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-900 group">
+                        {img ? <SmartImage src={img} alt="" fill sizes="120px" className="object-cover" /> : null}
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex flex-col items-center justify-center gap-1.5">
+                          <button onClick={() => handlePublishDraft(did)} className="text-[10px] font-bold bg-white/90 text-black px-2 py-1 rounded-full hover:bg-white cursor-pointer">
+                            Опубликовать
+                          </button>
+                          <button onClick={() => handleDeleteDraft(did)} className="text-[10px] font-bold text-white hover:text-red-400 cursor-pointer">
+                            Удалить
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>
@@ -915,7 +1142,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           {/* Close button outside */}
           <button
-            onClick={resetCreateModal}
+            onClick={handleCloseComposer}
             className="absolute top-4 right-4 text-white hover:text-zinc-300"
           >
             <X className="w-8 h-8" />
@@ -966,7 +1193,12 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   {isUploading ? "Делимся..." : uploadSuccess ? "Поделено" : "Поделиться"}
                 </button>
               ) : (
-                <div className="w-8" />
+                <button
+                  onClick={() => { refreshDrafts(); setShowDrafts(true); }}
+                  className="text-sm font-semibold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
+                >
+                  Черновики
+                </button>
               )}
             </div>
 
@@ -1100,6 +1332,24 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           </button>
                         ))}
                       </div>
+
+                      {/* Mention sticker (#21) */}
+                      {mentionUser ? (
+                        <div className="flex items-center gap-2 glass rounded-2xl p-2">
+                          <Avatar src={mentionUser.avatar} name={mentionUser.username} className="w-8 h-8" />
+                          <span className="flex-1 text-sm font-semibold truncate">@{mentionUser.username}</span>
+                          <button onClick={() => setMentionUser(null)} className="p-1 hover:text-red-500 cursor-pointer">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setTagQuery(""); setTagResults([]); setShowMentionPicker(true); }}
+                          className="flex items-center justify-center gap-2 glass rounded-2xl py-2.5 text-sm font-semibold hover:shadow-soft cursor-pointer"
+                        >
+                          <AtSign className="w-4 h-4" /> Упомянуть человека
+                        </button>
+                      )}
 
                       {stickerKind !== "NONE" && (
                         <div className="flex flex-col gap-2 animate-in fade-in duration-200">
@@ -1297,6 +1547,27 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                               ))}
                             </div>
                           )}
+                          <hr className="border-zinc-200 dark:border-zinc-800" />
+
+                          {/* Advanced settings (#14, #24) */}
+                          <button
+                            onClick={() => setPostHideLikes((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">Скрыть количество отметок «Нравится»</span>
+                            <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${postHideLikes ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                              <span className="w-4 h-4 rounded-full bg-white" />
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => setPostSensitive((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">Отметить как деликатный контент</span>
+                            <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${postSensitive ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                              <span className="w-4 h-4 rounded-full bg-white" />
+                            </span>
+                          </button>
                           <hr className="border-zinc-200 dark:border-zinc-800" />
                         </>
                       )}

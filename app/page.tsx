@@ -17,7 +17,10 @@ import {
   Flag,
   MessageCircleOff,
   Trash2,
-  UserX
+  UserX,
+  Pin,
+  AlertTriangle,
+  Repeat2
 } from "lucide-react";
 import { AppDispatch, RootState } from "./store/store";
 import {
@@ -29,9 +32,18 @@ import {
   togglePostComments,
   fetchComments,
   deleteComment,
+  likeComment,
   updatePostCaption,
   archivePost,
-  Post
+  fetchCollections,
+  createCollection,
+  pinComment,
+  toggleLikeCountVisibility,
+  toggleSensitive,
+  revealSensitivePost,
+  repostPost,
+  Post,
+  Comment
 } from "./store/slices/postsSlice";
 import {
   fetchStories,
@@ -49,7 +61,7 @@ import HashtagText from "./components/HashtagText";
 import StoryViewer from "./components/StoryViewer";
 
 const VerifiedBadge = () => (
-  <svg viewBox="0 0 24 24" className="w-[14px] h-[14px] fill-sky-500 text-white flex-shrink-0 inline-block" style={{ verticalAlign: 'middle' }}>
+  <svg viewBox="0 0 24 24" className="w-[14px] h-[14px] text-white flex-shrink-0 inline-block" style={{ verticalAlign: 'middle', fill: 'var(--verified-blue)' }}>
     <path d="M12.003 2.001c.176 0 .343.047.49.128l1.077.492a1.002 1.002 0 0 0 1.383-.94v-1.185c0-.441.282-.828.694-.962l1.13-.368a1.001 1.001 0 0 0 1.258.85l1.129-.282a1 1 0 0 0 1.171.677l1.103.427a1.001 1.001 0 0 0 .918 1.17l.231 1.157a1 1 0 0 0 .736.786l1.185.244a1 1 0 0 0 .548 1.493l-.492 1.077a1 1 0 0 0 .445 1.261l1.185.592c.389.195.592.656.477 1.078l-.348 1.13a1 1 0 0 0 .048 1.336l.794.882c.307.341.307.863 0 1.204l-.794.882a1 1 0 0 0-.048 1.336l.348 1.13c.115.422-.088.883-.477 1.078l-1.185.592a1 1 0 0 0-.445 1.261l.492 1.077a1 1 0 0 0-.548 1.493l-1.185.244a1 1 0 0 0-.736.786l-.231 1.157a1.001 1.001 0 0 0-.918 1.17l-1.103.427a1 1 0 0 0-1.171-.677l-1.129-.282a1.001 1.001 0 0 0-1.258.85l-1.13-.368a1.001 1.001 0 0 0-.694-.962v-1.185a1.002 1.002 0 0 0-1.383-.94l-1.077.492a1 1 0 0 0-.49.128c-.176 0-.343-.047-.49-.128l-1.077-.492a1.002 1.002 0 0 0-1.383.94v1.185c0 .441-.282.828-.694.962l-1.13.368a1.001 1.001 0 0 0-1.258-.85l-1.129.282a1 1 0 0 0-1.171-.677l-1.103-.427a1.001 1.001 0 0 0-.918-1.17l-.231-1.157a1 1 0 0 0-.736-.786l-1.185-.244a1 1 0 0 0-.548-1.493l.492-1.077a1 1 0 0 0-.445-1.261l-1.185-.592c-.389-.195-.592-.656-.477-1.078l.348-1.13a1 1 0 0 0-.048-1.336l-.794-.882a.801.801 0 0 1 0-1.204l.794-.882a1 1 0 0 0 .048-1.336l-.348-1.13c-.115-.422.088-.883.477-1.078l1.185-.592a1 1 0 0 0 .445-1.261l-.492-1.077a1 1 0 0 0 .548-1.493l1.185-.244a1 1 0 0 0 .736-.786l.231-1.157a1.001 1.001 0 0 0 .918-1.17l1.103-.427a1 1 0 0 0 1.171.677l1.129.282a1.001 1.001 0 0 0 1.258-.85l1.13.368c.412.134.694.521.694.962v1.185a1.002 1.002 0 0 0 1.383.94l1.077-.492c.147-.081.314-.128.49-.128zm-1.85 13.35l-3.3-3.3 1.41-1.42 1.89 1.89 4.89-4.89 1.42 1.42-6.31 6.3z" />
   </svg>
 );
@@ -58,8 +70,12 @@ export default function HomeFeed() {
   const dispatch = useDispatch<AppDispatch>();
   const { setCreateOpen, setCreateType } = useApp();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
-  const { posts, loading: postsLoading } = useSelector((state: RootState) => state.posts);
+  const { posts, loading: postsLoading, collections } = useSelector((state: RootState) => state.posts);
   const { stories, myStories, loading: storiesLoading } = useSelector((state: RootState) => state.stories);
+
+  // "Save to..." collection picker
+  const [savePickerPostId, setSavePickerPostId] = useState<number | null>(null);
+  const [newColName, setNewColName] = useState("");
 
   // Suggestions state loaded dynamically
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -97,9 +113,39 @@ export default function HomeFeed() {
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<number | null>(null);
   const activeCommentsPost = posts.find((p) => p.id === activeCommentsPostId) || null;
 
+  // Reply / thread-expansion state for the comment tree
+  const [replyingTo, setReplyingTo] = useState<{ commentId: number; username: string } | null>(null);
+  const [expandedReplies, setExpandedReplies] = useState<Set<number>>(new Set());
+
   const handleOpenCommentsModal = (postId: number) => {
     setActiveCommentsPostId(postId);
+    setReplyingTo(null);
+    setExpandedReplies(new Set());
     dispatch(fetchComments(postId));
+  };
+
+  const handleLikeComment = (postId: number, comment: Comment) => {
+    dispatch(likeComment({ postId, commentId: comment.id, wasLiked: comment.isLiked }));
+  };
+
+  const handlePinComment = (postId: number, comment: Comment) => {
+    dispatch(pinComment({ postId, commentId: comment.id, isPinned: !comment.isPinned }));
+  };
+
+  const handleStartReply = (comment: Comment) => {
+    setReplyingTo({ commentId: comment.id, username: comment.username });
+    setCommentInputs((prev) => ({
+      ...prev,
+      [activeCommentsPostId as number]: `@${comment.username} `,
+    }));
+  };
+
+  const toggleReplies = (commentId: number) => {
+    setExpandedReplies((prev) => {
+      const next = new Set(prev);
+      next.has(commentId) ? next.delete(commentId) : next.add(commentId);
+      return next;
+    });
   };
 
   const getUserLink = (userId?: string | number) => {
@@ -129,8 +175,19 @@ export default function HomeFeed() {
     if (!text || !text.trim() || !currentUser) return;
 
     const comment = text.trim();
-    dispatch(addComment({ postId, comment, username: currentUser.username, userId: currentUser.id }));
+    dispatch(addComment({
+      postId,
+      comment,
+      username: currentUser.username,
+      userId: currentUser.id,
+      parentCommentId: replyingTo?.commentId,
+    }));
+    // A reply auto-expands its parent's thread so the new reply is visible.
+    if (replyingTo) {
+      setExpandedReplies((prev) => new Set(prev).add(replyingTo.commentId));
+    }
     setCommentInputs({ ...commentInputs, [postId]: "" });
+    setReplyingTo(null);
   };
 
   const menuPost = posts.find((p) => p.id === menuPostId) || null;
@@ -176,6 +233,28 @@ export default function HomeFeed() {
       await dispatch(archivePost({ postId: post.id, isArchived: true })).unwrap();
     } catch (err) {
       console.error("Failed to archive post:", err);
+    }
+  };
+
+  const handleToggleLikeCount = (post: Post) => {
+    dispatch(toggleLikeCountVisibility({ postId: post.id, hideLikeCount: !post.hideLikeCount }));
+    setMenuPostId(null);
+  };
+
+  const handleToggleSensitive = (post: Post) => {
+    dispatch(toggleSensitive({ postId: post.id, isSensitive: !post.isSensitive }));
+    setMenuPostId(null);
+  };
+
+  const [repostedIds, setRepostedIds] = useState<Set<number>>(new Set());
+
+  const handleRepost = async (post: Post) => {
+    setMenuPostId(null);
+    try {
+      await dispatch(repostPost({ postId: post.id })).unwrap();
+      setRepostedIds((prev) => new Set(prev).add(post.id));
+    } catch (err) {
+      console.error("Failed to repost:", err);
     }
   };
 
@@ -250,8 +329,35 @@ export default function HomeFeed() {
     }
   };
 
-  const handleSave = (postId: number) => {
-    dispatch(addPostFavorite(postId));
+  const handleSave = (post: Post) => {
+    // Already saved → unsave immediately. Not saved → open the "Save to…" picker.
+    if (post.isSaved) {
+      dispatch(addPostFavorite(post.id));
+    } else {
+      setSavePickerPostId(post.id);
+      if (collections.length === 0) dispatch(fetchCollections());
+    }
+  };
+
+  const handleSaveToCollection = (collectionId?: number) => {
+    if (savePickerPostId === null) return;
+    dispatch(addPostFavorite({ postId: savePickerPostId, collectionId }));
+    setSavePickerPostId(null);
+  };
+
+  const handleCreateAndSave = async () => {
+    const name = newColName.trim();
+    if (!name || savePickerPostId === null) return;
+    try {
+      const res: any = await dispatch(createCollection(name)).unwrap();
+      const newId = res?.id ?? res?.collectionId ?? res?.data?.id;
+      dispatch(addPostFavorite({ postId: savePickerPostId, collectionId: newId }));
+    } catch (err) {
+      console.error("Failed to create collection:", err);
+    } finally {
+      setNewColName("");
+      setSavePickerPostId(null);
+    }
   };
 
   const handleAddComment = (postId: number, e: React.FormEvent) => {
@@ -266,7 +372,11 @@ export default function HomeFeed() {
 
   // Auto-advance lives inside StoryViewer, which can pause it while the viewer is typing or voting.
   const handleViewStory = (story: Story, source: "stories" | "my" = "stories") => {
-    dispatch(viewStory(story.id));
+    // Viewing your own story must never register a view. Only count when someone
+    // else's story is opened, and let the server de-duplicate repeat views.
+    if (story.userId && story.userId !== currentUser?.id) {
+      dispatch(viewStory(story.id));
+    }
     setViewerSource(source);
     setActiveStoryId(story.id);
   };
@@ -330,6 +440,113 @@ export default function HomeFeed() {
       </div>
     </div>
   );
+
+  // Renders one comment (or a reply, when `isReply` is set) inside the comments modal:
+  // avatar, text, like heart, Reply link, owner/restrict actions, and its reply thread.
+  const renderComment = (comment: Comment, isReply = false) => {
+    const canModerate =
+      !!currentUser && (comment.userId === currentUser.id || activeCommentsPost?.userId === currentUser.id);
+    return (
+      <div key={comment.id} className={isReply ? "" : "flex flex-col gap-2"}>
+        <div className="group/modal-c flex items-start gap-3 text-sm">
+          <Link href={getUserLink(comment.userId)}>
+            <Avatar src={comment.avatar} name={comment.username} className={isReply ? "w-6 h-6 flex-shrink-0" : "w-8 h-8 flex-shrink-0"} />
+          </Link>
+          <div className="flex-1 min-w-0">
+            {comment.isPinned && !isReply && (
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-zinc-400 mb-0.5">
+                📌 Закреплено автором
+              </span>
+            )}
+            <p className="leading-snug break-words">
+              <Link href={getUserLink(comment.userId)} className="font-bold mr-2 hover:underline">
+                {comment.username}
+              </Link>
+              {comment.text}
+            </p>
+            <div className="flex items-center gap-3 mt-1 text-[10px] text-zinc-400">
+              <span>Just now</span>
+              {comment.likeCount > 0 && (
+                <span className="font-semibold">{comment.likeCount} отметок «Нравится»</span>
+              )}
+              {currentUser && activeCommentsPost && (
+                <button
+                  onClick={() => handleStartReply(comment)}
+                  className="font-semibold hover:text-zinc-600 dark:hover:text-zinc-200 cursor-pointer"
+                >
+                  Ответить
+                </button>
+              )}
+            </div>
+
+            {/* Reply thread toggle + list */}
+            {!isReply && comment.replyCount > 0 && (
+              <div className="mt-2">
+                <button
+                  onClick={() => toggleReplies(comment.id)}
+                  className="flex items-center gap-2 text-[11px] font-semibold text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-pointer"
+                >
+                  <span className="w-6 h-px bg-zinc-300 dark:bg-zinc-700" />
+                  {expandedReplies.has(comment.id)
+                    ? "Скрыть ответы"
+                    : `Смотреть ответы (${comment.replyCount})`}
+                </button>
+                {expandedReplies.has(comment.id) && (
+                  <div className="flex flex-col gap-2.5 mt-2.5 pl-2">
+                    {comment.replies.map((reply) => renderComment(reply, true))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Like heart */}
+          {currentUser && (
+            <button
+              onClick={() => handleLikeComment(activeCommentsPost!.id, comment)}
+              className="p-1 flex-shrink-0 hover:scale-110 active:scale-90 transition cursor-pointer"
+              title={comment.isLiked ? "Убрать отметку" : "Нравится"}
+            >
+              <Heart className={`w-3.5 h-3.5 ${comment.isLiked ? "fill-like text-like" : "text-zinc-400"}`} />
+            </button>
+          )}
+
+          {/* Overflow actions */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Pin/unpin — post owner, top-level comments only (#13) */}
+            {!isReply && currentUser && activeCommentsPost?.userId === currentUser.id && (
+              <button
+                onClick={() => handlePinComment(activeCommentsPost!.id, comment)}
+                className={`p-1 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer animate-in fade-in ${comment.isPinned ? "text-black dark:text-white" : "text-zinc-400 hover:text-black dark:hover:text-white"}`}
+                title={comment.isPinned ? "Открепить" : "Закрепить"}
+              >
+                <Pin className="w-4 h-4" />
+              </button>
+            )}
+            {currentUser && comment.userId && comment.userId !== currentUser.id && (
+              <button
+                onClick={() => handleRestrictFromComment(comment.userId)}
+                disabled={restrictedFromComment.has(comment.userId)}
+                className="p-1 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer text-zinc-400 hover:text-black dark:hover:text-white animate-in fade-in disabled:opacity-40 disabled:cursor-default"
+                title={restrictedFromComment.has(comment.userId) ? "Пользователь ограничен" : "Ограничить пользователя"}
+              >
+                <UserX className="w-4 h-4" />
+              </button>
+            )}
+            {canModerate && (
+              <button
+                onClick={() => handleDeleteComment(activeCommentsPost!.id, comment.id)}
+                className="p-1 hover:text-red-500 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer text-zinc-400 animate-in fade-in"
+                title="Удалить комментарий"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="flex-1 flex max-w-[935px] mx-auto w-full px-4 md:py-8 justify-between gap-16 select-none text-black dark:text-white transition-colors duration-200">
@@ -453,6 +670,17 @@ export default function HomeFeed() {
                 <article
                   className="border border-[var(--border)] rounded-xl overflow-hidden flex flex-col w-full animate-fade-up bg-transparent"
                 >
+                  {/* Reposted-from banner (#17) */}
+                  {post.repostedFrom && (
+                    <Link
+                      href={post.repostedFromUserId ? `/u/${post.repostedFromUserId}` : "#"}
+                      className="flex items-center gap-1.5 px-3 pt-2.5 text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                    >
+                      <Repeat2 className="w-3.5 h-3.5" />
+                      Репост от <span className="font-semibold">@{post.repostedFrom}</span>
+                    </Link>
+                  )}
+
                   {/* Header */}
                   <div className="flex items-center justify-between p-3">
                     <div className="flex items-center gap-3">
@@ -511,7 +739,7 @@ export default function HomeFeed() {
                 {/* Media with double-tap like */}
                 <div
                   className="relative aspect-square w-full select-none cursor-pointer overflow-hidden bg-zinc-50 dark:bg-zinc-950"
-                  onDoubleClick={() => handleDoubleLike(post.id)}
+                  onDoubleClick={() => !post.isBlurred && handleDoubleLike(post.id)}
                 >
                   {post.image.toLowerCase().endsWith('.mp4') || post.image.toLowerCase().endsWith('.mov') || post.image.toLowerCase().endsWith('.webm') ? (
                     <video
@@ -530,6 +758,22 @@ export default function HomeFeed() {
                       sizes="(max-width: 768px) 100vw, 470px"
                       className="object-cover"
                     />
+                  )}
+
+                  {/* Sensitive-content cover (#24) */}
+                  {post.isBlurred && (
+                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 text-center px-6 bg-black/40 backdrop-blur-2xl">
+                      <AlertTriangle className="w-8 h-8 text-white/90" />
+                      <p className="text-white text-sm font-medium max-w-[240px]">
+                        Возможно, деликатный контент
+                      </p>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); dispatch(revealSensitivePost(post.id)); }}
+                        className="text-xs font-bold text-white border border-white/60 rounded-full px-4 py-1.5 hover:bg-white/10 transition cursor-pointer"
+                      >
+                        Посмотреть
+                      </button>
+                    </div>
                   )}
 
                   {/* Big Heart Animation */}
@@ -566,7 +810,7 @@ export default function HomeFeed() {
                     </button>
                   </div>
                   <button
-                    onClick={() => handleSave(post.id)}
+                    onClick={() => handleSave(post)}
                     className="hover:text-zinc-400 hover:scale-110 active:scale-90 transition duration-100"
                   >
                     <Bookmark
@@ -582,7 +826,11 @@ export default function HomeFeed() {
                 {/* Likes & Info */}
                 <div className="px-3.5 pb-3.5 flex flex-col gap-1.5">
                   <span className="font-bold text-sm text-zinc-900 dark:text-white">
-                    {post.likes.toLocaleString()} likes
+                    {post.hideLikeCount
+                      ? (post.isLiked
+                          ? "Нравится вам и другим"
+                          : "Нравится другим людям")
+                      : `${post.likes.toLocaleString()} отметок «Нравится»`}
                   </span>
                   
                   {/* Caption */}
@@ -797,6 +1045,22 @@ export default function HomeFeed() {
             )}
             {isOwnMenuPost && (
               <button
+                onClick={() => handleToggleLikeCount(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                {menuPost.hideLikeCount ? "Показать количество отметок" : "Скрыть количество отметок"}
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
+                onClick={() => handleToggleSensitive(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                {menuPost.isSensitive ? "Снять отметку «деликатное»" : "Отметить как деликатное"}
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
                 onClick={() => handleToggleComments(menuPost)}
                 disabled={commentsBusy}
                 className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-60"
@@ -815,6 +1079,13 @@ export default function HomeFeed() {
                 Пожаловаться
               </button>
             )}
+            <button
+              onClick={() => handleRepost(menuPost)}
+              disabled={repostedIds.has(menuPost.id)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-50"
+            >
+              {repostedIds.has(menuPost.id) ? "Опубликовано ✓" : "Опубликовать у себя (репост)"}
+            </button>
             {menuPost.userId && (
               <Link
                 href={`/u/${menuPost.userId}`}
@@ -886,6 +1157,66 @@ export default function HomeFeed() {
         </div>
       )}
 
+      {/* ----------------- SAVE-TO-COLLECTION PICKER ----------------- */}
+      {savePickerPostId !== null && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-60 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setSavePickerPostId(null)}
+        >
+          <div
+            className="glass-strong w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-soft-lg animate-in slide-in-from-bottom sm:zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-zinc-200 dark:border-zinc-700/60 text-center">
+              <span className="text-sm font-bold">Сохранить в коллекцию</span>
+            </div>
+            <div className="max-h-72 overflow-y-auto">
+              <button
+                onClick={() => handleSaveToCollection(undefined)}
+                className="w-full flex items-center gap-3 p-3.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition cursor-pointer text-left"
+              >
+                <span className="w-11 h-11 rounded-xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                  <Bookmark className="w-5 h-5" />
+                </span>
+                <span className="text-sm font-semibold">Все сохранённые</span>
+              </button>
+              {collections.map((col) => (
+                <button
+                  key={col.id}
+                  onClick={() => handleSaveToCollection(col.id)}
+                  className="w-full flex items-center gap-3 p-3.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition cursor-pointer text-left"
+                >
+                  <span className="w-11 h-11 rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                    {col.cover ? <SmartImage src={col.cover} alt="" className="w-full h-full object-cover" /> : <Bookmark className="w-5 h-5" />}
+                  </span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-sm font-semibold truncate">{col.name}</span>
+                    <span className="text-xs text-zinc-400">{col.count}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="p-3 border-t border-zinc-200 dark:border-zinc-700/60 flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Новая коллекция…"
+                value={newColName}
+                onChange={(e) => setNewColName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreateAndSave()}
+                className="flex-1 bg-zinc-100 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm outline-none"
+              />
+              <button
+                onClick={handleCreateAndSave}
+                disabled={!newColName.trim()}
+                className="text-sm font-bold text-blue-500 hover:text-blue-300 cursor-pointer disabled:opacity-40 px-2"
+              >
+                Создать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ----------------- REPORT MODAL ----------------- */}
       {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
 
@@ -944,46 +1275,7 @@ export default function HomeFeed() {
                   <span className="text-xs text-zinc-400">Будьте первым, кто оставит комментарий!</span>
                 </div>
               ) : (
-                activeCommentsPost.comments.map((comment) => (
-                  <div key={comment.id} className="group/modal-c flex items-start gap-3 text-sm">
-                    <Link href={getUserLink(comment.userId)}>
-                      <Avatar name={comment.username} className="w-8 h-8 flex-shrink-0" />
-                    </Link>
-                    <div className="flex-1 min-w-0">
-                      <p className="leading-snug break-words">
-                        <Link href={getUserLink(comment.userId)} className="font-bold mr-2 hover:underline">
-                          {comment.username}
-                        </Link>
-                        {comment.text}
-                      </p>
-                      <span className="text-[10px] text-zinc-400 mt-1 block">Just now</span>
-                    </div>
-
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {/* Restrict action — for other people's comments */}
-                      {currentUser && comment.userId && comment.userId !== currentUser.id && (
-                        <button
-                          onClick={() => handleRestrictFromComment(comment.userId)}
-                          disabled={restrictedFromComment.has(comment.userId)}
-                          className="p-1 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer text-zinc-400 hover:text-black dark:hover:text-white animate-in fade-in disabled:opacity-40 disabled:cursor-default"
-                          title={restrictedFromComment.has(comment.userId) ? "Пользователь ограничен" : "Ограничить пользователя"}
-                        >
-                          <UserX className="w-4 h-4" />
-                        </button>
-                      )}
-                      {/* Delete action */}
-                      {currentUser && (comment.userId === currentUser.id || activeCommentsPost.userId === currentUser.id) && (
-                        <button
-                          onClick={() => handleDeleteComment(activeCommentsPost.id, comment.id)}
-                          className="p-1 hover:text-red-500 opacity-0 group-hover/modal-c:opacity-100 transition cursor-pointer text-zinc-400 animate-in fade-in"
-                          title="Удалить комментарий"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))
+                activeCommentsPost.comments.map((comment) => renderComment(comment))
               )}
             </div>
 
@@ -991,8 +1283,24 @@ export default function HomeFeed() {
             {activeCommentsPost && activeCommentsPost.allowComments && (
               <form
                 onSubmit={(e) => handleAddCommentModal(activeCommentsPost.id, e)}
-                className="p-4 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50/50 dark:bg-zinc-950/20"
+                className="border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/20"
               >
+                {replyingTo && (
+                  <div className="flex items-center justify-between px-4 pt-2 text-xs text-zinc-500">
+                    <span>Ответ пользователю <span className="font-semibold">@{replyingTo.username}</span></span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyingTo(null);
+                        setCommentInputs((prev) => ({ ...prev, [activeCommentsPost.id]: "" }));
+                      }}
+                      className="hover:text-black dark:hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                <div className="p-4 flex items-center justify-between">
                 <div className="flex items-center gap-3 flex-1">
                   <Smile className="w-5 h-5 text-zinc-550" />
                   <input
@@ -1010,9 +1318,10 @@ export default function HomeFeed() {
                     type="submit"
                     className="text-blue-500 font-semibold text-sm hover:text-blue-400 cursor-pointer"
                   >
-                    Опубликовать
+                    {replyingTo ? "Ответить" : "Опубликовать"}
                   </button>
                 )}
+                </div>
               </form>
             )}
           </div>

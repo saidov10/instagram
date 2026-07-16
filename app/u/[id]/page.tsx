@@ -11,6 +11,7 @@ import Avatar from "../../components/Avatar";
 import SmartImage from "../../components/SmartImage";
 import Highlights from "../../components/Highlights";
 import ReportModal, { ReportTarget } from "../../components/ReportModal";
+import VerifiedBadge from "../../components/VerifiedBadge";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop";
 
@@ -24,6 +25,7 @@ interface PublicProfile {
   followersCount: number;
   followingCount: number;
   isPrivate: boolean;
+  isVerified: boolean;
 }
 
 type FollowState = "none" | "following" | "pending";
@@ -94,6 +96,7 @@ export default function UserProfilePage() {
         followersCount: p.followersCount ?? 0,
         followingCount: p.followingCount ?? 0,
         isPrivate,
+        isVerified: !!p.isVerified,
       });
 
       const followStatus = await api.profile.getIsFollowUserProfileById(userId).catch(() => false);
@@ -328,7 +331,10 @@ export default function UserProfilePage() {
 
         <div className="flex-1 flex flex-col gap-5 w-full text-left">
           <div className="flex items-center gap-3 flex-wrap">
-            <h2 className="text-xl font-normal">{profile.userName}</h2>
+            <h2 className="text-xl font-normal flex items-center gap-1.5">
+              {profile.userName}
+              {profile.isVerified && <VerifiedBadge className="w-[18px] h-[18px]" />}
+            </h2>
             <div className="flex gap-2 text-sm font-semibold items-center">
               <button
                 onClick={handleFollow}
