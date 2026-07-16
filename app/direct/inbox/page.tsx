@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   Heart,
   ChevronDown,
+  ChevronLeft,
   Edit,
   Search,
   X,
@@ -186,6 +187,11 @@ export default function InboxPage() {
   const [selectedChatId, setSelectedChatId] = useState<number | null>(null);
   const [inputText, setInputText] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Message requests (pending incoming chats)
+  const [messageRequests, setMessageRequests] = useState<any[]>([]);
+  const [showRequests, setShowRequests] = useState(false);
+  const [requestBusy, setRequestBusy] = useState<Record<number, boolean>>({});
   const [showCreateChatModal, setShowCreateChatModal] = useState(false);
   const [searchUsersResults, setSearchUsersResults] = useState<any[]>([]);
   const [userSearchText, setUserSearchText] = useState("");
@@ -333,6 +339,59 @@ export default function InboxPage() {
       dispatch(fetchChats(currentUser.id));
     }
   }, [isLoggedIn, currentUser, dispatch]);
+
+  // ---- Message requests (pending incoming chats) ----
+  const refreshRequests = () => {
+    api.chat.getMessageRequests()
+      .then((list) => {
+        const formatted = (list || []).map((c: any) => {
+          const other = c.otherUser || c.user || (c.users || []).find((u: any) => u.id !== currentUser?.id) || {};
+          const last = (c.messages || [])[(c.messages || []).length - 1];
+          return {
+            chatId: c.id || c.chatId,
+            userId: other.id || other.userId || "",
+            username: other.userName || other.username || "user",
+            name: other.name || other.fullName || "",
+            avatar: getFullImageUrl(other.avatar || other.imagePath),
+            preview: last?.messageText || last?.text || "Отправил(а) вам сообщение",
+          };
+        });
+        setMessageRequests(formatted);
+      })
+      .catch(() => setMessageRequests([]));
+  };
+
+  useEffect(() => {
+    if (isLoggedIn && currentUser) refreshRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn, currentUser?.id]);
+
+  const handleAcceptRequest = async (chatId: number) => {
+    if (requestBusy[chatId]) return;
+    setRequestBusy((p) => ({ ...p, [chatId]: true }));
+    try {
+      await api.chat.acceptMessageRequest(chatId);
+      setMessageRequests((prev) => prev.filter((r) => r.chatId !== chatId));
+      if (currentUser) dispatch(fetchChats(currentUser.id));
+    } catch (err) {
+      console.error("Failed to accept request:", err);
+    } finally {
+      setRequestBusy((p) => ({ ...p, [chatId]: false }));
+    }
+  };
+
+  const handleDeclineRequest = async (chatId: number) => {
+    if (requestBusy[chatId]) return;
+    setRequestBusy((p) => ({ ...p, [chatId]: true }));
+    try {
+      await api.chat.declineMessageRequest(chatId);
+      setMessageRequests((prev) => prev.filter((r) => r.chatId !== chatId));
+    } catch (err) {
+      console.error("Failed to decline request:", err);
+    } finally {
+      setRequestBusy((p) => ({ ...p, [chatId]: false }));
+    }
+  };
 
   // ---- Status notes (Instagram-style "Notes") ----
   const refreshNotes = () => {
@@ -913,12 +972,69 @@ export default function InboxPage() {
         </div>
 
         {/* Sub-tabs */}
-        <div className="flex px-5 border-b border-zinc-200 dark:border-zinc-800 pb-2 gap-6 text-sm font-semibold select-none text-zinc-450 dark:text-zinc-500">
-          <span className="text-black dark:text-white border-b-2 border-black dark:border-white pb-2 cursor-pointer">Основная</span>
-          <span className="hover:text-zinc-650 dark:hover:text-zinc-350 cursor-pointer pb-2">Общая</span>
+        <div className="flex items-center justify-between px-5 border-b border-zinc-200 dark:border-zinc-800 pb-2">
+          <div className="flex gap-6 text-sm font-semibold select-none text-zinc-450 dark:text-zinc-500">
+            <span className="text-black dark:text-white border-b-2 border-black dark:border-white pb-2 cursor-pointer">Основная</span>
+            <span className="hover:text-zinc-650 dark:hover:text-zinc-350 cursor-pointer pb-2">Общая</span>
+          </div>
         </div>
 
-        {/* Chats List */}
+        {/* Message-requests banner */}
+        {messageRequests.length > 0 && !showRequests && (
+          <button
+            onClick={() => setShowRequests(true)}
+            className="flex items-center justify-between px-5 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900/60 transition cursor-pointer border-b border-zinc-100 dark:border-zinc-900"
+          >
+            <span className="font-semibold text-sm">Запросы на переписку</span>
+            <span className="text-xs font-bold text-blue-500">
+              {messageRequests.length} {messageRequests.length === 1 ? "запрос" : "запросов"}
+            </span>
+          </button>
+        )}
+
+        {/* Requests list view */}
+        {showRequests ? (
+          <div className="flex-1 overflow-y-auto">
+            <div className="flex items-center gap-3 px-5 py-3 border-b border-zinc-100 dark:border-zinc-900">
+              <button onClick={() => setShowRequests(false)} className="hover:opacity-60 cursor-pointer">
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <span className="font-bold text-sm">Запросы на переписку</span>
+            </div>
+            {messageRequests.length === 0 ? (
+              <div className="text-center p-8 text-zinc-450 dark:text-zinc-500 text-sm">Новых запросов нет.</div>
+            ) : (
+              messageRequests.map((req) => (
+                <div key={req.chatId} className="flex items-center gap-3 p-4 px-5 border-b border-zinc-50 dark:border-zinc-900/60">
+                  <Link href={req.userId ? `/u/${req.userId}` : "#"} className="flex-shrink-0">
+                    <Avatar src={req.avatar} name={req.username} className="w-12 h-12" />
+                  </Link>
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="font-semibold text-sm truncate">{req.username}</span>
+                    <span className="text-xs text-zinc-450 truncate">{req.preview}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => handleAcceptRequest(req.chatId)}
+                      disabled={requestBusy[req.chatId]}
+                      className="text-xs font-bold btn-grad text-white px-3 py-1.5 rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50"
+                    >
+                      Принять
+                    </button>
+                    <button
+                      onClick={() => handleDeclineRequest(req.chatId)}
+                      disabled={requestBusy[req.chatId]}
+                      className="text-xs font-bold glass px-3 py-1.5 rounded-lg hover:shadow-soft cursor-pointer disabled:opacity-50"
+                    >
+                      Удалить
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : (
+        /* Chats List */
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <ChatsListSkeleton />
@@ -979,6 +1095,7 @@ export default function InboxPage() {
             })
           )}
         </div>
+        )}
       </div>
 
       {/* ----------------- ACTIVE CHAT VIEWPORT ----------------- */}

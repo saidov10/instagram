@@ -37,7 +37,9 @@ import {
   Bookmark,
   Music,
   Star,
-  Globe
+  Globe,
+  Check,
+  Users
 } from "lucide-react";
 
 /** One row of "Недавнее": either a visited profile or a raw text query. */
@@ -89,6 +91,13 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [reelTrack, setReelTrack] = useState<MusicTrack | null>(null);
   const [showMusicPicker, setShowMusicPicker] = useState(false);
   const [storyMusicDuration, setStoryMusicDuration] = useState(15);
+
+  // Post-specific: people tagged in the photo
+  const [taggedUsers, setTaggedUsers] = useState<{ id: string; username: string; avatar: string }[]>([]);
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  const [tagQuery, setTagQuery] = useState("");
+  const [tagResults, setTagResults] = useState<any[]>([]);
+  const [tagLoading, setTagLoading] = useState(false);
 
   // Story-specific: share with everyone vs close friends only
   const [isForCloseFriends, setIsForCloseFriends] = useState(false);
@@ -146,6 +155,46 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     }, 350);
     return () => clearTimeout(t);
   }, [searchQuery, showSearchPanel]);
+
+  // Debounced user search for the "Tag people" picker
+  React.useEffect(() => {
+    if (!showTagPicker) return;
+    const q = tagQuery.trim();
+    if (!q) {
+      setTagResults([]);
+      setTagLoading(false);
+      return;
+    }
+    setTagLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const users = await api.user.getUsers({ userName: q });
+        setTagResults(users || []);
+      } catch {
+        setTagResults([]);
+      } finally {
+        setTagLoading(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [tagQuery, showTagPicker]);
+
+  const toggleTaggedUser = (user: any) => {
+    const uid = user.id || user.userId;
+    if (!uid) return;
+    setTaggedUsers((prev) =>
+      prev.some((u) => u.id === uid)
+        ? prev.filter((u) => u.id !== uid)
+        : [
+            ...prev,
+            {
+              id: uid,
+              username: user.userName || user.username || "user",
+              avatar: getFullImageUrl(user.avatar || user.imagePath),
+            },
+          ]
+    );
+  };
 
   const handleFollowToggle = async (user: any) => {
     const uid = user.id || user.userId;
@@ -329,6 +378,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     setStickerKind("NONE");
     setStickerQuestion("");
     setPollOptions(["Да", "Нет"]);
+    setTaggedUsers([]);
+    setShowTagPicker(false);
+    setTagQuery("");
+    setTagResults([]);
     setUploadSuccess(false);
     setUploadError(null);
   };
@@ -369,7 +422,8 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           title: caption || "Instagram Post",
           content: caption,
           images: [imageFile],
-          isReel: false
+          isReel: false,
+          taggedUserIds: taggedUsers.map((u) => u.id),
         })).unwrap();
       }
 
@@ -406,11 +460,26 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
   const userAvatar = currentUser?.avatar || "";
 
+  // When a slide-out panel is pinned open the rail stays narrow, so its labels
+  // must never reveal on hover.
+  const panelPinned = showSearchPanel || showNotifPanel;
+
+  // Shared label animation: labels sweep open with a synced width + fade instead
+  // of snapping in. `overflow-hidden` + `max-w-0` keeps each label clipped to zero
+  // width while collapsed (no spill over the main content, no stray click targets),
+  // then the easeOutExpo curve unrolls them smoothly as the rail expands.
+  const labelReveal = `text-base whitespace-nowrap overflow-hidden inline-block align-middle transition-all duration-[350ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${
+    panelPinned
+      ? "max-w-0 opacity-0"
+      : "max-w-0 opacity-0 group-hover/sidebar:max-w-[180px] group-hover/sidebar:opacity-100"
+  }`;
+
   return (
     <div className="h-screen flex flex-col md:flex-row text-black dark:text-white transition-colors duration-200">
 
       {/* ----------------- DESKTOP & TABLET SIDEBAR ----------------- */}
-      <aside className={`hidden md:flex flex-col glass h-screen sticky top-0 z-40 transition-all duration-300 ${showSearchPanel || showNotifPanel ? "w-[72px]" : "w-[72px] xl:w-64"} p-3 justify-between`} style={{ borderRight: "1px solid var(--border)" }}>
+      <aside className="group/sidebar hidden md:block w-[72px] shrink-0 h-screen sticky top-0 z-40">
+        <div className={`flex flex-col justify-between glass h-full absolute top-0 left-0 transition-[width] duration-[350ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] p-3 ${showSearchPanel || showNotifPanel ? "w-[72px]" : "w-[72px] group-hover/sidebar:w-64"}`} style={{ borderRight: "1px solid var(--border)" }}>
         <div className="flex flex-col gap-6">
           {/* Logo */}
           <Link href="/" className="h-14 flex items-center px-3 mt-4">
@@ -421,16 +490,17 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
               </svg>
             ) : (
-              <>
-                <span className="hidden xl:inline font-serif text-2xl font-bold tracking-wider italic bg-gradient-to-r from-purple-500 via-pink-500 to-yellow-500 bg-clip-text text-transparent">Instagram</span>
-                <span className="xl:hidden">
-                  <svg className="w-7 h-7 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-                    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
-                    <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
-                  </svg>
-                </span>
-              </>
+              <span className="relative flex items-center">
+                {/* Icon — shown while collapsed, cross-fades out on hover */}
+                <svg className="w-7 h-7 stroke-current fill-none transition-opacity duration-300 group-hover/sidebar:opacity-0" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+                </svg>
+                {/* Wordmark — fades in over the icon as the rail expands. Absolute +
+                    pointer-events-none so the invisible mark never intercepts clicks. */}
+                <span className="pointer-events-none absolute left-0 whitespace-nowrap font-serif text-2xl font-bold tracking-wider italic bg-gradient-to-r from-purple-500 via-pink-500 to-yellow-500 bg-clip-text text-transparent opacity-0 transition-opacity duration-300 group-hover/sidebar:opacity-100">Instagram</span>
+              </span>
             )}
           </Link>
 
@@ -453,14 +523,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           src={userAvatar}
                           name={currentUser?.username}
                           alt="Profile"
-                          className={`w-6 h-6 border ${
+                          className={`w-6 h-6 shrink-0 border ${
                             isActive ? "border-black dark:border-white ring-2 ring-zinc-200 dark:ring-zinc-800" : "border-zinc-300 dark:border-zinc-700"
                           }`}
                         />
                       ) : (
-                        <Icon className={`w-6 h-6 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
+                        <Icon className={`w-6 h-6 shrink-0 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
                       )}
-                      <span className={`text-base hidden ${showSearchPanel || showNotifPanel ? "" : "xl:inline"} ${isActive ? "font-bold" : "font-normal"}`}>
+                      <span className={`${labelReveal} ${isActive ? "font-bold" : "font-normal"}`}>
                         {item.label}
                       </span>
                     </button>
@@ -476,14 +546,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           src={userAvatar}
                           name={currentUser?.username}
                           alt="Profile"
-                          className={`w-6 h-6 border ${
+                          className={`w-6 h-6 shrink-0 border ${
                             isActive ? "border-black dark:border-white ring-2 ring-zinc-200 dark:ring-zinc-800" : "border-zinc-300 dark:border-zinc-700"
                           }`}
                         />
                       ) : (
-                        <Icon className={`w-6 h-6 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
+                        <Icon className={`w-6 h-6 shrink-0 transition-transform duration-200 group-hover:scale-110 ${isActive ? "stroke-[2.5px] text-[var(--accent-2)]" : "stroke-[2px]"}`} />
                       )}
-                      <span className={`text-base hidden ${showSearchPanel || showNotifPanel ? "" : "xl:inline"} ${isActive ? "font-bold" : "font-normal"}`}>
+                      <span className={`${labelReveal} ${isActive ? "font-bold" : "font-normal"}`}>
                         {item.label}
                       </span>
                     </Link>
@@ -537,9 +607,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
             onClick={() => setShowMoreMenu(!showMoreMenu)}
             className="w-full flex items-center gap-4 p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900 transition duration-200 cursor-pointer text-left"
           >
-            <Menu className="w-6 h-6" />
-            <span className={`text-base hidden ${showSearchPanel || showNotifPanel ? "" : "xl:inline"} font-normal`}>Ещё</span>
+            <Menu className="w-6 h-6 shrink-0" />
+            <span className={`${labelReveal} font-normal`}>Ещё</span>
           </button>
+        </div>
         </div>
       </aside>
 
@@ -721,6 +792,75 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           onSelect={(track) => setReelTrack(track)}
           onClose={() => setShowMusicPicker(false)}
         />
+      )}
+
+      {/* ----------------- TAG PEOPLE PICKER ----------------- */}
+      {showTagPicker && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4"
+          onClick={() => setShowTagPicker(false)}
+        >
+          <div
+            className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg flex flex-col max-h-[80vh] animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <span className="text-sm font-bold">Отметить людей</span>
+              <button
+                onClick={() => setShowTagPicker(false)}
+                className="text-sm font-bold text-blue-500 hover:text-blue-300 cursor-pointer"
+              >
+                Готово
+              </button>
+            </div>
+            <div className="p-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <div className="flex items-center gap-2 glass rounded-xl px-3 py-2">
+                <Search className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Поиск людей…"
+                  value={tagQuery}
+                  onChange={(e) => setTagQuery(e.target.value)}
+                  className="bg-transparent text-sm w-full outline-none placeholder-zinc-400"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {tagLoading ? (
+                <p className="text-center text-sm text-zinc-400 py-8">Поиск…</p>
+              ) : tagResults.length === 0 ? (
+                <p className="text-center text-sm text-zinc-400 py-8">
+                  {tagQuery.trim() ? "Никого не найдено" : "Начните вводить имя пользователя"}
+                </p>
+              ) : (
+                tagResults.map((u) => {
+                  const uid = u.id || u.userId;
+                  const selected = taggedUsers.some((t) => t.id === uid);
+                  return (
+                    <button
+                      key={uid}
+                      onClick={() => toggleTaggedUser(u)}
+                      className="flex items-center gap-3 w-full p-2 rounded-xl hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition cursor-pointer"
+                    >
+                      <Avatar src={getFullImageUrl(u.avatar || u.imagePath)} name={u.userName || u.username} className="w-10 h-10" />
+                      <span className="flex-1 text-left text-sm font-semibold truncate">
+                        {u.userName || u.username || "user"}
+                      </span>
+                      <span
+                        className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          selected ? "bg-blue-500 text-white" : "border border-zinc-300 dark:border-zinc-600"
+                        }`}
+                      >
+                        {selected && <Check className="w-3 h-3" />}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ----------------- MOBILE TOP BAR ----------------- */}
@@ -1123,6 +1263,40 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                             <span className="font-medium text-zinc-900 dark:text-zinc-200">Добавить местоположение</span>
                             <MapPin className="w-4 h-4" />
                           </div>
+                          <hr className="border-zinc-200 dark:border-zinc-800" />
+
+                          {/* Tag people */}
+                          <button
+                            onClick={() => setShowTagPicker(true)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer hover:opacity-75 transition"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">
+                              Отметить людей
+                              {taggedUsers.length > 0 && (
+                                <span className="text-zinc-400 font-normal"> · {taggedUsers.length}</span>
+                              )}
+                            </span>
+                            <Users className="w-4 h-4 text-zinc-500" />
+                          </button>
+                          {taggedUsers.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {taggedUsers.map((u) => (
+                                <span
+                                  key={u.id}
+                                  className="flex items-center gap-1.5 glass rounded-full pl-1 pr-2 py-1 text-xs font-semibold"
+                                >
+                                  <Avatar src={u.avatar} name={u.username} className="w-5 h-5" />
+                                  {u.username}
+                                  <button
+                                    onClick={() => setTaggedUsers((prev) => prev.filter((t) => t.id !== u.id))}
+                                    className="hover:text-red-500 cursor-pointer"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           <hr className="border-zinc-200 dark:border-zinc-800" />
                         </>
                       )}
