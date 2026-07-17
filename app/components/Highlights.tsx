@@ -149,6 +149,25 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
     }
   };
 
+  // ---- Drag-reorder (section D) ----
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const handleDrop = async (targetIndex: number) => {
+    if (dragIndex === null || dragIndex === targetIndex) { setDragIndex(null); return; }
+    const reordered = [...highlights];
+    const [moved] = reordered.splice(dragIndex, 1);
+    reordered.splice(targetIndex, 0, moved);
+    setDragIndex(null);
+    const snapshot = highlights;
+    setHighlights(reordered);
+    try {
+      // The backend requires the full ordered id list.
+      await api.highlight.reorderHighlights(reordered.map((h) => h.id));
+    } catch (err) {
+      console.error("Failed to reorder highlights:", err);
+      setHighlights(snapshot);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex gap-6 px-2 py-2">
@@ -180,8 +199,15 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
           </button>
         )}
 
-        {highlights.map((h) => (
-          <div key={h.id} className="flex flex-col items-center gap-2 flex-shrink-0 relative group">
+        {highlights.map((h, hi) => (
+          <div
+            key={h.id}
+            draggable={isOwner}
+            onDragStart={() => isOwner && setDragIndex(hi)}
+            onDragOver={(e) => isOwner && e.preventDefault()}
+            onDrop={() => isOwner && handleDrop(hi)}
+            className={`flex flex-col items-center gap-2 flex-shrink-0 relative group ${dragIndex === hi ? "opacity-40" : ""} ${isOwner ? "cursor-grab active:cursor-grabbing" : ""}`}
+          >
             <button
               onClick={() => openHighlight(h)}
               disabled={viewerLoading}

@@ -16,7 +16,8 @@ import {
   Smile,
   Film,
   Check,
-  Flag
+  Flag,
+  Repeat
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import {
@@ -62,13 +63,21 @@ interface Reel {
   isSaved: boolean;
   isAudioSaved: boolean;
   comments: ReelComment[];
+  remixOfUsername: string;
+  remixOfUserId: string;
 }
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
 
 export default function ReelsPage() {
   const dispatch = useDispatch<AppDispatch>();
-  const { setCreateOpen, setCreateType } = useApp();
+  const { setCreateOpen, setCreateType, setRemixOf } = useApp();
+
+  const handleRemix = (reel: Reel) => {
+    setRemixOf({ postId: reel.id, author: reel.creator, media: reel.media });
+    setCreateType("reel");
+    setCreateOpen(true);
+  };
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
   const { reels: backendReels, savedAudios, loading } = useSelector((state: RootState) => state.posts);
 
@@ -113,6 +122,8 @@ export default function ReelsPage() {
         isLiked: !!p.isLiked,
         isSaved: !!p.isSaved,
         isAudioSaved: !!audioId && savedAudioIds.has(audioId),
+        remixOfUsername: p.originalReel?.userName || p.remixOfUsername || "",
+        remixOfUserId: p.originalReel?.userId || p.remixOfUserId || "",
         comments: (p.comments || []).map((c: any) => ({
           id: c.id || c.commentId,
           userId: c.userId || "",
@@ -342,13 +353,21 @@ export default function ReelsPage() {
             </Link>
 
             {/* Caption */}
+            {currentReel.remixOfUsername && (
+              <Link href={currentReel.remixOfUserId ? `/u/${currentReel.remixOfUserId}` : "#"} className="inline-flex items-center gap-1 text-[11px] font-semibold bg-black/30 backdrop-blur-sm rounded-full py-1 px-2.5 w-fit mb-1">
+                <Repeat className="w-3 h-3" /> Ремикс из @{currentReel.remixOfUsername}
+              </Link>
+            )}
             <p className="text-xs line-clamp-2 leading-relaxed opacity-90 select-text text-left">
               <HashtagText text={currentReel.caption} linkClassName="text-white font-semibold" />
             </p>
 
             {/* Audio track + save-audio */}
             <div className="flex items-center gap-2 mt-1">
-              <div className="flex items-center gap-2 text-xs bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 min-w-0">
+              <Link
+                href={currentReel.audioId ? `/audio/${encodeURIComponent(currentReel.audioId)}` : "#"}
+                className="flex items-center gap-2 text-xs bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 min-w-0 hover:bg-black/40 transition"
+              >
                 <Music className="w-3.5 h-3.5 flex-shrink-0" />
                 <div className="overflow-hidden w-28 relative h-4">
                   <span className="absolute animate-marquee whitespace-nowrap font-medium">
@@ -356,7 +375,7 @@ export default function ReelsPage() {
                     {currentReel.audioArtist ? ` · ${currentReel.audioArtist}` : ""}
                   </span>
                 </div>
-              </div>
+              </Link>
               {currentReel.audioId && (
                 <button
                   onClick={() => handleSaveAudio(currentReel)}
@@ -431,8 +450,23 @@ export default function ReelsPage() {
                 <MoreVertical className="w-6 h-6 text-white" />
               </button>
               {showReelMenu && (
-                <div className="absolute bottom-full right-0 mb-2 w-48 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-20 animate-pop-in">
-                  {currentUser && currentReel.userId !== currentUser.id ? (
+                <div className="absolute bottom-full right-0 mb-2 w-48 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-20 animate-pop-in divide-y divide-zinc-200 dark:divide-zinc-700/60">
+                  <button
+                    onClick={() => { handleRemix(currentReel); setShowReelMenu(false); }}
+                    className="w-full flex items-center gap-2.5 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                  >
+                    <Repeat className="w-4 h-4" /> Ремикс
+                  </button>
+                  {currentReel.audioId && (
+                    <Link
+                      href={`/audio/${encodeURIComponent(currentReel.audioId)}`}
+                      onClick={() => setShowReelMenu(false)}
+                      className="w-full flex items-center gap-2.5 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                    >
+                      <Music className="w-4 h-4" /> Открыть аудио
+                    </Link>
+                  )}
+                  {currentUser && currentReel.userId !== currentUser.id && (
                     <button
                       onClick={() => {
                         setReportTarget({ type: "POST", id: String(currentReel.id) });
@@ -442,8 +476,6 @@ export default function ReelsPage() {
                     >
                       <Flag className="w-4 h-4" /> Пожаловаться
                     </button>
-                  ) : (
-                    <span className="block p-3.5 text-sm text-zinc-450 text-left">Это ваш Reel</span>
                   )}
                 </div>
               )}

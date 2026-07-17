@@ -40,7 +40,10 @@ import {
   Globe,
   Check,
   Users,
-  AtSign
+  AtSign,
+  ShoppingBag,
+  Calendar,
+  Clock
 } from "lucide-react";
 
 /** One row of "Недавнее": either a visited profile or a raw text query. */
@@ -72,7 +75,7 @@ const formatSearchHistory = (h: any): SearchHistoryItem | null => {
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const dispatch = useDispatch<AppDispatch>();
-  const { theme, toggleTheme, isCreateOpen, setCreateOpen, createType, setCreateType } = useApp();
+  const { theme, toggleTheme, isCreateOpen, setCreateOpen, createType, setCreateType, remixOf, setRemixOf } = useApp();
   const { isLoggedIn, currentUser } = useSelector((state: RootState) => state.auth);
   
   const pathname = usePathname();
@@ -101,14 +104,23 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [tagResults, setTagResults] = useState<any[]>([]);
   const [tagLoading, setTagLoading] = useState(false);
 
-  // Post advanced settings (#14 hide like count, #24 sensitive)
+  // Post advanced settings (#14 hide like count, #24 sensitive, section A age/story-share)
   const [postSensitive, setPostSensitive] = useState(false);
   const [postHideLikes, setPostHideLikes] = useState(false);
+  const [postAgeRestricted, setPostAgeRestricted] = useState(false);
+  const [postAllowStorySharing, setPostAllowStorySharing] = useState(true);
 
-  // Drafts (#18)
+  // Product tags (section B): { name, price, currency, url, x, y } placed on the image
+  const [productTags, setProductTags] = useState<import("../services/api").ProductTag[]>([]);
+  const [placingProduct, setPlacingProduct] = useState<{ name: string; price: string; url: string } | null>(null);
+
+  // Drafts (#18) + scheduled posts (section A)
   const [drafts, setDrafts] = useState<any[]>([]);
   const [showDrafts, setShowDrafts] = useState(false);
   const [showSaveDraftPrompt, setShowSaveDraftPrompt] = useState(false);
+  const [scheduledFor, setScheduledFor] = useState("");
+  const [scheduledPosts, setScheduledPosts] = useState<any[]>([]);
+  const [showScheduled, setShowScheduled] = useState(false);
 
   // Story-specific: share with everyone vs close friends only
   const [isForCloseFriends, setIsForCloseFriends] = useState(false);
@@ -226,9 +238,38 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     });
   };
 
-  // ---- Drafts (#18) ----
+  // ---- Drafts (#18) + Scheduled (section A) ----
   const refreshDrafts = () => {
     api.post.getDrafts().then((list) => setDrafts(list || [])).catch(() => setDrafts([]));
+  };
+  const refreshScheduled = () => {
+    // This call also auto-publishes anything past due.
+    api.post.getScheduledPosts().then((list) => setScheduledPosts(list || [])).catch(() => setScheduledPosts([]));
+  };
+  const handleCancelSchedule = async (draftId: number) => {
+    try {
+      await api.post.cancelSchedule(draftId);
+      setScheduledPosts((prev) => prev.filter((d) => (d.id ?? d.draftId) !== draftId));
+    } catch (err) { console.error("Failed to cancel schedule:", err); }
+  };
+  const handlePublishScheduledNow = async (draftId: number) => {
+    try {
+      await api.post.publishDraft(draftId);
+      setScheduledPosts((prev) => prev.filter((d) => (d.id ?? d.draftId) !== draftId));
+    } catch (err) { console.error("Failed to publish now:", err); }
+  };
+
+  // ---- Product tags (section B) ----
+  const handlePlaceProduct = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!placingProduct || !placingProduct.name.trim() || !placingProduct.price.trim()) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+    setProductTags((prev) => [
+      ...prev,
+      { name: placingProduct.name.trim(), price: Number(placingProduct.price) || 0, currency: "USD", url: placingProduct.url.trim(), x, y },
+    ]);
+    setPlacingProduct(null);
   };
 
   const handleSaveDraft = async () => {
@@ -458,7 +499,13 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     setTagResults([]);
     setPostSensitive(false);
     setPostHideLikes(false);
+    setPostAgeRestricted(false);
+    setPostAllowStorySharing(true);
+    setProductTags([]);
+    setPlacingProduct(null);
+    setScheduledFor("");
     setShowSaveDraftPrompt(false);
+    setRemixOf(null);
     setUploadSuccess(false);
     setUploadError(null);
   };
@@ -508,18 +555,28 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           audioId: reelTrack?.id,
           audioName: reelTrack?.title,
           audioArtist: reelTrack?.artist,
+          remixOfPostId: remixOf?.postId,
         })).unwrap();
       } else {
-        await dispatch(createPost({
+        const composeData = {
           title: caption || "Instagram Post",
           content: caption,
           images: [imageFile],
           isReel: false,
           taggedUserIds: taggedUsers.map((u) => u.id),
           collaboratorIds: Array.from(collaboratorIds),
+          productTags,
           isSensitive: postSensitive,
+          isAgeRestricted: postAgeRestricted,
+          allowStorySharing: postAllowStorySharing,
           hideLikeCount: postHideLikes,
-        })).unwrap();
+        };
+        if (scheduledFor) {
+          // Schedule for later instead of publishing now (section A).
+          await api.post.schedulePost({ ...composeData, scheduledFor: new Date(scheduledFor).toISOString() });
+        } else {
+          await dispatch(createPost(composeData)).unwrap();
+        }
       }
 
       setIsUploading(false);
@@ -1030,6 +1087,33 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         </div>
       )}
 
+      {/* ----------------- PRODUCT TAG FORM (section B) ----------------- */}
+      {placingProduct && !(placingProduct.name.trim() && placingProduct.price.trim()) && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[72] flex items-center justify-center p-4" onClick={() => setPlacingProduct(null)}>
+          <div className="glass-strong w-full max-w-xs rounded-3xl overflow-hidden shadow-soft-lg animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 flex flex-col gap-3">
+              <div className="flex items-center gap-2 mb-1">
+                <ShoppingBag className="w-4 h-4" />
+                <span className="text-sm font-bold">Отметить товар</span>
+              </div>
+              <input type="text" autoFocus placeholder="Название товара" value={placingProduct.name}
+                onChange={(e) => setPlacingProduct((p) => p && { ...p, name: e.target.value })}
+                className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm outline-none" />
+              <input type="number" placeholder="Цена" value={placingProduct.price}
+                onChange={(e) => setPlacingProduct((p) => p && { ...p, price: e.target.value })}
+                className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm outline-none" />
+              <input type="url" placeholder="Ссылка (необязательно)" value={placingProduct.url}
+                onChange={(e) => setPlacingProduct((p) => p && { ...p, url: e.target.value })}
+                className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm outline-none" />
+              <span className="text-[11px] text-zinc-400">После заполнения нажмите на фото, чтобы разместить метку.</span>
+            </div>
+            <div className="flex divide-x divide-zinc-200 dark:divide-zinc-700/60 border-t border-zinc-200 dark:border-zinc-700/60">
+              <button onClick={() => setPlacingProduct(null)} className="flex-1 py-3 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer">Отмена</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ----------------- SAVE DRAFT PROMPT ----------------- */}
       {showSaveDraftPrompt && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4" onClick={() => setShowSaveDraftPrompt(false)}>
@@ -1048,6 +1132,42 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               <button onClick={() => setShowSaveDraftPrompt(false)} className="py-3 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer">
                 Отмена
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- SCHEDULED LIST (section A) ----------------- */}
+      {showScheduled && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[75] flex items-center justify-center p-4" onClick={() => setShowScheduled(false)}>
+          <div className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg flex flex-col max-h-[80vh] animate-pop-in" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <span className="text-sm font-bold flex items-center gap-2"><Calendar className="w-4 h-4" /> Запланированные</span>
+              <button onClick={() => setShowScheduled(false)} className="hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {scheduledPosts.length === 0 ? (
+                <p className="text-center text-sm text-zinc-400 py-12">Нет запланированных публикаций.</p>
+              ) : (
+                scheduledPosts.map((d) => {
+                  const did = d.id ?? d.draftId;
+                  const img = getFullImageUrl((d.images && d.images[0]) || d.filePath || d.imagePath || d.image);
+                  const when = d.scheduledFor ? new Date(d.scheduledFor) : null;
+                  return (
+                    <div key={did} className="flex items-center gap-3 p-2">
+                      <span className="w-14 h-14 rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex-shrink-0">
+                        {img && <SmartImage src={img} alt="" className="w-full h-full object-cover" />}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-semibold truncate block">{d.content || d.title || "Публикация"}</span>
+                        <span className="text-xs text-zinc-400 flex items-center gap-1"><Clock className="w-3 h-3" /> {when ? when.toLocaleString() : "—"}</span>
+                      </div>
+                      <button onClick={() => handlePublishScheduledNow(did)} className="text-xs font-bold text-blue-500 cursor-pointer">Сейчас</button>
+                      <button onClick={() => handleCancelSchedule(did)} className="text-xs font-bold text-red-500 cursor-pointer">Отменить</button>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
@@ -1190,15 +1310,27 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   disabled={isUploading || uploadSuccess}
                   className="text-sm font-semibold text-blue-500 hover:text-blue-650 disabled:opacity-50 cursor-pointer"
                 >
-                  {isUploading ? "Делимся..." : uploadSuccess ? "Поделено" : "Поделиться"}
+                  {isUploading
+                    ? (scheduledFor ? "Планируем..." : "Делимся...")
+                    : uploadSuccess
+                      ? (scheduledFor ? "Запланировано" : "Поделено")
+                      : (createType === "post" && scheduledFor ? "Запланировать" : "Поделиться")}
                 </button>
               ) : (
-                <button
-                  onClick={() => { refreshDrafts(); setShowDrafts(true); }}
-                  className="text-sm font-semibold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
-                >
-                  Черновики
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => { refreshScheduled(); setShowScheduled(true); }}
+                    className="text-sm font-semibold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
+                  >
+                    Запланир.
+                  </button>
+                  <button
+                    onClick={() => { refreshDrafts(); setShowDrafts(true); }}
+                    className="text-sm font-semibold text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
+                  >
+                    Черновики
+                  </button>
+                </div>
               )}
             </div>
 
@@ -1209,10 +1341,29 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               <div
                 className={`flex-1 flex flex-col items-center justify-center bg-zinc-50 dark:bg-zinc-950 p-6 relative ${
                   !selectedImage ? "border-dashed border-2 border-zinc-300 dark:border-zinc-800 m-4 rounded-xl" : ""
-                }`}
+                } ${placingProduct?.name.trim() && placingProduct?.price.trim() ? "cursor-crosshair" : ""}`}
                 onDragOver={handleDragOver}
                 onDrop={handleDrop}
+                onClick={placingProduct?.name.trim() && placingProduct?.price.trim() ? handlePlaceProduct : undefined}
               >
+                {/* Existing product tag dots (section B) */}
+                {selectedImage && productTags.map((t, i) => (
+                  <span
+                    key={i}
+                    className="absolute z-10 -translate-x-1/2 -translate-y-1/2 flex items-center"
+                    style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%` }}
+                  >
+                    <span className="w-4 h-4 rounded-full bg-white border-2 border-black/20 shadow-md" />
+                    <span className="ml-1 bg-black/70 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md whitespace-nowrap">
+                      {t.name}
+                    </span>
+                  </span>
+                ))}
+                {placingProduct?.name.trim() && placingProduct?.price.trim() && (
+                  <span className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-black/70 text-white text-xs font-semibold px-3 py-1.5 rounded-full pointer-events-none">
+                    Нажмите на фото, чтобы отметить товар
+                  </span>
+                )}
                 {selectedImage ? (
                   imageFile?.type.startsWith("video/") ? (
                     <video
@@ -1463,6 +1614,13 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
                       {createType === "reel" ? (
                         <>
+                          {remixOf && (
+                            <div className="flex items-center gap-2 glass rounded-2xl p-2 mb-1">
+                              {remixOf.media && <SmartImage src={remixOf.media} alt="" width={80} height={80} sizes="40px" className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />}
+                              <span className="text-xs font-semibold flex-1">Ремикс из <span className="text-blue-500">@{remixOf.author}</span></span>
+                              <button onClick={() => setRemixOf(null)} className="p-1 hover:text-red-500 cursor-pointer"><X className="w-4 h-4" /></button>
+                            </div>
+                          )}
                           <span className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 flex items-center gap-1.5">
                             <Music className="w-3.5 h-3.5" /> Аудио-дорожка
                           </span>
@@ -1568,6 +1726,52 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                               <span className="w-4 h-4 rounded-full bg-white" />
                             </span>
                           </button>
+                          <button
+                            onClick={() => setPostAgeRestricted((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">Ограничение по возрасту (18+)</span>
+                            <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${postAgeRestricted ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                              <span className="w-4 h-4 rounded-full bg-white" />
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => setPostAllowStorySharing((v) => !v)}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">Разрешить репост в истории</span>
+                            <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${postAllowStorySharing ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                              <span className="w-4 h-4 rounded-full bg-white" />
+                            </span>
+                          </button>
+                          <hr className="border-zinc-200 dark:border-zinc-800" />
+
+                          {/* Tag products (section B) */}
+                          <button
+                            onClick={() => setPlacingProduct({ name: "", price: "", url: "" })}
+                            className="flex items-center justify-between text-sm w-full cursor-pointer hover:opacity-75"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-200">
+                              Отметить товары
+                              {productTags.length > 0 && <span className="text-zinc-400 font-normal"> · {productTags.length}</span>}
+                            </span>
+                            <ShoppingBag className="w-4 h-4 text-zinc-500" />
+                          </button>
+                          <hr className="border-zinc-200 dark:border-zinc-800" />
+
+                          {/* Schedule for later (section A) */}
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-sm font-medium text-zinc-900 dark:text-zinc-200">Запланировать публикацию</span>
+                            <input
+                              type="datetime-local"
+                              value={scheduledFor}
+                              onChange={(e) => setScheduledFor(e.target.value)}
+                              className="bg-zinc-100 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm outline-none"
+                            />
+                            {scheduledFor && (
+                              <span className="text-[11px] text-blue-500">Будет опубликовано в назначенное время. Кнопка «Поделиться» запланирует пост.</span>
+                            )}
+                          </div>
                           <hr className="border-zinc-200 dark:border-zinc-800" />
                         </>
                       )}

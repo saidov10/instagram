@@ -70,6 +70,21 @@ export interface Post {
   repostedFromUserId?: string;
   /** #16 — approved collaborators shown alongside the author in the header. */
   collaborators?: TaggedUser[];
+  /** section A — age-restricted (18+); blurred like sensitive but with a different label. */
+  isAgeRestricted?: boolean;
+  /** section A — whether others may reshare this post to their story (owner default true). */
+  allowStorySharing?: boolean;
+  /** section B — shopping product tags placed on the image. */
+  productTags?: ProductTagUI[];
+}
+
+export interface ProductTagUI {
+  name: string;
+  price: number;
+  currency: string;
+  url: string;
+  x: number;
+  y: number;
 }
 
 export interface SavedAudio {
@@ -145,6 +160,16 @@ export const formatBackendPost = (p: any): Post => {
     hideLikeCount: likeHidden,
     isSensitive: !!p.isSensitive,
     isBlurred: !!p.isBlurred,
+    isAgeRestricted: !!p.isAgeRestricted,
+    allowStorySharing: p.allowStorySharing !== false,
+    productTags: (p.productTags || []).map((t: any): ProductTagUI => ({
+      name: t.name || "",
+      price: typeof t.price === "number" ? t.price : Number(t.price) || 0,
+      currency: t.currency || "USD",
+      url: t.url || "",
+      x: typeof t.x === "number" ? t.x : 0,
+      y: typeof t.y === "number" ? t.y : 0,
+    })),
     repostedFrom: p.originalPost?.userName || p.repostedFrom || p.originalAuthor || undefined,
     repostedFromUserId: p.originalPost?.userId || p.repostedFromUserId || undefined,
     collabUser: (p.collaborators && p.collaborators[0])
@@ -315,16 +340,7 @@ export const saveAudio = createAsyncThunk(
 export const createPost = createAsyncThunk(
   "posts/create",
   async (
-    data: {
-      title: string;
-      content: string;
-      images: File[];
-      isReel?: boolean;
-      taggedUserIds?: string[];
-      collaboratorIds?: string[];
-      isSensitive?: boolean;
-      hideLikeCount?: boolean;
-    },
+    data: import("../../services/api").PostComposeData,
     { dispatch, rejectWithValue }
   ) => {
     try {
@@ -340,10 +356,34 @@ export const createPost = createAsyncThunk(
   }
 );
 
+export const toggleAgeRestricted = createAsyncThunk(
+  "posts/toggleAgeRestricted",
+  async ({ postId, isAgeRestricted }: { postId: number; isAgeRestricted: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.toggleAgeRestricted(postId, isAgeRestricted);
+      return { postId, isAgeRestricted };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle age restriction.");
+    }
+  }
+);
+
+export const toggleStorySharing = createAsyncThunk(
+  "posts/toggleStorySharing",
+  async ({ postId, allowStorySharing }: { postId: number; allowStorySharing: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.toggleStorySharing(postId, allowStorySharing);
+      return { postId, allowStorySharing };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle story sharing.");
+    }
+  }
+);
+
 export const createReel = createAsyncThunk(
   "posts/createReel",
   async (
-    data: { file: File; caption?: string; audioId?: string; audioName?: string; audioArtist?: string },
+    data: { file: File; caption?: string; audioId?: string; audioName?: string; audioArtist?: string; remixOfPostId?: number },
     { dispatch, rejectWithValue }
   ) => {
     try {
@@ -781,6 +821,24 @@ const postsSlice = createSlice({
             post.isSensitive = isSensitive;
             post.isBlurred = isSensitive;
           }
+        });
+      })
+
+      // section A — age restriction
+      .addCase(toggleAgeRestricted.fulfilled, (state, action) => {
+        const { postId, isAgeRestricted } = action.payload;
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) { post.isAgeRestricted = isAgeRestricted; post.isBlurred = isAgeRestricted || post.isBlurred; }
+        });
+      })
+
+      // section A — story-resharing permission
+      .addCase(toggleStorySharing.fulfilled, (state, action) => {
+        const { postId, allowStorySharing } = action.payload;
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) post.allowStorySharing = allowStorySharing;
         });
       })
 

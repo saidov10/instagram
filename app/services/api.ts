@@ -155,6 +155,49 @@ async function request<T>(
 }
 
 
+/** A product tag placed on a post's image at a normalized (0–1) position. */
+export interface ProductTag {
+  name: string;
+  price: number;
+  currency?: string;
+  url?: string;
+  x: number;
+  y: number;
+}
+
+/** Shared shape for publish / save-draft / schedule — all use the same multipart body. */
+export interface PostComposeData {
+  title: string;
+  content: string;
+  images: File[];
+  isReel?: boolean;
+  taggedUserIds?: string[];
+  collaboratorIds?: string[];
+  productTags?: ProductTag[];
+  isSensitive?: boolean;
+  isAgeRestricted?: boolean;
+  allowStorySharing?: boolean;
+  hideLikeCount?: boolean;
+}
+
+/** Builds the multipart body shared by add-post, save-draft and schedule-post. */
+function buildPostFormData(data: PostComposeData): FormData {
+  const fd = new FormData();
+  fd.append("Title", data.title);
+  fd.append("Content", data.content);
+  if (data.isReel) fd.append("isReel", "true");
+  // The backend binds single JSON-array strings (tags/collaborators staged as pending).
+  if (data.taggedUserIds?.length) fd.append("taggedUserIds", JSON.stringify(data.taggedUserIds));
+  if (data.collaboratorIds?.length) fd.append("collaboratorIds", JSON.stringify(data.collaboratorIds));
+  if (data.productTags?.length) fd.append("productTags", JSON.stringify(data.productTags));
+  if (data.isSensitive) fd.append("isSensitive", "true");
+  if (data.isAgeRestricted) fd.append("isAgeRestricted", "true");
+  if (data.allowStorySharing === false) fd.append("allowStorySharing", "false");
+  if (data.hideLikeCount) fd.append("hideLikeCount", "true");
+  data.images.forEach((img) => fd.append("Images", img));
+  return fd;
+}
+
 // API Endpoints Mapping
 export const api = {
   // --- ACCOUNT ENDPOINTS ---
@@ -240,6 +283,19 @@ export const api = {
       }
       return token;
     },
+
+    // --- DATA EXPORT & DELETION (section G) ---
+    /** Full JSON dump of the caller's own data. */
+    async exportData(): Promise<any> {
+      return request("/Account/export-data");
+    },
+    /** Schedules permanent deletion 30 days out; logging back in auto-cancels it. */
+    async requestDeletion(): Promise<any> {
+      return request("/Account/request-deletion", { method: "POST" });
+    },
+    async cancelDeletion(): Promise<any> {
+      return request("/Account/cancel-deletion", { method: "DELETE" });
+    },
   },
 
   // --- USER PROFILE ENDPOINTS ---
@@ -292,6 +348,11 @@ export const api = {
     /** Professional insights — Business/Creator accounts only (feature #20). */
     async getInsights(): Promise<any> {
       return request("/UserProfile/get-insights");
+    },
+
+    /** Share link + deep link for a profile (section G). QR is rendered client-side from webUrl. */
+    async getShareLink(userId: string): Promise<any> {
+      return request(`/UserProfile/get-share-link?userId=${userId}`);
     },
 
     async updateUserImageProfile(file: File): Promise<any> {
@@ -370,39 +431,58 @@ export const api = {
       return Array.isArray(res) ? res : res?.data || [];
     },
 
-    async addPost(data: {
-      title: string;
-      content: string;
-      images: File[];
-      isReel?: boolean;
-      taggedUserIds?: string[];
-      collaboratorIds?: string[];
-      isSensitive?: boolean;
-      hideLikeCount?: boolean;
-    }): Promise<any> {
-      const formData = new FormData();
-      formData.append("Title", data.title);
-      formData.append("Content", data.content);
-      if (data.isReel) {
-        formData.append("isReel", "true");
-      }
-      // The backend binds single JSON-array strings of user ids (staged as pending).
-      if (data.taggedUserIds && data.taggedUserIds.length > 0) {
-        formData.append("taggedUserIds", JSON.stringify(data.taggedUserIds));
-      }
-      if (data.collaboratorIds && data.collaboratorIds.length > 0) {
-        formData.append("collaboratorIds", JSON.stringify(data.collaboratorIds));
-      }
-      if (data.isSensitive) formData.append("isSensitive", "true");
-      if (data.hideLikeCount) formData.append("hideLikeCount", "true");
-      data.images.forEach((img) => {
-        formData.append("Images", img);
-      });
-
+    async addPost(data: PostComposeData): Promise<any> {
       return request("/Post/add-post", {
         method: "POST",
-        body: formData,
+        body: buildPostFormData(data),
       });
+    },
+
+    // --- SCHEDULED POSTS (section A) ---
+    async saveDraft(data: PostComposeData): Promise<any> {
+      return request("/Post/save-draft", { method: "POST", body: buildPostFormData(data) });
+    },
+    async schedulePost(data: PostComposeData & { scheduledFor: string }): Promise<any> {
+      const fd = buildPostFormData(data);
+      fd.append("scheduledFor", data.scheduledFor);
+      return request("/Post/schedule-post", { method: "POST", body: fd });
+    },
+    async getScheduledPosts(): Promise<any[]> {
+      // This call also auto-publishes anything past due (call on screen open / app foreground).
+      const res = await request<any>("/Post/get-scheduled-posts");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async updateSchedule(draftId: number, scheduledFor: string): Promise<any> {
+      return request("/Post/update-schedule", {
+        method: "PUT",
+        body: JSON.stringify({ draftId, scheduledFor }),
+      });
+    },
+    async cancelSchedule(draftId: number): Promise<any> {
+      return request(`/Post/cancel-schedule?draftId=${draftId}`, { method: "DELETE" });
+    },
+
+    // --- OWNER FLAGS (section A) ---
+    async toggleAgeRestricted(postId: number, isAgeRestricted: boolean): Promise<any> {
+      return request(`/Post/toggle-age-restricted?postId=${postId}&isAgeRestricted=${isAgeRestricted}`, { method: "PUT" });
+    },
+    async toggleStorySharing(postId: number, allowStorySharing: boolean): Promise<any> {
+      return request(`/Post/toggle-story-sharing?postId=${postId}&allowStorySharing=${allowStorySharing}`, { method: "PUT" });
+    },
+
+    // --- PER-POST INSIGHTS (section A) ---
+    async getPostInsights(postId: number): Promise<any> {
+      return request(`/Post/get-post-insights?postId=${postId}`);
+    },
+
+    // --- TRANSLATION (section C) ---
+    async translateText(text: string, targetLang: string): Promise<any> {
+      return request(`/Post/translate-text?text=${encodeURIComponent(text)}&targetLang=${encodeURIComponent(targetLang)}`);
+    },
+
+    // --- AUDIO DETAIL (section D) ---
+    async getAudioDetails(audioId: string): Promise<any> {
+      return request(`/Post/get-audio-details?audioId=${encodeURIComponent(audioId)}`);
     },
 
     // --- EXPLORE (feature #3) ---
@@ -444,14 +524,6 @@ export const api = {
     },
 
     // --- DRAFTS (feature #18) ---
-    async saveDraft(data: { title: string; content: string; images: File[]; isReel?: boolean }): Promise<any> {
-      const formData = new FormData();
-      formData.append("Title", data.title);
-      formData.append("Content", data.content);
-      if (data.isReel) formData.append("isReel", "true");
-      data.images.forEach((img) => formData.append("Images", img));
-      return request("/Post/save-draft", { method: "POST", body: formData });
-    },
     async getDrafts(): Promise<any[]> {
       const res = await request<any>("/Post/get-drafts");
       return Array.isArray(res) ? res : res?.data || [];
@@ -558,6 +630,7 @@ export const api = {
       audioId?: string;
       audioName?: string;
       audioArtist?: string;
+      remixOfPostId?: number;
     }): Promise<any> {
       const formData = new FormData();
       formData.append("File", data.file);
@@ -565,6 +638,8 @@ export const api = {
       if (data.audioId) formData.append("audioId", data.audioId);
       if (data.audioName) formData.append("audioName", data.audioName);
       if (data.audioArtist) formData.append("audioArtist", data.audioArtist);
+      // #D — a remix/duet references the original reel it was recorded against.
+      if (data.remixOfPostId != null) formData.append("remixOfPostId", String(data.remixOfPostId));
 
       return request("/Post/add-reel", {
         method: "POST",
@@ -693,6 +768,14 @@ export const api = {
       });
     },
 
+    /** Share a post into your story (section D). 403 if the author disabled resharing. */
+    async sharePostToStory(postId: number): Promise<any> {
+      return request("/Story/share-post-to-story", {
+        method: "POST",
+        body: JSON.stringify({ postId }),
+      });
+    },
+
     async deleteStory(id: number): Promise<any> {
       return request(`/Story/DeleteStory?id=${id}`, {
         method: "DELETE",
@@ -780,7 +863,8 @@ export const api = {
       messageText?: string,
       file?: File,
       voice?: { isVoice: true; durationMs: number },
-      replyToMessageId?: number
+      replyToMessageId?: number,
+      isViewOnce?: boolean
     ): Promise<any> {
       const formData = new FormData();
       formData.append("ChatId", String(chatId));
@@ -793,10 +877,28 @@ export const api = {
       if (replyToMessageId != null) {
         formData.append("replyToMessageId", String(replyToMessageId));
       }
+      // #E — one-time-view media: recipient must tap to open, then the server wipes it.
+      if (isViewOnce && file) formData.append("isViewOnce", "true");
 
       return request("/Chat/send-message", {
         method: "PUT",
         body: formData,
+      });
+    },
+
+    /** #E — opens a view-once message exactly once; server returns the url then wipes it. */
+    async openViewOnceMessage(messageId: number): Promise<any> {
+      return request("/Chat/open-view-once-message", {
+        method: "POST",
+        body: JSON.stringify({ messageId }),
+      });
+    },
+
+    /** #E — notify the other participant(s) that the user screenshotted the chat. */
+    async notifyScreenshot(chatId: number): Promise<any> {
+      return request("/Chat/notify-screenshot", {
+        method: "POST",
+        body: JSON.stringify({ chatId }),
       });
     },
 
@@ -895,6 +997,64 @@ export const api = {
     },
   },
 
+  // --- LIVE VIDEO (simulated — section D) ---
+  live: {
+    async startLive(title?: string): Promise<any> {
+      return request("/Live/start-live", { method: "POST", body: JSON.stringify({ title }) });
+    },
+    async endLive(sessionId: string): Promise<any> {
+      return request("/Live/end-live", { method: "POST", body: JSON.stringify({ sessionId }) });
+    },
+    async getActiveLives(): Promise<any[]> {
+      const res = await request<any>("/Live/get-active-lives");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async joinLive(sessionId: string): Promise<any> {
+      return request("/Live/join-live", { method: "POST", body: JSON.stringify({ sessionId }) });
+    },
+    async leaveLive(sessionId: string): Promise<any> {
+      return request("/Live/leave-live", { method: "POST", body: JSON.stringify({ sessionId }) });
+    },
+    async sendLiveComment(sessionId: string, text: string): Promise<any> {
+      return request("/Live/send-live-comment", { method: "POST", body: JSON.stringify({ sessionId, text }) });
+    },
+    async getLiveComments(sessionId: string): Promise<any[]> {
+      const res = await request<any>(`/Live/get-live-comments?sessionId=${encodeURIComponent(sessionId)}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+  },
+
+  // --- BROADCAST CHANNELS (section E) ---
+  broadcast: {
+    async createChannel(name: string, description?: string): Promise<any> {
+      return request("/Broadcast/create-channel", { method: "POST", body: JSON.stringify({ name, description }) });
+    },
+    async getChannels(): Promise<any[]> {
+      const res = await request<any>("/Broadcast/get-channels");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async subscribe(channelId: number): Promise<any> {
+      return request("/Broadcast/subscribe", { method: "POST", body: JSON.stringify({ channelId }) });
+    },
+    async unsubscribe(channelId: number): Promise<any> {
+      return request(`/Broadcast/unsubscribe?channelId=${channelId}`, { method: "DELETE" });
+    },
+    async sendMessage(channelId: number, text: string): Promise<any> {
+      return request("/Broadcast/send-message", { method: "POST", body: JSON.stringify({ channelId, text }) });
+    },
+    async getMessages(channelId: number): Promise<any[]> {
+      const res = await request<any>(`/Broadcast/get-messages?channelId=${channelId}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+  },
+
+  // --- UNIFIED SEARCH (section F) ---
+  search: {
+    async unified(query: string, filter: "TOP" | "ACCOUNTS" | "TAGS" | "PLACES" = "TOP"): Promise<any> {
+      return request(`/Search/unified-search?query=${encodeURIComponent(query)}&filter=${filter}`);
+    },
+  },
+
   // --- FOLLOWING RELATIONSHIP ENDPOINTS ---
   following: {
     async getSubscribers(userId: string): Promise<any[]> {
@@ -981,6 +1141,11 @@ export const api = {
       return request(`/Location/delete-Location?id=${id}`, {
         method: "DELETE",
       });
+    },
+
+    /** Location page feed (section F): { location, posts }. */
+    async getLocationFeed(locationId: number, pageNumber = 1, pageSize = 24): Promise<any> {
+      return request(`/Location/get-location-feed?locationId=${locationId}&PageNumber=${pageNumber}&PageSize=${pageSize}`);
     },
   },
 
@@ -1178,6 +1343,19 @@ export const api = {
         method: "DELETE",
       });
     },
+
+    // --- COLLABORATIVE COLLECTIONS (section G) — owner only ---
+    async addCollaborator(collectionId: number, userId: string): Promise<any> {
+      return request("/User/add-collection-collaborator", {
+        method: "POST",
+        body: JSON.stringify({ collectionId, userId }),
+      });
+    },
+    async removeCollaborator(collectionId: number, userId: string): Promise<any> {
+      return request(`/User/remove-collection-collaborator?collectionId=${collectionId}&userId=${userId}`, {
+        method: "DELETE",
+      });
+    },
   },
 
   // --- MUSIC ENDPOINTS ---
@@ -1240,6 +1418,20 @@ export const api = {
         method: "DELETE",
       });
     },
+
+    // --- PUSH TOKENS (section G) — backend stores + logs a simulated dispatch only ---
+    async registerPushToken(token: string, platform: string): Promise<any> {
+      return request("/Notification/register-push-token", {
+        method: "POST",
+        body: JSON.stringify({ token, platform }),
+      });
+    },
+    async unregisterPushToken(token: string): Promise<any> {
+      return request("/Notification/unregister-push-token", {
+        method: "DELETE",
+        body: JSON.stringify({ token }),
+      });
+    },
   },
 
   // --- HIGHLIGHT ENDPOINTS ---
@@ -1268,9 +1460,17 @@ export const api = {
         method: "DELETE",
       });
     },
+
+    /** Persist a new highlight order — must include every highlight id (section D). */
+    async reorderHighlights(orderedIds: string[]): Promise<any> {
+      return request("/Highlight/reorder-highlights", {
+        method: "PUT",
+        body: JSON.stringify({ orderedIds }),
+      });
+    },
   },
 
-  // --- REPORT ENDPOINTS ---
+  // --- REPORT & APPEALS ENDPOINTS ---
   report: {
     async sendReport(data: {
       targetType: "POST" | "COMMENT" | "STORY" | "USER";
@@ -1280,6 +1480,41 @@ export const api = {
       return request("/Report/send-report", {
         method: "POST",
         body: JSON.stringify(data),
+      });
+    },
+
+    // --- Moderator queue (section H) — NOT role-gated on the backend; gate in-app ---
+    async getReports(status?: "PENDING" | "RESOLVED" | "DISMISSED"): Promise<any[]> {
+      const res = await request<any>(`/Report/get-reports${status ? `?status=${status}` : ""}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async resolveReport(reportId: string, status: "RESOLVED" | "DISMISSED", resolutionNote?: string): Promise<any> {
+      return request("/Report/resolve-report", {
+        method: "PUT",
+        body: JSON.stringify({ reportId, status, resolutionNote }),
+      });
+    },
+
+    // --- Appeals ---
+    /** Consumer-facing: appeal an action taken against your content/account. */
+    async submitAppeal(data: { targetType: string; targetId: string; reason: string }): Promise<any> {
+      return request("/Report/submit-appeal", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    async getMyAppeals(): Promise<any[]> {
+      const res = await request<any>("/Report/get-my-appeals");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async getAppeals(status?: "PENDING" | "RESOLVED" | "DISMISSED"): Promise<any[]> {
+      const res = await request<any>(`/Report/get-appeals${status ? `?status=${status}` : ""}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async resolveAppeal(appealId: string, status: "RESOLVED" | "DISMISSED", resolutionNote?: string): Promise<any> {
+      return request("/Report/resolve-appeal", {
+        method: "PUT",
+        body: JSON.stringify({ appealId, status, resolutionNote }),
       });
     },
   },

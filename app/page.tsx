@@ -20,7 +20,9 @@ import {
   UserX,
   Pin,
   AlertTriangle,
-  Repeat2
+  Repeat2,
+  ShoppingBag,
+  Radio
 } from "lucide-react";
 import { AppDispatch, RootState } from "./store/store";
 import {
@@ -57,7 +59,7 @@ import { useApp } from "./context/AppContext";
 import Avatar from "./components/Avatar";
 import SmartImage from "./components/SmartImage";
 import ReportModal, { ReportTarget } from "./components/ReportModal";
-import HashtagText from "./components/HashtagText";
+import TranslatableText from "./components/TranslatableText";
 import StoryViewer from "./components/StoryViewer";
 
 const VerifiedBadge = () => (
@@ -79,6 +81,9 @@ export default function HomeFeed() {
 
   // Suggestions state loaded dynamically
   const [suggestions, setSuggestions] = useState<any[]>([]);
+
+  // Active live broadcasts (section D)
+  const [activeLives, setActiveLives] = useState<any[]>([]);
 
   // Active Story Modal Viewer — sourced from either `stories` (followed users) or `myStories`.
   // Only the *id* lives here: the story itself is read back from the store on every render, so a
@@ -246,6 +251,25 @@ export default function HomeFeed() {
     setMenuPostId(null);
   };
 
+  // Per-post insights (section A)
+  const [insightsPostId, setInsightsPostId] = useState<number | null>(null);
+  const [insightsData, setInsightsData] = useState<any | null>(null);
+
+  // Shopping: which post is showing its product-tag dots, and the open product card
+  const [productDotsPostId, setProductDotsPostId] = useState<number | null>(null);
+  const [openProduct, setOpenProduct] = useState<{ postId: number; index: number } | null>(null);
+
+  const handleViewInsights = async (post: Post) => {
+    setMenuPostId(null);
+    setInsightsPostId(post.id);
+    setInsightsData(null);
+    try {
+      setInsightsData(await api.post.getPostInsights(post.id));
+    } catch (err) {
+      console.error("Failed to load post insights:", err);
+    }
+  };
+
   const [repostedIds, setRepostedIds] = useState<Set<number>>(new Set());
 
   const handleRepost = async (post: Post) => {
@@ -255,6 +279,21 @@ export default function HomeFeed() {
       setRepostedIds((prev) => new Set(prev).add(post.id));
     } catch (err) {
       console.error("Failed to repost:", err);
+    }
+  };
+
+  const [shareToStoryMsg, setShareToStoryMsg] = useState<string | null>(null);
+
+  const handleShareToStory = async (post: Post) => {
+    setMenuPostId(null);
+    try {
+      await api.story.sharePostToStory(post.id);
+      setShareToStoryMsg("Опубликовано в вашей истории");
+    } catch (err: any) {
+      // 403 when the author disabled resharing to stories.
+      setShareToStoryMsg(err?.status === 403 ? "Автор запретил репост этой публикации" : "Не удалось поделиться");
+    } finally {
+      setTimeout(() => setShareToStoryMsg(null), 2500);
     }
   };
 
@@ -276,6 +315,7 @@ export default function HomeFeed() {
       dispatch(fetchFollowingPosts({}));
       dispatch(fetchStories());
       dispatch(fetchMyStories());
+      api.live.getActiveLives().then((l) => setActiveLives(l || [])).catch(() => setActiveLives([]));
 
       // Fetch suggestions
       const loadSuggestions = async () => {
@@ -462,7 +502,7 @@ export default function HomeFeed() {
               <Link href={getUserLink(comment.userId)} className="font-bold mr-2 hover:underline">
                 {comment.username}
               </Link>
-              {comment.text}
+              <TranslatableText text={comment.text} />
             </p>
             <div className="flex items-center gap-3 mt-1 text-[10px] text-zinc-400">
               <span>Just now</span>
@@ -603,6 +643,32 @@ export default function HomeFeed() {
                   </span>
                 </div>
               )}
+
+              {/* Go live (section D) */}
+              {currentUser && (
+                <Link href="/live" className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer group">
+                  <div className="w-[68px] h-[68px] rounded-full border-2 border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center group-hover:scale-110 transition">
+                    <Radio className="w-6 h-6 text-[var(--like-red)]" />
+                  </div>
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-[74px] truncate">Эфир</span>
+                </Link>
+              )}
+
+              {/* Active live broadcasts */}
+              {activeLives.map((live) => {
+                const sid = live.sessionId || live.id;
+                return (
+                  <Link key={sid} href={`/live?session=${encodeURIComponent(sid)}`} className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer group">
+                    <div className="relative p-[2.5px] rounded-full bg-[var(--like-red)]">
+                      <div className="bg-white dark:bg-black p-[2.5px] rounded-full">
+                        <Avatar src={getFullImageUrl(live.userAvatar || live.avatar)} name={live.userName || live.username} className="w-14 h-14" />
+                      </div>
+                      <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-[var(--like-red)] text-white text-[8px] font-bold px-1.5 py-0.5 rounded uppercase">Live</span>
+                    </div>
+                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-[74px] truncate">{live.userName || live.username || "live"}</span>
+                  </Link>
+                );
+              })}
 
               {stories.filter((s) => s.userId !== currentUser?.id).length === 0 ? (
                 <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 px-2">Нет доступных историй</p>
@@ -760,12 +826,14 @@ export default function HomeFeed() {
                     />
                   )}
 
-                  {/* Sensitive-content cover (#24) */}
+                  {/* Sensitive / age-restricted cover (#24 / section A) */}
                   {post.isBlurred && (
                     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 text-center px-6 bg-black/40 backdrop-blur-2xl">
                       <AlertTriangle className="w-8 h-8 text-white/90" />
                       <p className="text-white text-sm font-medium max-w-[240px]">
-                        Возможно, деликатный контент
+                        {post.isAgeRestricted
+                          ? "Этот контент может не подходить для всех возрастов"
+                          : "Возможно, деликатный контент"}
                       </p>
                       <button
                         onClick={(e) => { e.stopPropagation(); dispatch(revealSensitivePost(post.id)); }}
@@ -781,6 +849,40 @@ export default function HomeFeed() {
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                       <Heart className="w-28 h-28 text-white fill-white drop-shadow-2xl animate-heart-burst stroke-[1px]" />
                     </div>
+                  )}
+
+                  {/* Product tags (section B) */}
+                  {!post.isBlurred && post.productTags && post.productTags.length > 0 && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setProductDotsPostId(productDotsPostId === post.id ? null : post.id); setOpenProduct(null); }}
+                        className="absolute bottom-3 left-3 z-20 bg-black/60 backdrop-blur-md text-white rounded-full p-2 hover:bg-black/75 transition"
+                        title="Товары"
+                      >
+                        <ShoppingBag className="w-4 h-4" />
+                      </button>
+                      {productDotsPostId === post.id && post.productTags.map((pt, pi) => (
+                        <span key={pi} className="absolute z-20 -translate-x-1/2 -translate-y-1/2" style={{ left: `${pt.x * 100}%`, top: `${pt.y * 100}%` }}>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenProduct(openProduct?.index === pi && openProduct?.postId === post.id ? null : { postId: post.id, index: pi }); }}
+                            className="w-5 h-5 rounded-full bg-white border-2 border-black/20 shadow-lg flex items-center justify-center animate-pop-in"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-black/70" />
+                          </button>
+                          {openProduct?.postId === post.id && openProduct?.index === pi && (
+                            <div className="absolute left-1/2 -translate-x-1/2 mt-1 w-40 glass-strong rounded-xl p-2.5 shadow-soft-lg animate-pop-in z-30" onClick={(e) => e.stopPropagation()}>
+                              <span className="block text-xs font-bold truncate">{pt.name}</span>
+                              <span className="block text-xs text-zinc-500">{pt.currency} {pt.price.toLocaleString()}</span>
+                              {pt.url && (
+                                <a href={pt.url} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold text-blue-500 hover:text-blue-300 mt-1 inline-block">
+                                  Посмотреть товар
+                                </a>
+                              )}
+                            </div>
+                          )}
+                        </span>
+                      ))}
+                    </>
                   )}
                 </div>
 
@@ -836,7 +938,7 @@ export default function HomeFeed() {
                   {/* Caption */}
                   <p className="text-sm text-zinc-900 dark:text-white leading-tight">
                     <span className="font-bold mr-2 hover:underline cursor-pointer">{post.username}</span>
-                    <HashtagText text={post.caption} />
+                    <TranslatableText text={post.caption} />
                   </p>
 
                   {/* Comment details list */}
@@ -1061,6 +1163,14 @@ export default function HomeFeed() {
             )}
             {isOwnMenuPost && (
               <button
+                onClick={() => handleViewInsights(menuPost)}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Посмотреть статистику
+              </button>
+            )}
+            {isOwnMenuPost && (
+              <button
                 onClick={() => handleToggleComments(menuPost)}
                 disabled={commentsBusy}
                 className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-60"
@@ -1085,6 +1195,12 @@ export default function HomeFeed() {
               className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-50"
             >
               {repostedIds.has(menuPost.id) ? "Опубликовано ✓" : "Опубликовать у себя (репост)"}
+            </button>
+            <button
+              onClick={() => handleShareToStory(menuPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              Поделиться в истории
             </button>
             {menuPost.userId && (
               <Link
@@ -1217,6 +1333,50 @@ export default function HomeFeed() {
         </div>
       )}
 
+      {/* ----------------- PER-POST INSIGHTS (section A) ----------------- */}
+      {insightsPostId !== null && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-60 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setInsightsPostId(null)}>
+          <div className="glass-strong w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-soft-lg animate-in slide-in-from-bottom sm:zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <span className="text-sm font-bold">Статистика публикации</span>
+              <button onClick={() => setInsightsPostId(null)} className="hover:opacity-60 cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            {!insightsData ? (
+              <div className="py-14 flex items-center justify-center">
+                <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-800 rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 p-4">
+                {[
+                  { label: "Просмотры", value: insightsData.viewCount },
+                  { label: "Отметки «Нравится»", value: insightsData.likeCount },
+                  { label: "Комментарии", value: insightsData.commentCount },
+                  { label: "Сохранения", value: insightsData.saveCount },
+                  { label: "Репосты", value: insightsData.repostCount },
+                  { label: "В историях", value: insightsData.storyShareCount },
+                ].map((t) => (
+                  <div key={t.label} className="flex flex-col rounded-2xl border border-zinc-200 dark:border-zinc-800 p-3">
+                    <span className="text-xl font-bold tabular-nums">{(t.value ?? 0).toLocaleString()}</span>
+                    <span className="text-[11px] text-zinc-500 leading-tight">{t.label}</span>
+                  </div>
+                ))}
+                <div className="col-span-2 flex items-center justify-between rounded-2xl bg-zinc-100 dark:bg-zinc-800/60 p-3">
+                  <span className="text-xs text-zinc-500">Вовлечённость</span>
+                  <span className="text-lg font-bold">{(insightsData.engagementRatePercent ?? 0)}%</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Share-to-story toast */}
+      {shareToStoryMsg && (
+        <div className="fixed bottom-20 md:bottom-8 left-1/2 -translate-x-1/2 z-[80] glass-strong px-4 py-2.5 rounded-full text-sm font-semibold shadow-soft-lg animate-pop-in">
+          {shareToStoryMsg}
+        </div>
+      )}
+
       {/* ----------------- REPORT MODAL ----------------- */}
       {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
 
@@ -1254,7 +1414,7 @@ export default function HomeFeed() {
                       <Link href={getUserLink(activeCommentsPost.userId)} className="font-bold mr-2 hover:underline">
                         {activeCommentsPost.username}
                       </Link>
-                      <HashtagText text={activeCommentsPost.caption} />
+                      <TranslatableText text={activeCommentsPost.caption} />
                     </p>
                     <span className="text-[10px] text-zinc-400 mt-1 block">{activeCommentsPost.time}</span>
                   </div>

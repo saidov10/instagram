@@ -44,6 +44,8 @@ export interface Story {
   viewers?: StoryViewer[];
   /** #21 — an @mention sticker tagging another user. */
   mention?: { userId: string; username: string } | null;
+  /** section D — a post reshared into this story. */
+  sharedPost?: { postId: number; username: string; userId: string; image: string; caption: string } | null;
 }
 
 /** Normalizes whatever shape the backend uses for the viewers list. */
@@ -140,6 +142,15 @@ export const formatBackendStory = (s: any): Story => {
       ? {
           userId: s.stickerMentionUserId || s.mentionUserId || s.mention?.userId || "",
           username: s.mentionUsername || s.mention?.userName || s.mention?.username || "user",
+        }
+      : null,
+    sharedPost: (s.sharedPostId || s.sharedPost)
+      ? {
+          postId: s.sharedPostId || s.sharedPost?.id || s.sharedPost?.postId || 0,
+          username: s.sharedPost?.userName || s.sharedPost?.username || "user",
+          userId: s.sharedPost?.userId || "",
+          image: getFullImageUrl((s.sharedPost?.images && s.sharedPost.images[0]) || s.sharedPost?.filePath || s.sharedPost?.image),
+          caption: s.sharedPost?.content || s.sharedPost?.title || "",
         }
       : null,
     musicTrack: rawTrack?.musicTrack

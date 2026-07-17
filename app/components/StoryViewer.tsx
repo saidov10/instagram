@@ -400,6 +400,25 @@ export default function StoryViewer({
           </Link>
         )}
 
+        {/* ---- Shared post card (section D) ---- */}
+        {story.sharedPost?.postId ? (
+          <Link
+            href={`/?post=${story.sharedPost.postId}`}
+            onClick={() => onClose()}
+            className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 z-30 w-56 glass-strong rounded-2xl overflow-hidden shadow-soft-lg animate-pop-in"
+          >
+            {story.sharedPost.image && (
+              <SmartImage src={story.sharedPost.image} alt="" width={400} height={400} sizes="224px" className="w-full aspect-square object-cover" />
+            )}
+            <div className="p-2.5">
+              <span className="text-xs font-bold block">@{story.sharedPost.username}</span>
+              {story.sharedPost.caption && (
+                <span className="text-[11px] text-zinc-500 line-clamp-2 block">{story.sharedPost.caption}</span>
+              )}
+            </div>
+          </Link>
+        ) : null}
+
         {/* ---- Interactive sticker ---- */}
         {sticker && (
           <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 z-20 flex justify-center px-6">

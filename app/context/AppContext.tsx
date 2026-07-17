@@ -2,6 +2,12 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 
+export interface RemixContext {
+  postId: number;
+  author: string;
+  media: string;
+}
+
 interface AppContextType {
   theme: "light" | "dark";
   toggleTheme: () => void;
@@ -9,6 +15,9 @@ interface AppContextType {
   setCreateOpen: (open: boolean) => void;
   createType: "post" | "story" | "reel";
   setCreateType: (type: "post" | "story" | "reel") => void;
+  /** section D — reel remix intent carried into the composer. */
+  remixOf: RemixContext | null;
+  setRemixOf: (r: RemixContext | null) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -17,6 +26,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [createType, setCreateType] = useState<"post" | "story" | "reel">("post");
+  const [remixOf, setRemixOf] = useState<RemixContext | null>(null);
 
   // Apply class for Tailwind dark mode
   useEffect(() => {
@@ -43,6 +53,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setCreateOpen,
         createType,
         setCreateType,
+        remixOf,
+        setRemixOf,
       }}
     >
       {children}
