@@ -8,6 +8,8 @@ import { RootState } from "../../store/store";
 import { api, getFullImageUrl, ApiError } from "../../services/api";
 import { ProfileSkeleton } from "../../components/SkeletonLoader";
 import Avatar from "../../components/Avatar";
+
+
 import SmartImage from "../../components/SmartImage";
 import Highlights from "../../components/Highlights";
 import ReportModal, { ReportTarget } from "../../components/ReportModal";

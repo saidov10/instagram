@@ -148,6 +148,8 @@ even though `AddStories` had accepted and stored them correctly. **Already fixed
 (now reads `sticker.questionText` / `sticker.mentionedUserId` / etc.) — mentioning it only because
 if any other client (mobile app, etc.) reads the flattened field names, it has the same bug.
 
+
+
 ---
 
 ## Not bugs, just naming to double check against your own docs (frontend already adapted)
