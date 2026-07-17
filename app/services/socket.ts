@@ -23,7 +23,10 @@ export function getSocket(): Socket {
   socketToken = token;
   socket = io(BASE_URL, {
     auth: { token },
-    transports: ["websocket", "polling"],
+    // Default order (polling first, then upgrade to websocket) on purpose: forcing a cold
+    // direct WebSocket connection as the first attempt fails against this backend's Render +
+    // Cloudflare edge ("WebSocket is closed before the connection is established") — polling
+    // bootstraps the Engine.IO session first, then the client upgrades the transport in place.
   });
   socket.on("connect", () => console.log("[socket] connected", socket?.id));
   socket.on("connect_error", (err) => console.error("[socket] connect_error:", err.message));
