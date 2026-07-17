@@ -348,7 +348,17 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
       cancelled = true;
       cleanupFns.forEach((fn) => fn());
     };
-  }, [phase, call.channelName, call.type, call.iceServers, isCaller, leaveCall, onEnded]);
+    // Intentionally NOT depending on `call.iceServers` (a new array reference every time the
+    // parent's poller re-maps the session — i.e. on every tick for the whole call), nor on
+    // `leaveCall`/`onEnded` (recreated on parent re-renders). This effect is guarded by
+    // `joinStartedRef` to run its *body* exactly once per call — but React still runs this
+    // effect's *cleanup* whenever any listed dependency's identity changes, which was tearing
+    // down all the `call:*` socket listeners (offer/answer/ICE/peer-joined/peer-left) within
+    // moments of the join, with the guard then blocking them from ever being re-registered.
+    // That silently killed the WebRTC handshake after connecting — the exact "stuck on
+    // Подключение/Ожидание собеседника forever" symptom. Only re-run for real call transitions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, call.channelName, call.type, isCaller]);
 
   // Always release the mic/camera and leave the signaling room when this panel unmounts —
   // and if nobody explicitly ended the call yet (e.g. the user just navigated away mid-call

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -643,11 +643,16 @@ export default function InboxPage() {
     }
   };
 
-  const closeCall = () => {
-    if (call) handledCallIds.current.add(call.callId);
-    setCall(null);
+  // Stable identity on purpose: this is passed to CallPanel as `onEnded`, a dependency of its
+  // WebRTC join effect — a fresh function reference on every InboxPage re-render (new messages,
+  // polling, etc.) would retrigger that effect's cleanup and tear down its socket listeners.
+  const closeCall = useCallback(() => {
+    setCall((prev) => {
+      if (prev) handledCallIds.current.add(prev.callId);
+      return null;
+    });
     setCallPhase(null);
-  };
+  }, [setCall, setCallPhase]);
 
   // Mirror the call into a ref so the poller below can read it without restarting its interval.
   const callRef = useRef<CallSession | null>(null);
