@@ -113,6 +113,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(call.type === "VIDEO");
   const [remoteJoined, setRemoteJoined] = useState(false);
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -133,6 +134,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
     }
     setJoined(false);
     setRemoteJoined(false);
+    setPlaybackBlocked(false);
   }, [call.channelName]);
 
   // ---- Ringtone while ringing (both directions) ----
@@ -184,13 +186,24 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
           return;
         }
         localStreamRef.current = stream;
-        if (localRef.current) localRef.current.srcObject = stream;
+        if (localRef.current) {
+          localRef.current.srcObject = stream;
+          localRef.current.play().catch(() => {
+            /* local preview is muted, so browsers essentially never block this */
+          });
+        }
+
+        // Tagged breadcrumbs for the WebRTC handshake — filter the console for "[call]" to see
+        // exactly which step a stuck/silent call died at (join/offer/answer/ICE/track).
+        const log = (...args: any[]) => console.log("[call]", ...args);
 
         const pc = new RTCPeerConnection({ iceServers: call.iceServers });
         pcRef.current = pc;
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        log("local media ready, tracks:", stream.getTracks().map((t) => t.kind));
 
         const socket = getSocket();
+        log("socket id:", socket.id, "connected:", socket.connected);
         const pendingCandidates: RTCIceCandidateInit[] = [];
         let remoteDescSet = false;
 
@@ -206,9 +219,20 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
         };
 
         pc.ontrack = (e) => {
+          log("ontrack fired:", e.track.kind);
           if (!remoteStreamRef.current) remoteStreamRef.current = new MediaStream();
           remoteStreamRef.current.addTrack(e.track);
-          if (remoteRef.current) remoteRef.current.srcObject = remoteStreamRef.current;
+          if (remoteRef.current) {
+            remoteRef.current.srcObject = remoteStreamRef.current;
+            // The remote stream isn't muted, and by the time a track actually arrives (after the
+            // async offer/answer/ICE exchange) the browser no longer treats this as a fresh user
+            // gesture — so the `autoPlay` HTML attribute alone can get silently blocked with no
+            // console error. Play it explicitly and surface a tap-to-enable prompt if that fails.
+            remoteRef.current
+              .play()
+              .then(() => setPlaybackBlocked(false))
+              .catch(() => setPlaybackBlocked(true));
+          }
           setRemoteJoined(true);
         };
 
@@ -219,23 +243,27 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
         };
 
         pc.oniceconnectionstatechange = () => {
+          log("iceConnectionState:", pc.iceConnectionState);
           if (pc.iceConnectionState === "failed") {
             setError("Соединение прервано — не удалось найти прямой путь между устройствами.");
           }
         };
 
-        const onPeerJoined = async () => {
+        const onPeerJoined = async (payload: any) => {
+          log("call:peer-joined received", payload, "isCaller:", isCaller);
           if (!isCaller) return;
           try {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             socket.emit("call:offer", { channelName: call.channelName, sdp: pc.localDescription });
+            log("offer sent");
           } catch (err) {
             console.error("Failed to create offer:", err);
           }
         };
 
         const onOffer = async ({ sdp }: { sdp: RTCSessionDescriptionInit }) => {
+          log("call:offer received");
           try {
             await pc.setRemoteDescription(sdp);
             remoteDescSet = true;
@@ -243,12 +271,14 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             socket.emit("call:answer", { channelName: call.channelName, sdp: pc.localDescription });
+            log("answer sent");
           } catch (err) {
             console.error("Failed to handle offer:", err);
           }
         };
 
         const onAnswer = async ({ sdp }: { sdp: RTCSessionDescriptionInit }) => {
+          log("call:answer received");
           try {
             await pc.setRemoteDescription(sdp);
             remoteDescSet = true;
@@ -272,6 +302,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
         };
 
         const onPeerLeft = () => {
+          log("call:peer-left received");
           setRemoteJoined(false);
           leaveCall();
           onEnded();
@@ -291,6 +322,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
         });
 
         socket.emit("call:join", { channelName: call.channelName });
+        log("call:join emitted for channel", call.channelName);
 
         if (!cancelled) setJoined(true);
       } catch (err: any) {
@@ -381,8 +413,9 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
         src="data:audio/wav;base64,UklGRiQEAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAEAAAAAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8="
       />
 
-      {/* Remote media: visible full-screen for video calls, kept in the DOM (silently) for
-          audio calls so the remote audio track still plays through it. */}
+      {/* Remote media: visible full-screen for video calls. For audio calls it stays in the DOM
+          at 1x1px/opacity-0 rather than `display:none` — some browsers suspend playback entirely
+          on a display:none media element, which would silently kill the audio too. */}
       <video
         ref={remoteRef}
         autoPlay
@@ -390,9 +423,24 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
         className={
           call.type === "VIDEO" && phase === "connected"
             ? "absolute inset-0 w-full h-full object-cover bg-black"
-            : "hidden"
+            : "absolute w-px h-px opacity-0 pointer-events-none"
         }
       />
+
+      {/* Autoplay was blocked by the browser — the click here is a fresh user gesture, so play() succeeds. */}
+      {playbackBlocked && (
+        <button
+          onClick={() => {
+            remoteRef.current
+              ?.play()
+              .then(() => setPlaybackBlocked(false))
+              .catch(() => {});
+          }}
+          className="absolute z-20 top-6 left-1/2 -translate-x-1/2 glass-strong rounded-full px-4 py-2 text-sm font-semibold cursor-pointer animate-pulse"
+        >
+          Нажмите, чтобы включить звук/видео
+        </button>
+      )}
 
       {/* Caller identity — hidden behind remote video once the peer's stream arrives */}
       {!(call.type === "VIDEO" && remoteJoined) && (
