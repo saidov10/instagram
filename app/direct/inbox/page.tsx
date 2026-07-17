@@ -2336,6 +2336,13 @@ export default function InboxPage() {
       {/* ----------------- CALL PANEL (outgoing / incoming / connected) ----------------- */}
       {call && callPhase && (
         <CallPanel
+          // Forces a full remount (fresh refs — joinStartedRef, pcRef, etc.) whenever the
+          // underlying call session changes identity. Without this, if a new call starts while
+          // the previous CallPanel instance for an old, never-cleanly-ended call hadn't actually
+          // unmounted, `joinStartedRef.current` would still read `true` from that stale call and
+          // permanently block the new call's join effect from ever running — zero WebRTC logs,
+          // zero errors, forever.
+          key={call.callId}
           call={call}
           phase={callPhase}
           peerName={chats.find((c) => c.id === call.chatId)?.username || activeChat?.username || "Пользователь"}

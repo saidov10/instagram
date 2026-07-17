@@ -102,11 +102,6 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
   const remoteRef = useRef<HTMLVideoElement | null>(null);
   const localRef = useRef<HTMLVideoElement | null>(null);
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
-  // Guards the join effect so it runs exactly once per call. Using state (`joining`/`joined`)
-  // as the guard is a trap: setJoining(true) fires inside the effect, and if that state is in
-  // the dependency array the effect re-runs, its cleanup flips `cancelled`, and the original
-  // join() bails at its first `if (cancelled) return` — leaving the UI stuck on "Подключение…".
-  const joinStartedRef = useRef(false);
 
   const [joining, setJoining] = useState(false);
   const [joined, setJoined] = useState(false);
@@ -168,10 +163,25 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
   // the offer (on receiving peer-joined), the caller must join the signaling room immediately
   // when the call is placed (phase "outgoing"), so they're the earlier joiner and get notified
   // once the callee joins later (right after accepting). The callee still only joins on accept.
+  //
+  // `shouldConnect` (not `phase`) is the effect's dependency on purpose. For the caller it's true
+  // across BOTH "outgoing" and "connected", so when the callee accepts and `phase` flips from one
+  // to the other, `shouldConnect` itself doesn't change — the effect does not re-run, and the live
+  // connection isn't torn down. All deps are primitives (bool/string), so the poller re-creating the
+  // `call` object every tick does NOT re-run this effect either.
+  //
+  // Crucially there is NO "already started" ref guard here. A persistent ref guard is fatal under
+  // React StrictMode (dev), which mounts→unmounts→remounts every component: the throwaway mount would
+  // set the guard and kick off getUserMedia, the throwaway unmount would set `cancelled = true`, and
+  // the real remount would hit the guard and bail — so the socket listeners were never attached and
+  // the in-flight getUserMedia resolved into `cancelled === true` and gave up. That's exactly why the
+  // CALLER (whose panel mounts already-connecting in "outgoing") never sent an offer, while the CALLEE
+  // (whose panel mounts idle in "incoming" and only connects later, after StrictMode's dance) worked.
+  // Without the guard, each mount gets its own `cancelled` closure; the throwaway one cancels itself
+  // and the final mount runs to completion — the canonical StrictMode-safe pattern.
+  const shouldConnect = isCaller ? phase === "outgoing" || phase === "connected" : phase === "connected";
   useEffect(() => {
-    const shouldConnect = isCaller ? phase === "outgoing" || phase === "connected" : phase === "connected";
-    if (!shouldConnect || joinStartedRef.current) return;
-    joinStartedRef.current = true;
+    if (!shouldConnect) return;
 
     let cancelled = false;
     const cleanupFns: (() => void)[] = [];
@@ -257,6 +267,8 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
             setError("Соединение прервано — не удалось найти прямой путь между устройствами.");
           }
         };
+        pc.onconnectionstatechange = () => log("connectionState:", pc.connectionState);
+        pc.onicegatheringstatechange = () => log("iceGatheringState:", pc.iceGatheringState);
 
         const onPeerJoined = async (payload: any) => {
           log("call:peer-joined received", payload, "isCaller:", isCaller);
@@ -348,41 +360,39 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
       cancelled = true;
       cleanupFns.forEach((fn) => fn());
     };
-    // Intentionally NOT depending on `call.iceServers` (a new array reference every time the
-    // parent's poller re-maps the session — i.e. on every tick for the whole call), nor on
-    // `leaveCall`/`onEnded` (recreated on parent re-renders). This effect is guarded by
-    // `joinStartedRef` to run its *body* exactly once per call — but React still runs this
-    // effect's *cleanup* whenever any listed dependency's identity changes, which was tearing
-    // down all the `call:*` socket listeners (offer/answer/ICE/peer-joined/peer-left) within
-    // moments of the join, with the guard then blocking them from ever being re-registered.
-    // That silently killed the WebRTC handshake after connecting — the exact "stuck on
-    // Подключение/Ожидание собеседника forever" symptom. Only re-run for real call transitions.
+    // Deps are deliberately the four primitives that actually define a distinct call to join, and
+    // nothing else. In particular NOT `call.iceServers` (a fresh array reference on every poller
+    // tick — it would tear down the live handshake mid-call), and NOT `leaveCall`/`onEnded`
+    // (recreated on parent re-renders). All four here compare by value, so ordinary re-renders and
+    // poll updates never re-run this effect; only a genuinely different call does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, call.channelName, call.type, isCaller]);
+  }, [shouldConnect, call.channelName, call.type, isCaller]);
 
   // Always release the mic/camera and leave the signaling room when this panel unmounts —
   // and if nobody explicitly ended the call yet (e.g. the user just navigated away mid-call
   // instead of hanging up), tell the backend too, so it never leaves an orphaned RINGING/
   // ACCEPTED session behind that would block this chat from starting a new call.
   //
-  // React StrictMode (dev only) mounts every component, immediately unmounts it, then mounts
-  // it again — this effect's cleanup would otherwise fire on that phantom unmount and end the
-  // call within milliseconds of it being created. Defer the actual REST call to a macrotask and
-  // bail if the component is mounted again by then (the real unmount never remounts).
+  // React StrictMode (dev only) mounts every component, immediately unmounts it, then mounts it
+  // again. The ENTIRE teardown — not just the REST ENDED call — must be deferred past that phantom
+  // unmount. `leaveCall()` emits `call:leave` over the socket, which the backend relays to the peer
+  // as `call:peer-left`; firing it on the phantom unmount made the peer think we hung up the instant
+  // the call connected, ending it "by itself". So defer everything to a macrotask and bail if the
+  // component was re-mounted by then (a real unmount never re-mounts). Releasing the mic a tick late
+  // is harmless.
   const mountedRef = useRef(false);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      leaveCall();
-      if (!endedRef.current) {
-        setTimeout(() => {
-          if (!mountedRef.current && !endedRef.current) {
-            endedRef.current = true;
-            api.chat.respondToCall({ callId: call.callId, status: "ENDED" }).catch(() => {});
-          }
-        }, 0);
-      }
+      setTimeout(() => {
+        if (mountedRef.current) return; // phantom StrictMode unmount — component came back; do nothing
+        leaveCall();
+        if (!endedRef.current) {
+          endedRef.current = true;
+          api.chat.respondToCall({ callId: call.callId, status: "ENDED" }).catch(() => {});
+        }
+      }, 0);
     };
   }, [leaveCall, call.callId]);
 
