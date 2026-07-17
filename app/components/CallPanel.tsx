@@ -162,9 +162,15 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
     return () => clearInterval(t);
   }, [phase, joined]);
 
-  // ---- WebRTC connect once we reach the connected phase ----
+  // ---- WebRTC connect ----
+  // The backend's `call:peer-joined` is only sent to whoever is *already in the room* when
+  // someone else joins — the one who joins later gets nothing. Since only the caller creates
+  // the offer (on receiving peer-joined), the caller must join the signaling room immediately
+  // when the call is placed (phase "outgoing"), so they're the earlier joiner and get notified
+  // once the callee joins later (right after accepting). The callee still only joins on accept.
   useEffect(() => {
-    if (phase !== "connected" || joinStartedRef.current) return;
+    const shouldConnect = isCaller ? phase === "outgoing" || phase === "connected" : phase === "connected";
+    if (!shouldConnect || joinStartedRef.current) return;
     joinStartedRef.current = true;
 
     let cancelled = false;
