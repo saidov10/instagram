@@ -348,12 +348,24 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
   // and if nobody explicitly ended the call yet (e.g. the user just navigated away mid-call
   // instead of hanging up), tell the backend too, so it never leaves an orphaned RINGING/
   // ACCEPTED session behind that would block this chat from starting a new call.
+  //
+  // React StrictMode (dev only) mounts every component, immediately unmounts it, then mounts
+  // it again — this effect's cleanup would otherwise fire on that phantom unmount and end the
+  // call within milliseconds of it being created. Defer the actual REST call to a macrotask and
+  // bail if the component is mounted again by then (the real unmount never remounts).
+  const mountedRef = useRef(false);
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       leaveCall();
       if (!endedRef.current) {
-        endedRef.current = true;
-        api.chat.respondToCall({ callId: call.callId, status: "ENDED" }).catch(() => {});
+        setTimeout(() => {
+          if (!mountedRef.current && !endedRef.current) {
+            endedRef.current = true;
+            api.chat.respondToCall({ callId: call.callId, status: "ENDED" }).catch(() => {});
+          }
+        }, 0);
       }
     };
   }, [leaveCall, call.callId]);
