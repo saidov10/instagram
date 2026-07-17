@@ -117,6 +117,9 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
+  // Tracks whether we've already told the backend this call is over (hang-up button, or the
+  // peer leaving) — so the unmount safety net below doesn't fire a redundant second ENDED.
+  const endedRef = useRef(false);
 
   /** Tears down WebRTC: stops local tracks, closes the peer connection, leaves the signaling room. */
   const leaveCall = useCallback(() => {
@@ -341,12 +344,19 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
     };
   }, [phase, call.channelName, call.type, call.iceServers, isCaller, leaveCall, onEnded]);
 
-  // Always release the mic/camera and leave the signaling room when this panel unmounts.
+  // Always release the mic/camera and leave the signaling room when this panel unmounts —
+  // and if nobody explicitly ended the call yet (e.g. the user just navigated away mid-call
+  // instead of hanging up), tell the backend too, so it never leaves an orphaned RINGING/
+  // ACCEPTED session behind that would block this chat from starting a new call.
   useEffect(() => {
     return () => {
       leaveCall();
+      if (!endedRef.current) {
+        endedRef.current = true;
+        api.chat.respondToCall({ callId: call.callId, status: "ENDED" }).catch(() => {});
+      }
     };
-  }, [leaveCall]);
+  }, [leaveCall, call.callId]);
 
   // ---- Actions ----
   const handleAccept = async () => {
@@ -368,6 +378,7 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller,
     setBusy(true);
     try {
       await api.chat.respondToCall({ callId: call.callId, status });
+      endedRef.current = true;
     } catch (err) {
       console.error("Failed to end call:", err);
     } finally {

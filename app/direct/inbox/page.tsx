@@ -609,11 +609,14 @@ export default function InboxPage() {
     setCallError(null);
     try {
       // The backend doesn't reject a second call on top of an active one, so check ourselves
-      // rather than stranding both sides in overlapping call sessions.
+      // rather than stranding both sides in overlapping call sessions. If we get here at all,
+      // *this* client has no CallPanel open (the `!call` guard above already blocks that) — so
+      // a RINGING/ACCEPTED session found here is necessarily orphaned (a previous call that
+      // ended without the panel getting to send ENDED, e.g. a closed tab/crash), not a call
+      // someone is actually on. Clean it up instead of permanently blocking this chat.
       const existing = mapCall(await api.chat.getActiveCall(activeChat.id).catch(() => null));
       if (existing && (existing.status === "RINGING" || existing.status === "ACCEPTED")) {
-        setCallError("В этом чате уже есть активный звонок.");
-        return;
+        await api.chat.respondToCall({ callId: existing.callId, status: "ENDED" }).catch(() => {});
       }
 
       const raw = await api.chat.initiateCall({
