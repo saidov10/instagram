@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import { api, getStoredToken, setStoredToken, getFullImageUrl } from "../../services/api";
+import { disconnectSocket } from "../../services/socket";
 
 export interface UserState {
   id: string;
@@ -153,6 +154,7 @@ const authSlice = createSlice({
   reducers: {
     logout(state) {
       setStoredToken(null);
+      disconnectSocket();
       state.currentUser = null;
       state.token = null;
       state.isLoggedIn = false;

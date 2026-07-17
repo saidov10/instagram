@@ -197,19 +197,42 @@ export const formatBackendStory = (s: any): Story => {
 };
 
 // Async Thunks
+
+/** get-stories' raw story objects carry no username, only userId — the bulk 100-user page can
+ *  legitimately miss someone on a platform with more users, so any story author not found there
+ *  gets resolved individually (cheap: there's usually only a handful of distinct story authors). */
+async function resolveStoryAuthors(list: any[]): Promise<Map<string, { userName: string; avatar: string }>> {
+  const uniqueIds = Array.from(new Set(list.map((s: any) => s.userId).filter(Boolean)));
+  const bulkUsers = await api.user.getUsers({ pageSize: 100 }).catch(() => []);
+  const byId = new Map<string, { userName: string; avatar: string }>();
+  bulkUsers.forEach((u: any) => {
+    if (u.id) byId.set(u.id, { userName: u.userName || "user", avatar: u.avatar || "" });
+  });
+  const missing = uniqueIds.filter((id) => !byId.has(id));
+  await Promise.all(
+    missing.map(async (id) => {
+      try {
+        const p = await api.profile.getUserProfileById(id);
+        byId.set(id, { userName: p?.userName || "user", avatar: p?.avatar || "" });
+      } catch {
+        // leave unresolved — formatBackendStory falls back to the raw story's own fields
+      }
+    })
+  );
+  return byId;
+}
+
 export const fetchStories = createAsyncThunk(
   "stories/fetchAll",
   async (_, { rejectWithValue }) => {
     try {
-      const [list, users] = await Promise.all([
-        api.story.getStories(),
-        api.user.getUsers({ pageSize: 100 }),
-      ]);
+      const list = await api.story.getStories();
+      const authors = await resolveStoryAuthors(list);
       return list.map((s: any) => {
-        const u = users.find((usr: any) => usr.id === s.userId);
+        const u = authors.get(s.userId);
         return formatBackendStory({
           ...s,
-          userName: u?.username || s.userName || s.username || "user",
+          userName: u?.userName || s.userName || s.username || "user",
           userAvatar: u?.avatar || s.userAvatar || s.avatar,
         });
       });
@@ -221,20 +244,19 @@ export const fetchStories = createAsyncThunk(
 
 export const fetchMyStories = createAsyncThunk(
   "stories/fetchMy",
-  async (_, { rejectWithValue }) => {
+  async (_, { getState, rejectWithValue }) => {
     try {
-      const [list, users] = await Promise.all([
-        api.story.getMyStories(),
-        api.user.getUsers({ pageSize: 100 }),
-      ]);
-      return list.map((s: any) => {
-        const u = users.find((usr: any) => usr.id === s.userId);
-        return formatBackendStory({
+      const list = await api.story.getMyStories();
+      // It's always the caller's own stories — use the profile already in the store instead of
+      // an unreliable bulk-list lookup.
+      const me = (getState() as any).auth?.currentUser;
+      return list.map((s: any) =>
+        formatBackendStory({
           ...s,
-          userName: u?.username || s.userName || s.username || "user",
-          userAvatar: u?.avatar || s.userAvatar || s.avatar,
-        });
-      });
+          userName: me?.username || s.userName || s.username || "user",
+          userAvatar: me?.avatar || s.userAvatar || s.avatar,
+        })
+      );
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load your stories.");
     }

@@ -9,8 +9,14 @@ interface AppContextType {
   setCreateOpen: (open: boolean) => void;
   createType: "post" | "story" | "reel";
   setCreateType: (type: "post" | "story" | "reel") => void;
-  remixTarget: { postId: number; username: string } | null;
-  setRemixTarget: (target: { postId: number; username: string } | null) => void;
+  remixTarget: RemixTarget | null;
+  setRemixTarget: (target: RemixTarget | null) => void;
+}
+
+export interface RemixTarget {
+  postId: number;
+  username: string;
+  audio?: { id: string; title: string; artist: string; audioUrl: string; coverUrl?: string; durationMs?: number } | null;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -19,7 +25,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [createType, setCreateType] = useState<"post" | "story" | "reel">("post");
-  const [remixTarget, setRemixTarget] = useState<{ postId: number; username: string } | null>(null);
+  const [remixTarget, setRemixTarget] = useState<RemixTarget | null>(null);
 
   // Apply class for Tailwind dark mode
   useEffect(() => {

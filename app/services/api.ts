@@ -1694,9 +1694,8 @@ export const api = {
       return Array.isArray(res) ? res : res?.data || [];
     },
     async subscribe(channelId: string): Promise<any> {
-      return request("/Broadcast/subscribe", {
+      return request(`/Broadcast/subscribe?channelId=${channelId}`, {
         method: "POST",
-        body: JSON.stringify({ channelId }),
       });
     },
     async unsubscribe(channelId: string): Promise<any> {

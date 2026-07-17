@@ -72,7 +72,7 @@ import StoryViewer from "../components/StoryViewer";
 export default function ProfilePage() {
   const router = useRouter();
   const dispatch = useDispatch<AppDispatch>();
-  const { setCreateOpen } = useApp();
+  const { setCreateOpen, setCreateType } = useApp();
   const { currentUser, profileLoading, isLoggedIn } = useSelector((state: RootState) => state.auth);
   const { myPosts, savedPosts, savedAudios, archivedPosts, taggedPosts, collections } = useSelector((state: RootState) => state.posts);
   const { myStories } = useSelector((state: RootState) => state.stories);
@@ -163,7 +163,8 @@ export default function ProfilePage() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"posts" | "saved" | "audios" | "tagged" | "archived">("posts");
+  const [activeTab, setActiveTab] = useState<"posts" | "reels" | "reposts" | "saved" | "audios" | "tagged" | "archived">("posts");
+  const [showMoreTabsMenu, setShowMoreTabsMenu] = useState(false);
   // The backend can hand out duplicate post ids, so we select by (list + index)
   // instead of by id — otherwise `find(by id)` always resolves to the first match
   // and every grid thumbnail would open the same post. Index-based selection is also
@@ -510,6 +511,15 @@ export default function ProfilePage() {
     return <ProfileSkeleton />;
   }
 
+  // Split the mixed "posts" feed into distinct grids, like real Instagram profiles.
+  const myReels = myPosts.filter((p) => p.isReel && !p.repostedFrom);
+  const myReposts = myPosts.filter((p) => p.repostedFrom);
+  const myPlainPosts = myPosts.filter((p) => !p.isReel && !p.repostedFrom);
+  const openInLightbox = (postId: number) => {
+    const index = myPosts.findIndex((p) => p.id === postId);
+    if (index !== -1) setSelected({ source: "my", index });
+  };
+
   return (
     <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col gap-10 text-black dark:text-white transition-colors duration-200 animate-fade-up">
       
@@ -623,7 +633,7 @@ export default function ProfilePage() {
       {/* ----------------- TABS SECTION ----------------- */}
       <div className="flex flex-col gap-6">
         {/* Tab Headers */}
-        <div className="flex justify-center border-t border-zinc-200 dark:border-zinc-800 pt-0 gap-16 text-zinc-400 select-none">
+        <div className="flex justify-center border-t border-zinc-200 dark:border-zinc-800 pt-0 gap-10 md:gap-16 text-zinc-400 select-none relative">
           <button
             onClick={() => setActiveTab("posts")}
             className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
@@ -636,26 +646,26 @@ export default function ProfilePage() {
             <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Публикации</span>
           </button>
           <button
-            onClick={() => setActiveTab("saved")}
+            onClick={() => setActiveTab("reels")}
             className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
-              activeTab === "saved"
+              activeTab === "reels"
                 ? "border-black dark:border-white text-black dark:text-white"
                 : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
             }`}
           >
-            <Bookmark className="w-4 h-4" />
-            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Сохранено</span>
+            <Film className="w-4 h-4" />
+            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Reels</span>
           </button>
           <button
-            onClick={() => setActiveTab("audios")}
+            onClick={() => setActiveTab("reposts")}
             className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
-              activeTab === "audios"
+              activeTab === "reposts"
                 ? "border-black dark:border-white text-black dark:text-white"
                 : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
             }`}
           >
-            <Music className="w-4 h-4" />
-            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Звуки</span>
+            <Repeat2 className="w-4 h-4" />
+            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Репосты</span>
           </button>
           <button
             onClick={() => setActiveTab("tagged")}
@@ -668,12 +678,44 @@ export default function ProfilePage() {
             <UserSquare className="w-4 h-4" />
             <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Отмеченные</span>
           </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowMoreTabsMenu((v) => !v)}
+              className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
+                activeTab === "saved" || activeTab === "audios"
+                  ? "border-black dark:border-white text-black dark:text-white"
+                  : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
+              }`}
+            >
+              <MoreHorizontal className="w-4 h-4" />
+              <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Ещё</span>
+            </button>
+            {showMoreTabsMenu && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setShowMoreTabsMenu(false)} />
+                <div className="absolute top-full right-0 mt-1 w-48 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-40 animate-pop-in text-left">
+                  <button
+                    onClick={() => { setActiveTab("saved"); setShowMoreTabsMenu(false); }}
+                    className={`w-full flex items-center gap-2.5 p-3.5 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer ${activeTab === "saved" ? "text-black dark:text-white" : "text-zinc-500"}`}
+                  >
+                    <Bookmark className="w-4 h-4" /> Сохранённое
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab("audios"); setShowMoreTabsMenu(false); }}
+                    className={`w-full flex items-center gap-2.5 p-3.5 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer ${activeTab === "audios" ? "text-black dark:text-white" : "text-zinc-500"}`}
+                  >
+                    <Music className="w-4 h-4" /> Звуки
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Tab Content */}
         {activeTab === "posts" && (
           <div>
-            {myPosts.length === 0 ? (
+            {myPlainPosts.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-6">
                 <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
                   <Grid className="w-8 h-8" />
@@ -698,19 +740,13 @@ export default function ProfilePage() {
                   </button>
                 </div>
                 <div className="grid grid-cols-3 gap-1 md:gap-7">
-                  {myPosts.map((post, index) => (
+                  {myPlainPosts.map((post) => (
                     <div
-                      key={index}
-                      onClick={() => (selectMode ? handleTogglePostSelect(post.id) : setSelected({ source: "my", index }))}
+                      key={post.id}
+                      onClick={() => (selectMode ? handleTogglePostSelect(post.id) : openInLightbox(post.id))}
                       className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
                     >
                       <SmartImage src={post.image} alt="Grid thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
-                      {post.isReel && !selectMode && (
-                        <Film className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow" />
-                      )}
-                      {post.repostedFrom && !selectMode && (
-                        <Repeat2 className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow" />
-                      )}
                       {post.isPinnedToProfile && !selectMode && (
                         <span className="absolute top-2 left-2 text-white drop-shadow">📌</span>
                       )}
@@ -751,6 +787,79 @@ export default function ProfilePage() {
                   </div>
                 )}
               </>
+            )}
+          </div>
+        )}
+
+        {activeTab === "reels" && (
+          <div>
+            {myReels.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-6">
+                <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                  <Film className="w-8 h-8" />
+                </div>
+                <h3 className="text-2xl font-bold">Reels пока нет</h3>
+                <p className="text-sm text-zinc-400 max-w-xs">Ваши Reels будут отображаться здесь.</p>
+                <button
+                  onClick={() => { setCreateType("reel"); setCreateOpen(true); }}
+                  className="text-blue-500 font-bold text-sm hover:text-blue-400 cursor-pointer"
+                >
+                  Создать Reel
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1 md:gap-7">
+                {myReels.map((post) => (
+                  <div
+                    key={post.id}
+                    onClick={() => openInLightbox(post.id)}
+                    className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                  >
+                    <SmartImage src={post.image} alt="Reel thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
+                    <Film className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow" />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition duration-200 flex items-center justify-center gap-6 text-white text-base font-bold">
+                      <div className="flex items-center gap-2">
+                        <Heart className="w-6 h-6 fill-white" />
+                        <span>{post.likes}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <MessageCircle className="w-6 h-6 fill-white" />
+                        <span>{post.comments.length}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === "reposts" && (
+          <div>
+            {myReposts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-6">
+                <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                  <Repeat2 className="w-8 h-8" />
+                </div>
+                <h3 className="text-2xl font-bold">Репостов пока нет</h3>
+                <p className="text-sm text-zinc-400 max-w-xs">Публикации, которые вы репостнули, появятся здесь.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1 md:gap-7">
+                {myReposts.map((post) => (
+                  <div
+                    key={post.id}
+                    onClick={() => openInLightbox(post.id)}
+                    className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                  >
+                    <SmartImage src={post.image} alt="Repost thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
+                    <Repeat2 className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow" />
+                    <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition duration-200">
+                      <span className="text-white text-[11px] font-semibold truncate block">От @{post.repostedFrom}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}

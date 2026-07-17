@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Heart,
   MessageCircle,
@@ -11,7 +12,8 @@ import {
   Smile,
   Search,
   Hash,
-  TrendingUp
+  TrendingUp,
+  Film
 } from "lucide-react";
 import { useSelector } from "react-redux";
 import { RootState } from "../store/store";
@@ -47,6 +49,7 @@ interface ExploreItem {
   userId: string;
   image: string;
   isVideo: boolean;
+  isReel: boolean;
   likes: number;
   commentsCount: number;
   spanClass?: string;
@@ -61,6 +64,7 @@ interface ExploreItem {
 const SPAN_PATTERN = [4, 8];
 
 export default function ExplorePage() {
+  const router = useRouter();
   const { currentUser } = useSelector((state: RootState) => state.auth);
   const [selectedItem, setSelectedItem] = useState<ExploreItem | null>(null);
   const [likersModalPostId, setLikersModalPostId] = useState<number | null>(null);
@@ -99,6 +103,7 @@ export default function ExplorePage() {
             userId: p.userId || "",
             image: img,
             isVideo: /\.(mp4|mov|webm)$/i.test(img),
+            isReel: !!p.isReel,
             likes: typeof p.likeCount === "number" ? p.likeCount : likeArr.length,
             commentsCount: p.commentCount || 0,
             spanClass: SPAN_PATTERN.includes(idx % 10) ? "md:row-span-2 md:col-span-2" : "",
@@ -227,7 +232,7 @@ export default function ExplorePage() {
           {items.map((item) => (
             <div
               key={item.id}
-              onClick={() => setSelectedItem(item)}
+              onClick={() => (item.isReel ? router.push(`/reels?id=${item.id}`) : setSelectedItem(item))}
               className={`group relative overflow-hidden bg-zinc-100 dark:bg-zinc-900 rounded-xl md:rounded-2xl lift shadow-soft cursor-pointer ${item.spanClass || ""}`}
             >
               {item.isVideo ? (
@@ -240,6 +245,9 @@ export default function ExplorePage() {
                   sizes="(max-width: 768px) 33vw, 300px"
                   className="object-cover transition-transform duration-500 group-hover:scale-105"
                 />
+              )}
+              {item.isReel && (
+                <Film className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow z-10" />
               )}
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-6 text-white font-semibold transition duration-200">
                 <span className="flex items-center gap-1.5">

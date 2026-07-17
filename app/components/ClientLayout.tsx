@@ -99,6 +99,22 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [showMusicPicker, setShowMusicPicker] = useState(false);
   const [storyMusicDuration, setStoryMusicDuration] = useState(15);
 
+  // Remixing a reel should carry the original reel's audio into the new one by
+  // default, the same way Instagram does — otherwise the remix publishes silent
+  // unless the user manually re-picks the exact same track.
+  React.useEffect(() => {
+    if (remixTarget?.audio) {
+      setReelTrack({
+        id: remixTarget.audio.id,
+        title: remixTarget.audio.title,
+        artist: remixTarget.audio.artist,
+        audioUrl: remixTarget.audio.audioUrl,
+        coverUrl: remixTarget.audio.coverUrl || "",
+        durationMs: remixTarget.audio.durationMs || 0,
+      });
+    }
+  }, [remixTarget]);
+
   // Post-specific: people tagged in the photo
   const [taggedUsers, setTaggedUsers] = useState<{ id: string; username: string; avatar: string }[]>([]);
   const [collaboratorIds, setCollaboratorIds] = useState<Set<string>>(new Set());

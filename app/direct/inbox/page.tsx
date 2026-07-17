@@ -57,7 +57,7 @@ import { api, getFullImageUrl } from "../../services/api";
 import { ChatsListSkeleton } from "../../components/SkeletonLoader";
 import Avatar from "../../components/Avatar";
 import SmartImage from "../../components/SmartImage";
-import CallPanel, { CallSession, CallType, mapCall, ENV_APP_ID } from "../../components/CallPanel";
+import CallPanel, { CallSession, CallType, mapCall } from "../../components/CallPanel";
 import { isOnline, formatLastSeen } from "../../lib/presence";
 import MusicPicker, { MusicTrack } from "../../components/MusicPicker";
 
@@ -244,7 +244,7 @@ export default function InboxPage() {
   const [groupMemberSearch, setGroupMemberSearch] = useState("");
   const [groupMemberResults, setGroupMemberResults] = useState<any[]>([]);
 
-  // Calls (Agora)
+  // Calls (WebRTC + Socket.IO signaling)
   const [call, setCall] = useState<CallSession | null>(null);
   const [callPhase, setCallPhase] = useState<"outgoing" | "incoming" | "connected" | null>(null);
   const [callBusy, setCallBusy] = useState(false);
@@ -520,7 +520,22 @@ export default function InboxPage() {
     let active = true;
     const poll = () => {
       api.chat.getTypingStatus(selectedChatId)
-        .then((res) => { if (active) setOtherTyping(!!(res?.isTyping ?? res?.typing ?? res)); })
+        .then((res) => {
+          if (!active) return;
+          // Backend response shape isn't guaranteed to be a bare boolean — it may be an object
+          // ({isTyping}/{typing}) or a list of currently-typing user ids. Treating any truthy
+          // response (e.g. a non-empty object/array with neither field) as "typing" caused the
+          // indicator to falsely show as soon as a chat was opened, regardless of actual state.
+          let typing = false;
+          if (Array.isArray(res)) {
+            typing = res.some((id: any) => id && id !== currentUser?.id);
+          } else if (res && typeof res === "object") {
+            typing = !!(res.isTyping ?? res.typing ?? false);
+          } else {
+            typing = res === true;
+          }
+          setOtherTyping(typing);
+        })
         .catch(() => {});
     };
     poll();
@@ -608,20 +623,11 @@ export default function InboxPage() {
       });
       const session = mapCall(raw);
       if (!session) throw new Error("Бэкенд не вернул данные звонка.");
-
-      // Without an Agora App ID nothing can connect. Bail out here rather than ringing the
-      // other side and stranding them in a call that could never join a channel.
-      if (!session.appId && !ENV_APP_ID) {
+      if (!session.channelName) {
         api.chat.respondToCall({ callId: session.callId, status: "ENDED" }).catch(() => {});
-        setCallError(
-          "Звонки не настроены: нет Agora App ID. Укажите NEXT_PUBLIC_AGORA_APP_ID в .env.local или верните appId из /Chat/initiate-call."
-        );
+        setCallError("Бэкенд не вернул channelName для звонка.");
         return;
       }
-
-      // We deliberately do NOT block on a missing rtcToken: it's valid (null) in Agora Testing
-      // mode. The token is forwarded as-is to client.join in CallPanel, which surfaces a clear
-      // "temporarily unavailable" message only if the join actually fails for a token reason.
 
       handledCallIds.current.add(session.callId);
       setCall(session);
@@ -2326,9 +2332,11 @@ export default function InboxPage() {
           phase={callPhase}
           peerName={chats.find((c) => c.id === call.chatId)?.username || activeChat?.username || "Пользователь"}
           peerAvatar={chats.find((c) => c.id === call.chatId)?.avatar || activeChat?.avatar}
+          isCaller={call.callerId === currentUser?.id}
           onAccepted={(session) => {
-            // Merge in the fresh session from the ACCEPTED response — it carries the rtcToken
-            // actually usable for joining, which the RINGING snapshot may have lacked.
+            // Merge in the fresh session from the ACCEPTED response — it carries the
+            // channelName/iceServers actually usable for joining, which the RINGING
+            // snapshot may have lacked.
             setCall((prev) => (prev ? { ...prev, ...session } : session));
             setCallPhase("connected");
           }}
