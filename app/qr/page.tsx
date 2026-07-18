@@ -134,7 +134,7 @@ export default function QrPage() {
         <button
           onClick={() => setTab("mine")}
           className={`flex-1 py-3 text-sm font-semibold cursor-pointer border-b-2 transition ${
-            tab === "mine" ? "border-current" : "border-transparent text-zinc-450"
+            tab === "mine" ? "border-current" : "border-transparent text-zinc-500"
           }`}
         >
           Мой код
@@ -142,7 +142,7 @@ export default function QrPage() {
         <button
           onClick={() => setTab("scan")}
           className={`flex-1 py-3 text-sm font-semibold cursor-pointer border-b-2 transition ${
-            tab === "scan" ? "border-current" : "border-transparent text-zinc-450"
+            tab === "scan" ? "border-current" : "border-transparent text-zinc-500"
           }`}
         >
           Сканировать

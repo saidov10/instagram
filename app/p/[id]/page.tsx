@@ -10,7 +10,7 @@ import { api } from "../../services/api";
 import { formatBackendPost, formatComment, Post, Comment } from "../../store/slices/postsSlice";
 import Avatar from "../../components/Avatar";
 import SmartImage from "../../components/SmartImage";
-import HashtagText from "../../components/HashtagText";
+import TranslatableText from "../../components/TranslatableText";
 import VerifiedBadge from "../../components/VerifiedBadge";
 import LikersListModal from "../../components/LikersListModal";
 import { PostSkeleton } from "../../components/SkeletonLoader";
@@ -29,6 +29,7 @@ export default function PostDetailPage() {
   const [replyingTo, setReplyingTo] = useState<{ commentId: number; username: string } | null>(null);
   const [expandedReplies, setExpandedReplies] = useState<Set<number>>(new Set());
   const [likersOpen, setLikersOpen] = useState(false);
+  const [commentLikersId, setCommentLikersId] = useState<number | null>(null);
   const [activeProductTag, setActiveProductTag] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -154,10 +155,17 @@ export default function PostDetailPage() {
             <Link href={getUserLink(comment.userId)} className="font-bold mr-2 hover:underline">
               {comment.username}
             </Link>
-            {comment.text}
+            <TranslatableText text={comment.text} />
           </p>
           <div className="flex items-center gap-3 mt-1 text-[10px] text-zinc-400">
-            {comment.likeCount > 0 && <span className="font-semibold">{comment.likeCount} отметок «Нравится»</span>}
+            {comment.likeCount > 0 && (
+              <button
+                onClick={() => setCommentLikersId(comment.id)}
+                className="font-semibold hover:text-zinc-600 dark:hover:text-zinc-200 cursor-pointer"
+              >
+                {comment.likeCount} отметок «Нравится»
+              </button>
+            )}
             {currentUser && (
               <button
                 onClick={() => setReplyingTo({ commentId: isReply ? comment.id : comment.id, username: comment.username })}
@@ -237,7 +245,7 @@ export default function PostDetailPage() {
       <div className="md:glass-strong md:rounded-2xl md:shadow-soft-lg flex flex-col md:flex-row overflow-hidden md:max-h-[85vh]">
         {/* Media */}
         <div className="relative flex-1 bg-black flex items-center justify-center min-h-[320px] md:min-h-0">
-          <SmartImage src={post.image} alt={post.caption} width={900} height={900} className="w-full max-h-[50vh] md:max-h-[85vh] object-contain" />
+          <SmartImage src={post.image} alt={post.altText || post.caption} width={900} height={900} className="w-full max-h-[50vh] md:max-h-[85vh] object-contain" />
           {(post.productTags || []).map((tag, i) => (
             <button
               key={tag.id || i}
@@ -301,11 +309,11 @@ export default function PostDetailPage() {
                 <Link href={getUserLink(post.userId)} className="font-bold mr-2 hover:underline">
                   {post.username}
                 </Link>
-                <HashtagText text={post.caption} />
+                <TranslatableText text={post.caption} />
               </p>
             )}
             {post.comments.length === 0 ? (
-              <p className="text-sm text-zinc-450 text-center py-6">Комментариев пока нет.</p>
+              <p className="text-sm text-zinc-500 text-center py-6">Комментариев пока нет.</p>
             ) : (
               <div className="flex flex-col gap-4">{post.comments.map((c) => renderComment(c))}</div>
             )}
@@ -359,6 +367,9 @@ export default function PostDetailPage() {
       </div>
 
       {likersOpen && <LikersListModal postId={post.id} onClose={() => setLikersOpen(false)} />}
+      {commentLikersId != null && (
+        <LikersListModal commentId={commentLikersId} onClose={() => setCommentLikersId(null)} />
+      )}
     </div>
   );
 }

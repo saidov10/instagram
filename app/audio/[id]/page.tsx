@@ -76,14 +76,14 @@ export default function AudioDetailPage() {
         <h1 className="text-lg font-bold">Аудио</h1>
       </div>
 
-      <div className="flex items-center gap-4 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800 mb-6">
+      <div className="flex items-center gap-4 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 mb-6">
         <div className="w-16 h-16 rounded-xl bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
           <Music className="w-7 h-7 text-zinc-500" />
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-bold text-sm truncate">{loading ? "Загрузка..." : title}</p>
           {artist && <p className="text-xs text-zinc-500 truncate">{artist}</p>}
-          <p className="text-xs text-zinc-450 mt-1">{reels.length} Reels</p>
+          <p className="text-xs text-zinc-500 mt-1">{reels.length} Reels</p>
         </div>
         <button
           onClick={handleSaveAudio}
@@ -102,7 +102,7 @@ export default function AudioDetailPage() {
           ))}
         </div>
       ) : reels.length === 0 ? (
-        <p className="text-sm text-zinc-450 text-center py-16">Пока никто не использовал этот звук.</p>
+        <p className="text-sm text-zinc-500 text-center py-16">Пока никто не использовал этот звук.</p>
       ) : (
         <div className="grid grid-cols-3 gap-1">
           {reels.map((r) => (

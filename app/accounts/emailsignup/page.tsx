@@ -100,7 +100,7 @@ export default function SignupPage() {
 
         {/* Error Alert */}
         {error && (
-          <div className="mb-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 text-red-650 dark:text-red-400 text-sm px-4 py-3.5 rounded-xl">
+          <div className="mb-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm px-4 py-3.5 rounded-xl">
             {error}
           </div>
         )}
@@ -118,7 +118,7 @@ export default function SignupPage() {
               placeholder="Номер мобильного телефона или электронный адрес"
               value={emailOrPhone}
               onChange={(e) => setEmailOrPhone(e.target.value)}
-              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-250 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
+              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-300 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
             />
             <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-normal">
               Вы можете получать от нас уведомления.{" "}
@@ -138,7 +138,7 @@ export default function SignupPage() {
               placeholder="Пароль"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-250 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
+              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-300 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
             />
           </div>
 
@@ -146,7 +146,7 @@ export default function SignupPage() {
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center gap-1.5 text-sm font-bold text-zinc-800 dark:text-zinc-200">
               <span>Дата рождения</span>
-              <button type="button" className="text-zinc-400 hover:text-zinc-650 cursor-pointer">
+              <button type="button" className="text-zinc-400 hover:text-zinc-700 cursor-pointer">
                 <HelpCircle className="w-4 h-4 stroke-[1.8px]" />
               </button>
             </div>
@@ -156,7 +156,7 @@ export default function SignupPage() {
               <select
                 value={day}
                 onChange={(e) => setDay(e.target.value)}
-                className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-250 dark:border-zinc-800 rounded-xl px-4 py-4 text-base text-zinc-800 dark:text-white outline-none cursor-pointer focus:border-zinc-400 dark:focus:border-zinc-700 appearance-none"
+                className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-300 dark:border-zinc-800 rounded-xl px-4 py-4 text-base text-zinc-800 dark:text-white outline-none cursor-pointer focus:border-zinc-400 dark:focus:border-zinc-700 appearance-none"
                 style={{ backgroundImage: 'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23888\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 16px center', backgroundSize: '16px' }}
               >
                 <option disabled value="День">День</option>
@@ -169,7 +169,7 @@ export default function SignupPage() {
               <select
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
-                className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-250 dark:border-zinc-800 rounded-xl px-4 py-4 text-base text-zinc-800 dark:text-white outline-none cursor-pointer focus:border-zinc-400 dark:focus:border-zinc-700 appearance-none"
+                className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-300 dark:border-zinc-800 rounded-xl px-4 py-4 text-base text-zinc-800 dark:text-white outline-none cursor-pointer focus:border-zinc-400 dark:focus:border-zinc-700 appearance-none"
                 style={{ backgroundImage: 'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23888\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 16px center', backgroundSize: '16px' }}
               >
                 <option disabled value="Месяц">Месяц</option>
@@ -182,7 +182,7 @@ export default function SignupPage() {
               <select
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
-                className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-250 dark:border-zinc-800 rounded-xl px-4 py-4 text-base text-zinc-800 dark:text-white outline-none cursor-pointer focus:border-zinc-400 dark:focus:border-zinc-700 appearance-none"
+                className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-300 dark:border-zinc-800 rounded-xl px-4 py-4 text-base text-zinc-800 dark:text-white outline-none cursor-pointer focus:border-zinc-400 dark:focus:border-zinc-700 appearance-none"
                 style={{ backgroundImage: 'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23888\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 16px center', backgroundSize: '16px' }}
               >
                 <option disabled value="Год">Год</option>
@@ -203,7 +203,7 @@ export default function SignupPage() {
               placeholder="Имя и фамилия"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-250 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
+              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-300 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
             />
           </div>
 
@@ -217,7 +217,7 @@ export default function SignupPage() {
               placeholder="Имя пользователя"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-250 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
+              className="w-full bg-[#f1f3f5] dark:bg-[#1c1c1e] border border-zinc-300 dark:border-zinc-800 focus:border-zinc-400 dark:focus:border-zinc-700 outline-none rounded-xl px-4 py-4 text-base placeholder-zinc-500 text-zinc-900 dark:text-white transition"
             />
           </div>
 

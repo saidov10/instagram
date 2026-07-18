@@ -305,6 +305,26 @@ export const api = {
       });
     },
 
+    /** "Allow @mentions from" — server-enforced: FOLLOWING only tags/notifies you if you follow them back. */
+    async updateMentionPermission(mentionPermission: "EVERYONE" | "FOLLOWING"): Promise<any> {
+      return request(`/UserProfile/update-mention-permission?mentionPermission=${mentionPermission}`, {
+        method: "PUT",
+      });
+    },
+
+    /** Business/Creator contact fields shown as Email/Call/Directions on the public header. */
+    async updateBusinessInfo(data: {
+      businessEmail?: string;
+      businessPhone?: string;
+      businessAddress?: string;
+      businessCategory?: string;
+    }): Promise<any> {
+      return request("/UserProfile/update-business-info", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+    },
+
     async getPostFavorites(pageNumber = 1, pageSize = 20, collectionId?: number): Promise<any> {
       const q = new URLSearchParams({ PageNumber: String(pageNumber), PageSize: String(pageSize) });
       if (collectionId != null) q.append("collectionId", String(collectionId));
@@ -424,6 +444,8 @@ export const api = {
       isForCloseFriends?: boolean;
       locationId?: number;
       productTags?: { name: string; price: number; currency: string; url?: string; x: number; y: number }[];
+      /** One accessibility label per image, same order as `images`. */
+      altTexts?: string[];
     }): Promise<any> {
       const formData = new FormData();
       formData.append("Title", data.title);
@@ -444,6 +466,10 @@ export const api = {
       if (data.locationId != null) formData.append("locationId", String(data.locationId));
       if (data.productTags && data.productTags.length > 0) {
         formData.append("productTags", JSON.stringify(data.productTags));
+      }
+      // One alt-text per image, sent as a single JSON-array string in image order.
+      if (data.altTexts && data.altTexts.some((t) => t && t.trim())) {
+        formData.append("altTexts", JSON.stringify(data.altTexts));
       }
       data.images.forEach((img) => {
         formData.append("Images", img);
@@ -745,6 +771,27 @@ export const api = {
       return Array.isArray(res) ? res : res?.data || [];
     },
 
+    /** Same shape/UX as post likers — tapping a comment's like count. */
+    async getCommentLikers(commentId: number): Promise<any[]> {
+      const res = await request<any>(`/Post/get-comment-likers?commentId=${commentId}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    /** Owner-only. Separate from the on/off toggle-comments — restricts WHO may comment. */
+    async updateCommentPermission(
+      postId: number,
+      commentPermission: "EVERYONE" | "FOLLOWING" | "FOLLOWERS"
+    ): Promise<any> {
+      return request(`/Post/update-comment-permission?postId=${postId}&commentPermission=${commentPermission}`, {
+        method: "PUT",
+      });
+    },
+
+    /** Best-effort free translation API. Returns { translatedText, detectedSourceLang? } (shape-tolerant). */
+    async translateText(text: string, targetLang: string): Promise<any> {
+      return request(`/Post/translate-text?text=${encodeURIComponent(text)}&targetLang=${encodeURIComponent(targetLang)}`);
+    },
+
     async followHashtag(hashtag: string): Promise<any> {
       const tag = hashtag.replace(/^#/, "");
       return request(`/Post/follow-hashtag?hashtag=${encodeURIComponent(tag)}`, { method: "POST" });
@@ -919,6 +966,25 @@ export const api = {
         body: JSON.stringify({ storyId, ...target }),
       });
     },
+
+    // --- STORY SCHEDULING (same pattern as post scheduling, for stories) ---
+    async scheduleStory(file: File, scheduledFor: string, isForCloseFriends = false): Promise<any> {
+      const formData = new FormData();
+      formData.append("Image", file);
+      formData.append("scheduledFor", scheduledFor);
+      formData.append("isForCloseFriends", String(isForCloseFriends));
+      return request("/Story/schedule-story", { method: "POST", body: formData });
+    },
+    /** Auto-publishes any due stories server-side — call on screen open + app foreground. */
+    async getScheduledStories(): Promise<any[]> {
+      const res = await request<any>("/Story/get-scheduled-stories");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async cancelScheduledStory(scheduledStoryId: number | string): Promise<any> {
+      return request(`/Story/cancel-scheduled-story?scheduledStoryId=${scheduledStoryId}`, {
+        method: "DELETE",
+      });
+    },
   },
 
   // --- CHAT ENDPOINTS ---
@@ -1049,6 +1115,18 @@ export const api = {
       // #4 Unsend: forEveryone=true removes it for both sides; false = delete for me.
       return request(`/Chat/delete-message?messageId=${messageId}&forEveryone=${forEveryone}`, {
         method: "DELETE",
+      });
+    },
+
+    /**
+     * Copies a message's text/media into one or more other chats.
+     * Response: { forwarded: [], skipped: [{chatId, reason}] }.
+     * View-once and unsent messages 400 — callers must hide "Forward" for those bubbles.
+     */
+    async forwardMessage(messageId: number, targetChatIds: number[]): Promise<{ forwarded: any[]; skipped: { chatId: number; reason: string }[] }> {
+      return request("/Chat/forward-message", {
+        method: "POST",
+        body: JSON.stringify({ messageId, targetChatIds }),
       });
     },
 
@@ -1256,6 +1334,19 @@ export const api = {
     /** People to follow, ranked by mutual followers; excludes already-followed/blocked/self. */
     async getSuggestedUsers(limit = 20): Promise<any[]> {
       const res = await request<any>(`/User/get-suggested-users?limit=${limit}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    // --- FAVORITES: pure re-ranking (favorited authors sort first in get-following-post).
+    // NOT Close Friends — grants/restricts no access, just changes feed order.
+    async addFavorite(favoriteUserId: string): Promise<any> {
+      return request(`/User/add-favorite?favoriteUserId=${favoriteUserId}`, { method: "POST" });
+    },
+    async removeFavorite(favoriteUserId: string): Promise<any> {
+      return request(`/User/remove-favorite?favoriteUserId=${favoriteUserId}`, { method: "DELETE" });
+    },
+    async getFavorites(): Promise<any[]> {
+      const res = await request<any>("/User/get-favorites");
       return Array.isArray(res) ? res : res?.data || [];
     },
 

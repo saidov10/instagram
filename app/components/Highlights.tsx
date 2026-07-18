@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Plus, X, ChevronLeft, ChevronRight, Trash2, Pencil, Check } from "lucide-react";
 import { api, getFullImageUrl } from "../services/api";
 import SmartImage from "./SmartImage";
+import { confirmDialog } from "../lib/confirm";
 
 export interface Highlight {
   id: string;
@@ -160,7 +161,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm("Удалить эту папку «Актуальное»?")) return;
+    if (!(await confirmDialog({ message: "Удалить эту папку «Актуальное»?", confirmText: "Удалить", destructive: true }))) return;
     const snapshot = highlights;
     setHighlights((prev) => prev.filter((h) => h.id !== id));
     try {
@@ -196,7 +197,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
             className="flex flex-col items-center gap-2 flex-shrink-0 cursor-pointer group"
           >
             <div className="w-16 h-16 rounded-full border-2 border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center group-hover:scale-105 transition">
-              <Plus className="w-6 h-6 text-zinc-450" />
+              <Plus className="w-6 h-6 text-zinc-500" />
             </div>
             <span className="text-xs text-zinc-500 dark:text-zinc-400 max-w-[72px] truncate">Новое</span>
           </button>
@@ -346,7 +347,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
                 <span className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">
                   Истории из архива
                 </span>
-                <span className="text-[11px] text-zinc-450">Выбрано: {selectedIds.length}</span>
+                <span className="text-[11px] text-zinc-500">Выбрано: {selectedIds.length}</span>
               </div>
 
               {archiveLoading ? (
@@ -356,7 +357,7 @@ export default function Highlights({ userId, isOwner }: { userId: string; isOwne
                   ))}
                 </div>
               ) : archive.length === 0 ? (
-                <p className="text-sm text-zinc-450 text-center py-8">
+                <p className="text-sm text-zinc-500 text-center py-8">
                   В архиве пока нет историй. Они появляются здесь через 24 часа после публикации.
                 </p>
               ) : (

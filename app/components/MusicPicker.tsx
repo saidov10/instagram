@@ -197,7 +197,7 @@ export default function MusicPicker({ onSelect, onClose }: MusicPickerProps) {
           ) : error ? (
             <p className="text-sm text-red-500 text-center py-10">{error}</p>
           ) : tracks.length === 0 ? (
-            <p className="text-sm text-zinc-450 text-center py-10">
+            <p className="text-sm text-zinc-500 text-center py-10">
               {query.trim() ? "Ничего не найдено." : "Треков пока нет."}
             </p>
           ) : (
@@ -237,7 +237,7 @@ export default function MusicPicker({ onSelect, onClose }: MusicPickerProps) {
 
                   <div className="flex flex-col min-w-0 flex-1">
                     <span className="text-sm font-semibold truncate">{track.title}</span>
-                    <span className="text-xs text-zinc-450 truncate">{track.artist}</span>
+                    <span className="text-xs text-zinc-500 truncate">{track.artist}</span>
                   </div>
 
                   {isPlaying && (

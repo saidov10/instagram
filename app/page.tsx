@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -23,7 +23,8 @@ import {
   Pin,
   AlertTriangle,
   Repeat2,
-  PlusCircle
+  PlusCircle,
+  Check
 } from "lucide-react";
 import { AppDispatch, RootState } from "./store/store";
 import {
@@ -42,6 +43,7 @@ import {
   createCollection,
   pinComment,
   toggleLikeCountVisibility,
+  updateCommentPermission,
   toggleSensitive,
   revealSensitivePost,
   repostPost,
@@ -59,13 +61,15 @@ import {
   viewStory,
   Story
 } from "./store/slices/storiesSlice";
+import { fetchChats, Chat } from "./store/slices/chatsSlice";
+import { toast } from "./lib/toast";
 import { api, getFullImageUrl } from "./services/api";
 import { PostSkeleton, StoriesSkeleton } from "./components/SkeletonLoader";
 import { useApp } from "./context/AppContext";
 import Avatar from "./components/Avatar";
 import SmartImage from "./components/SmartImage";
 import ReportModal, { ReportTarget } from "./components/ReportModal";
-import HashtagText from "./components/HashtagText";
+import TranslatableText from "./components/TranslatableText";
 import StoryViewer from "./components/StoryViewer";
 import LikersListModal from "./components/LikersListModal";
 
@@ -75,12 +79,16 @@ const VerifiedBadge = () => (
   </svg>
 );
 
+// Home feed infinite scroll: how many posts to request per page.
+const FEED_PAGE_SIZE = 10;
+
 export default function HomeFeed() {
   const dispatch = useDispatch<AppDispatch>();
   const { setCreateOpen, setCreateType } = useApp();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
   const { posts, loading: postsLoading, collections } = useSelector((state: RootState) => state.posts);
   const { stories, myStories, loading: storiesLoading } = useSelector((state: RootState) => state.stories);
+  const { chats } = useSelector((state: RootState) => state.chats);
 
   // "Save to..." collection picker
   const [savePickerPostId, setSavePickerPostId] = useState<number | null>(null);
@@ -88,6 +96,15 @@ export default function HomeFeed() {
 
   // Suggestions state loaded dynamically
   const [suggestions, setSuggestions] = useState<any[]>([]);
+
+  // Infinite scroll for the feed.
+  const [feedHasMore, setFeedHasMore] = useState(true);
+  const [feedLoadingMore, setFeedLoadingMore] = useState(false);
+  const feedSentinelRef = useRef<HTMLDivElement | null>(null);
+  // Live mirror of `posts` so the load-more callback can read the current list/ids
+  // without re-creating itself (and re-binding the observer) on every feed change.
+  const postsRef = useRef(posts);
+  useEffect(() => { postsRef.current = posts; }, [posts]);
 
   // Active Story Modal Viewer — sourced from either `stories` (followed users) or `myStories`.
   // Only the *id* lives here: the story itself is read back from the store on every render, so a
@@ -108,6 +125,48 @@ export default function HomeFeed() {
   const [menuPostId, setMenuPostId] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [commentsBusy, setCommentsBusy] = useState(false);
+
+  // Media aspect ratios detected on load (post.id → width/height), clamped to Instagram's
+  // 4:5 (portrait) … 1.91:1 (landscape) range so tall/wide photos aren't hard-cropped to a square.
+  const [mediaRatios, setMediaRatios] = useState<{ [id: number]: number }>({});
+  const rememberRatio = (postId: number, w: number, h: number) => {
+    if (!w || !h) return;
+    const ratio = Math.min(Math.max(w / h, 4 / 5), 1.91);
+    setMediaRatios((prev) => (prev[postId] ? prev : { ...prev, [postId]: ratio }));
+  };
+
+  // "Send" (✈️) under a post → share the post link into a Direct chat.
+  const [sharePost, setSharePost] = useState<Post | null>(null);
+  const [shareSentChatId, setShareSentChatId] = useState<number | null>(null);
+  const [shareBusyChatId, setShareBusyChatId] = useState<number | null>(null);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
+
+  const openShare = (post: Post) => {
+    setSharePost(post);
+    setShareSentChatId(null);
+    setShareLinkCopied(false);
+    if (currentUser && chats.length === 0) dispatch(fetchChats(currentUser.id));
+  };
+  const handleShareToChat = async (chat: Chat) => {
+    if (!sharePost || shareBusyChatId) return;
+    setShareBusyChatId(chat.id);
+    const url = `${window.location.origin}/p/${sharePost.id}`;
+    try {
+      await api.chat.sendMessage(chat.id, url);
+      setShareSentChatId(chat.id);
+    } catch (err) {
+      console.error("Failed to share post to chat:", err);
+    } finally {
+      setShareBusyChatId(null);
+    }
+  };
+  const handleShareCopyLink = () => {
+    if (!sharePost) return;
+    const url = `${window.location.origin}/p/${sharePost.id}`;
+    navigator.clipboard?.writeText(url).catch(() => {});
+    setShareLinkCopied(true);
+    setTimeout(() => setShareLinkCopied(false), 1500);
+  };
 
   // Edit-caption modal (owner only)
   const [editPostId, setEditPostId] = useState<number | null>(null);
@@ -328,7 +387,7 @@ export default function HomeFeed() {
     try {
       await dispatch(pinPostToProfile({ postId: post.id, isPinned: !post.isPinnedToProfile })).unwrap();
     } catch (err: any) {
-      alert(err?.message || "Не удалось закрепить публикацию (максимум 3).");
+      toast(err?.message || "Не удалось закрепить публикацию (максимум 3).", "error");
     }
   };
 
@@ -385,7 +444,7 @@ export default function HomeFeed() {
       setSharedToStoryIds((prev) => new Set(prev).add(post.id));
       setTimeout(() => setSharedToStoryIds((prev) => { const n = new Set(prev); n.delete(post.id); return n; }), 2500);
     } catch (err: any) {
-      alert(err?.message || "Автор отключил репост этой публикации в истории.");
+      toast(err?.message || "Автор отключил репост этой публикации в истории.", "error");
     }
   };
 
@@ -402,9 +461,22 @@ export default function HomeFeed() {
     }
   };
 
+  const handleSetCommentPermission = async (
+    post: Post,
+    commentPermission: "EVERYONE" | "FOLLOWING" | "FOLLOWERS"
+  ) => {
+    if (post.commentPermission === commentPermission) return;
+    try {
+      await dispatch(updateCommentPermission({ postId: post.id, commentPermission })).unwrap();
+    } catch (err) {
+      console.error("Failed to update comment permission:", err);
+    }
+  };
+
   useEffect(() => {
     if (isLoggedIn) {
-      dispatch(fetchFollowingPosts({}));
+      setFeedHasMore(true);
+      dispatch(fetchFollowingPosts({ pageNumber: 1, pageSize: FEED_PAGE_SIZE }));
       dispatch(fetchStories());
       dispatch(fetchMyStories());
 
@@ -446,6 +518,40 @@ export default function HomeFeed() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn, dispatch, currentUser?.id]);
+
+  // Fetch the next feed page and append it. Derives the page number from how many posts are
+  // already loaded, so it self-corrects after a refresh that reset the feed to page 1.
+  const loadMorePosts = useCallback(async () => {
+    if (feedLoadingMore || !feedHasMore || postsLoading) return;
+    const current = postsRef.current;
+    const known = new Set(current.map((p) => p.id));
+    const nextPage = Math.floor(current.length / FEED_PAGE_SIZE) + 1;
+    setFeedLoadingMore(true);
+    try {
+      const batch = await dispatch(
+        fetchFollowingPosts({ pageNumber: nextPage, pageSize: FEED_PAGE_SIZE })
+      ).unwrap();
+      const freshCount = (batch || []).filter((p) => !known.has(p.id)).length;
+      // No new posts, or a short page → we've reached the end.
+      if (freshCount === 0 || (batch?.length ?? 0) < FEED_PAGE_SIZE) setFeedHasMore(false);
+    } catch {
+      setFeedHasMore(false);
+    } finally {
+      setFeedLoadingMore(false);
+    }
+  }, [dispatch, feedLoadingMore, feedHasMore, postsLoading]);
+
+  // Trigger load-more when the sentinel below the feed scrolls into view (600px early).
+  useEffect(() => {
+    const el = feedSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) loadMorePosts(); },
+      { rootMargin: "600px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMorePosts]);
 
   const handleLike = (postId: number) => {
     dispatch(toggleLikePost(postId));
@@ -918,7 +1024,7 @@ export default function HomeFeed() {
                   </div>
                   <button
                     onClick={() => setMenuPostId(post.id)}
-                    className="text-zinc-650 dark:text-white p-1 hover:text-zinc-400 cursor-pointer"
+                    className="text-zinc-700 dark:text-white p-1 hover:text-zinc-400 cursor-pointer"
                   >
                     <MoreHorizontal className="w-5 h-5" />
                   </button>
@@ -926,7 +1032,8 @@ export default function HomeFeed() {
 
                 {/* Media with double-tap like */}
                 <div
-                  className="relative aspect-square w-full select-none cursor-pointer overflow-hidden bg-zinc-50 dark:bg-zinc-950"
+                  className="relative w-full select-none cursor-pointer overflow-hidden bg-zinc-50 dark:bg-zinc-950"
+                  style={{ aspectRatio: String(mediaRatios[post.id] ?? 1) }}
                   onDoubleClick={() => !post.isBlurred && handleDoubleLike(post.id)}
                 >
                   {post.isReel && post.videoUrl ? (
@@ -938,6 +1045,7 @@ export default function HomeFeed() {
                       loop
                       autoPlay
                       playsInline
+                      onLoadedMetadata={(e) => rememberRatio(post.id, e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
                     />
                   ) : post.image.toLowerCase().endsWith('.mp4') || post.image.toLowerCase().endsWith('.mov') || post.image.toLowerCase().endsWith('.webm') ? (
                     <video
@@ -947,14 +1055,16 @@ export default function HomeFeed() {
                       loop
                       autoPlay
                       playsInline
+                      onLoadedMetadata={(e) => rememberRatio(post.id, e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
                     />
                   ) : (
                     <SmartImage
                       src={post.image}
-                      alt="Post content"
+                      alt={post.altText || post.caption || "Публикация"}
                       fill
                       sizes="(max-width: 768px) 100vw, 470px"
                       className="object-cover"
+                      onLoad={(e) => rememberRatio(post.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
                     />
                   )}
 
@@ -1003,7 +1113,11 @@ export default function HomeFeed() {
                     >
                       <MessageCircle className="w-6 h-6 text-zinc-800 dark:text-white" />
                     </button>
-                    <button className="hover:text-zinc-400 hover:scale-110 active:scale-90 transition duration-100">
+                    <button
+                      onClick={() => openShare(post)}
+                      aria-label="Поделиться"
+                      className="hover:text-zinc-400 hover:scale-110 active:scale-90 transition duration-100"
+                    >
                       <Send className="w-6 h-6 text-zinc-800 dark:text-white" />
                     </button>
                   </div>
@@ -1037,14 +1151,14 @@ export default function HomeFeed() {
                   {/* Caption */}
                   <p className="text-sm text-zinc-900 dark:text-white leading-tight">
                     <span className="font-bold mr-2 hover:underline cursor-pointer">{post.username}</span>
-                    <HashtagText text={post.caption} />
+                    <TranslatableText text={post.caption} />
                   </p>
 
                   {/* Comment details list */}
                   {post.allowComments && post.comments.length > 2 && (
                     <button
                       onClick={() => handleOpenCommentsModal(post.id)}
-                      className="text-xs text-zinc-500 hover:text-zinc-650 dark:text-zinc-400 dark:hover:text-zinc-300 font-medium text-left mt-1 cursor-pointer"
+                      className="text-xs text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300 font-medium text-left mt-1 cursor-pointer"
                     >
                       Посмотреть все комментарии ({post.comments.length})
                     </button>
@@ -1101,7 +1215,7 @@ export default function HomeFeed() {
                         onChange={(e) =>
                           setCommentInputs({ ...commentInputs, [post.id]: e.target.value })
                         }
-                        className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 border-none ring-0 p-0 text-zinc-900 dark:text-white"
+                        className="bg-transparent text-sm w-full outline-none placeholder-zinc-500 border-none ring-0 p-0 text-zinc-900 dark:text-white"
                       />
                     </div>
                     {(commentInputs[post.id] || "").trim() && (
@@ -1114,7 +1228,7 @@ export default function HomeFeed() {
                     )}
                   </form>
                 ) : (
-                  <div className="border-t border-zinc-100 dark:border-zinc-900/60 px-3.5 py-3.5 flex items-center justify-center gap-2 text-zinc-450 dark:text-zinc-500">
+                  <div className="border-t border-zinc-100 dark:border-zinc-900/60 px-3.5 py-3.5 flex items-center justify-center gap-2 text-zinc-500 dark:text-zinc-500">
                     <MessageCircleOff className="w-4 h-4 flex-shrink-0" />
                     <span className="text-xs font-medium">Комментарии к этой публикации отключены</span>
                   </div>
@@ -1122,6 +1236,17 @@ export default function HomeFeed() {
               </article>
               </React.Fragment>
             ); })
+          )}
+
+          {/* Infinite-scroll sentinel: loads the next page as it nears the viewport. */}
+          {!postsLoading && posts.length > 0 && (
+            <div ref={feedSentinelRef} className="py-6 flex justify-center">
+              {feedLoadingMore ? (
+                <div className="w-6 h-6 rounded-full border-2 border-zinc-300 dark:border-zinc-700 border-t-transparent animate-spin" />
+              ) : !feedHasMore ? (
+                <span className="text-xs text-zinc-400">Вы всё просмотрели</span>
+              ) : null}
+            </div>
           )}
         </div>
       </div>
@@ -1223,7 +1348,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handleDeletePost(menuPost.id)}
-                className="py-3.5 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Удалить
               </button>
@@ -1231,7 +1356,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handleOpenEdit(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Редактировать
               </button>
@@ -1239,7 +1364,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handleArchivePost(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Архивировать
               </button>
@@ -1247,7 +1372,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handleToggleLikeCount(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 {menuPost.hideLikeCount ? "Показать количество отметок" : "Скрыть количество отметок"}
               </button>
@@ -1255,7 +1380,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handleToggleSensitive(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 {menuPost.isSensitive ? "Снять отметку «деликатное»" : "Отметить как деликатное"}
               </button>
@@ -1264,15 +1389,39 @@ export default function HomeFeed() {
               <button
                 onClick={() => handleToggleComments(menuPost)}
                 disabled={commentsBusy}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-60"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer disabled:opacity-60"
               >
                 {menuPost.allowComments ? "Выключить комментарии" : "Включить комментарии"}
               </button>
             )}
+            {isOwnMenuPost && menuPost.allowComments && (
+              <div className="px-4 py-2 flex flex-col gap-1 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide">Кто может комментировать</span>
+                <div className="flex flex-col">
+                  {([
+                    ["EVERYONE", "Все"],
+                    ["FOLLOWING", "Подписки"],
+                    ["FOLLOWERS", "Подписчики"],
+                  ] as const).map(([value, label]) => {
+                    const active = (menuPost.commentPermission || "EVERYONE") === value;
+                    return (
+                      <button
+                        key={value}
+                        onClick={() => handleSetCommentPermission(menuPost, value)}
+                        className="flex items-center justify-between py-2 text-sm hover:opacity-70 cursor-pointer text-left"
+                      >
+                        <span className={active ? "font-semibold text-blue-500" : ""}>{label}</span>
+                        {active && <Check className="w-4 h-4 text-blue-500" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {isOwnMenuPost && (
               <button
                 onClick={() => handleOpenInsights(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Статистика
               </button>
@@ -1280,7 +1429,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handlePinToProfile(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 {menuPost.isPinnedToProfile ? "Открепить от профиля" : "Закрепить в профиле"}
               </button>
@@ -1288,7 +1437,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handleToggleAgeRestricted(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 {menuPost.isAgeRestricted ? "Снять возрастное ограничение" : "Отметить 18+"}
               </button>
@@ -1296,7 +1445,7 @@ export default function HomeFeed() {
             {isOwnMenuPost && (
               <button
                 onClick={() => handleToggleStorySharing(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 {menuPost.allowStorySharing ? "Запретить репост в истории" : "Разрешить репост в истории"}
               </button>
@@ -1304,7 +1453,7 @@ export default function HomeFeed() {
             {!isOwnMenuPost && (
               <button
                 onClick={() => handleNotInterested(menuPost)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Неинтересно
               </button>
@@ -1315,7 +1464,7 @@ export default function HomeFeed() {
                   setReportTarget({ type: "POST", id: String(menuPost.id) });
                   setMenuPostId(null);
                 }}
-                className="py-3.5 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm font-bold text-red-500 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Пожаловаться
               </button>
@@ -1323,14 +1472,14 @@ export default function HomeFeed() {
             <button
               onClick={() => handleRepost(menuPost)}
               disabled={repostedIds.has(menuPost.id)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-50"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer disabled:opacity-50"
             >
               {repostedIds.has(menuPost.id) ? "Опубликовано ✓" : "Опубликовать у себя (репост)"}
             </button>
             <button
               onClick={() => handleShareToStory(menuPost)}
               disabled={sharedToStoryIds.has(menuPost.id)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer disabled:opacity-50"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer disabled:opacity-50"
             >
               {sharedToStoryIds.has(menuPost.id) ? "Добавлено в историю ✓" : "Добавить в историю"}
             </button>
@@ -1338,20 +1487,20 @@ export default function HomeFeed() {
               <Link
                 href={`/u/${menuPost.userId}`}
                 onClick={() => setMenuPostId(null)}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Перейти к профилю
               </Link>
             )}
             <button
               onClick={() => handleCopyLink(menuPost.id)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {copied ? "Ссылка скопирована ✓" : "Скопировать ссылку"}
             </button>
             <button
               onClick={() => setMenuPostId(null)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               Отмена
             </button>
@@ -1506,6 +1655,80 @@ export default function HomeFeed() {
       {likersModalPostId != null && (
         <LikersListModal postId={likersModalPostId} onClose={() => setLikersModalPostId(null)} />
       )}
+
+      {/* Share-to-Direct sheet — opened by the ✈️ button under a post. */}
+      {sharePost && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-end sm:items-center justify-center sm:p-4"
+          onClick={() => setSharePost(null)}
+        >
+          <div
+            className="glass-strong w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-soft-lg flex flex-col max-h-[80vh] animate-in slide-in-from-bottom sm:zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-800">
+              <h3 className="font-bold text-base">Поделиться</h3>
+              <button onClick={() => setSharePost(null)} className="hover:opacity-70 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-200 dark:border-zinc-800">
+              <div className="relative w-12 h-12 rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-900 flex-shrink-0">
+                <SmartImage src={sharePost.image} alt="" fill sizes="48px" className="object-cover" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold truncate">{sharePost.username}</p>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
+                  {sharePost.caption || "Публикация"}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {chats.length === 0 ? (
+                <p className="text-center text-sm text-zinc-500 dark:text-zinc-400 py-8 px-4">
+                  У вас пока нет чатов
+                </p>
+              ) : (
+                chats.map((chat) => (
+                  <div key={chat.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <Avatar src={chat.avatar} name={chat.username} className="w-11 h-11" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold truncate">{chat.username}</p>
+                      {chat.name && chat.name !== chat.username && (
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{chat.name}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleShareToChat(chat)}
+                      disabled={shareBusyChatId === chat.id || shareSentChatId === chat.id}
+                      className={`text-sm font-semibold rounded-lg px-4 py-1.5 transition ${
+                        shareSentChatId === chat.id
+                          ? "text-zinc-500 dark:text-zinc-400 cursor-default"
+                          : "btn-primary cursor-pointer"
+                      }`}
+                    >
+                      {shareSentChatId === chat.id
+                        ? "Отправлено ✓"
+                        : shareBusyChatId === chat.id
+                        ? "Отправка…"
+                        : "Отправить"}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={handleShareCopyLink}
+              className="border-t border-zinc-200 dark:border-zinc-800 py-3.5 text-sm font-semibold text-link hover:opacity-70 cursor-pointer"
+            >
+              {shareLinkCopied ? "Ссылка скопирована ✓" : "Скопировать ссылку"}
+            </button>
+          </div>
+        </div>
+      )}
       {insightsPost && (
         <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm z-60 flex items-center justify-center p-4"
@@ -1528,7 +1751,7 @@ export default function HomeFeed() {
                 ))}
               </div>
             ) : !insightsData ? (
-              <p className="text-sm text-zinc-450 text-center py-6">Не удалось загрузить статистику.</p>
+              <p className="text-sm text-zinc-500 text-center py-6">Не удалось загрузить статистику.</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 {[
@@ -1539,12 +1762,12 @@ export default function HomeFeed() {
                   { label: "Репосты", value: insightsData.repostCount },
                   { label: "В историях", value: insightsData.storyShareCount },
                 ].map((tile) => (
-                  <div key={tile.label} className="rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-150 dark:border-zinc-800 p-3 flex flex-col gap-1">
+                  <div key={tile.label} className="rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 p-3 flex flex-col gap-1">
                     <span className="text-xl font-bold tabular-nums">{tile.value ?? 0}</span>
                     <span className="text-[11px] text-zinc-500">{tile.label}</span>
                   </div>
                 ))}
-                <div className="col-span-2 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-150 dark:border-zinc-800 p-3 flex items-center justify-between">
+                <div className="col-span-2 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 p-3 flex items-center justify-between">
                   <span className="text-[11px] text-zinc-500">Вовлечённость</span>
                   <span className="text-lg font-bold tabular-nums">{insightsData.engagementRatePercent ?? 0}%</span>
                 </div>
@@ -1588,22 +1811,22 @@ export default function HomeFeed() {
                       <Link href={getUserLink(activeCommentsPost.userId)} className="font-bold mr-2 hover:underline">
                         {activeCommentsPost.username}
                       </Link>
-                      <HashtagText text={activeCommentsPost.caption} />
+                      <TranslatableText text={activeCommentsPost.caption} />
                     </p>
                     <span className="text-[10px] text-zinc-400 mt-1 block">{activeCommentsPost.time}</span>
                   </div>
                 </div>
               )}
 
-              {activeCommentsPost && activeCommentsPost.caption && <hr className="border-zinc-150 dark:border-zinc-800" />}
+              {activeCommentsPost && activeCommentsPost.caption && <hr className="border-zinc-200 dark:border-zinc-800" />}
 
               {/* Loader / Empty state / Comments */}
               {!activeCommentsPost ? (
                 <div className="flex-1 flex items-center justify-center py-10">
-                  <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-850 rounded-full animate-spin" />
+                  <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-800 rounded-full animate-spin" />
                 </div>
               ) : activeCommentsPost.comments.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-center text-zinc-450 gap-2 py-10">
+                <div className="flex-1 flex flex-col items-center justify-center text-center text-zinc-500 gap-2 py-10">
                   <MessageCircle className="w-10 h-10 text-zinc-300" />
                   <span className="text-sm font-medium">Комментариев пока нет.</span>
                   <span className="text-xs text-zinc-400">Будьте первым, кто оставит комментарий!</span>
@@ -1636,7 +1859,7 @@ export default function HomeFeed() {
                 )}
                 <div className="p-4 flex items-center justify-between">
                 <div className="flex items-center gap-3 flex-1">
-                  <Smile className="w-5 h-5 text-zinc-550" />
+                  <Smile className="w-5 h-5 text-zinc-600" />
                   <input
                     type="text"
                     placeholder="Добавить комментарий..."
@@ -1644,7 +1867,7 @@ export default function HomeFeed() {
                     onChange={(e) =>
                       setCommentInputs({ ...commentInputs, [activeCommentsPost.id]: e.target.value })
                     }
-                    className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 border-none ring-0 p-0 text-zinc-900 dark:text-white"
+                    className="bg-transparent text-sm w-full outline-none placeholder-zinc-500 border-none ring-0 p-0 text-zinc-900 dark:text-white"
                   />
                 </div>
                 {(commentInputs[activeCommentsPost.id] || "").trim() && (

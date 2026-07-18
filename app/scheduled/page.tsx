@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Clock, ChevronLeft, Trash2 } from "lucide-react";
 import { api, getFullImageUrl } from "../services/api";
 import SmartImage from "../components/SmartImage";
+import { confirmDialog } from "../lib/confirm";
 
 interface ScheduledPost {
   id: string;
@@ -34,20 +35,20 @@ function useCountdown(target: string) {
   return label;
 }
 
-function ScheduledRow({ post, onCancel, onReschedule, busy }: { post: ScheduledPost; onCancel: () => void; onReschedule: (iso: string) => void; busy: boolean }) {
+function ScheduledRow({ post, onCancel, onReschedule, busy }: { post: ScheduledPost; onCancel: () => void; onReschedule?: (iso: string) => void; busy: boolean }) {
   const countdown = useCountdown(post.scheduledFor);
   const [editing, setEditing] = useState(false);
   const [newTime, setNewTime] = useState(post.scheduledFor.slice(0, 16));
 
   return (
-    <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+    <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
       {post.image && <SmartImage src={post.image} alt="" width={56} height={56} className="w-14 h-14 rounded-lg object-cover flex-shrink-0" />}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold truncate">{post.title || "Без подписи"}</p>
         <p className="text-xs text-zinc-500 flex items-center gap-1.5 mt-0.5">
           <Clock className="w-3 h-3" /> {countdown}
         </p>
-        {editing && (
+        {editing && onReschedule && (
           <div className="flex items-center gap-2 mt-2">
             <input
               type="datetime-local"
@@ -69,9 +70,11 @@ function ScheduledRow({ post, onCancel, onReschedule, busy }: { post: ScheduledP
         )}
       </div>
       <div className="flex flex-col gap-1.5 items-end flex-shrink-0">
-        <button onClick={() => setEditing((v) => !v)} disabled={busy} className="text-xs font-semibold text-blue-500 cursor-pointer disabled:opacity-50">
-          Перенести
-        </button>
+        {onReschedule && (
+          <button onClick={() => setEditing((v) => !v)} disabled={busy} className="text-xs font-semibold text-blue-500 cursor-pointer disabled:opacity-50">
+            Перенести
+          </button>
+        )}
         <button onClick={onCancel} disabled={busy} className="text-xs font-semibold text-red-500 cursor-pointer disabled:opacity-50 flex items-center gap-1">
           <Trash2 className="w-3 h-3" /> Отменить
         </button>
@@ -83,24 +86,35 @@ function ScheduledRow({ post, onCancel, onReschedule, busy }: { post: ScheduledP
 export default function ScheduledPostsPage() {
   const router = useRouter();
   const [posts, setPosts] = useState<ScheduledPost[]>([]);
+  const [stories, setStories] = useState<ScheduledPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
 
   const load = () => {
     setLoading(true);
-    api.post
-      .getScheduledPosts()
-      .then((list) =>
+    // Both calls also auto-publish anything due server-side.
+    Promise.all([
+      api.post.getScheduledPosts().catch(() => []),
+      api.story.getScheduledStories().catch(() => []),
+    ])
+      .then(([postList, storyList]) => {
         setPosts(
-          (list || []).map((p: any) => ({
+          (postList || []).map((p: any) => ({
             id: p.id || p.draftId,
             title: p.title || p.content || "",
             image: getFullImageUrl((p.images && p.images[0]) || p.image),
             scheduledFor: p.scheduledFor,
           }))
-        )
-      )
-      .catch(() => setPosts([]))
+        );
+        setStories(
+          (storyList || []).map((s: any) => ({
+            id: String(s.scheduledStoryId ?? s.id),
+            title: s.isForCloseFriends ? "История · Близкие друзья" : "История",
+            image: getFullImageUrl(s.image || s.fileName || s.filePath),
+            scheduledFor: s.scheduledFor,
+          }))
+        );
+      })
       .finally(() => setLoading(false));
   };
 
@@ -121,7 +135,7 @@ export default function ScheduledPostsPage() {
     });
 
   const handleCancel = async (id: string) => {
-    if (!window.confirm("Отменить публикацию? Она останется в черновиках.")) return;
+    if (!(await confirmDialog({ message: "Отменить публикацию? Она останется в черновиках.", confirmText: "Да", cancelText: "Нет", destructive: true }))) return;
     setBusy(id, true);
     try {
       await api.post.cancelSchedule(id);
@@ -145,6 +159,19 @@ export default function ScheduledPostsPage() {
     }
   };
 
+  const handleCancelStory = async (id: string) => {
+    if (!(await confirmDialog({ message: "Отменить запланированную историю?", confirmText: "Да", cancelText: "Нет", destructive: true }))) return;
+    setBusy(id, true);
+    try {
+      await api.story.cancelScheduledStory(id);
+      setStories((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      console.error("Failed to cancel scheduled story:", err);
+    } finally {
+      setBusy(id, false);
+    }
+  };
+
   return (
     <div className="w-full max-w-lg mx-auto px-4 py-8 text-black dark:text-white">
       <div className="flex items-center gap-3 mb-6">
@@ -160,19 +187,36 @@ export default function ScheduledPostsPage() {
             <div key={i} className="w-full h-20 rounded-xl shimmer" />
           ))}
         </div>
-      ) : posts.length === 0 ? (
-        <p className="text-sm text-zinc-450 text-center py-16">Нет запланированных публикаций.</p>
+      ) : posts.length === 0 && stories.length === 0 ? (
+        <p className="text-sm text-zinc-500 text-center py-16">Нет запланированных публикаций.</p>
       ) : (
-        <div className="flex flex-col gap-3">
-          {posts.map((post) => (
-            <ScheduledRow
-              key={post.id}
-              post={post}
-              busy={busyIds.has(post.id)}
-              onCancel={() => handleCancel(post.id)}
-              onReschedule={(iso) => handleReschedule(post.id, iso)}
-            />
-          ))}
+        <div className="flex flex-col gap-6">
+          {posts.length > 0 && (
+            <div className="flex flex-col gap-3">
+              {posts.map((post) => (
+                <ScheduledRow
+                  key={post.id}
+                  post={post}
+                  busy={busyIds.has(post.id)}
+                  onCancel={() => handleCancel(post.id)}
+                  onReschedule={(iso) => handleReschedule(post.id, iso)}
+                />
+              ))}
+            </div>
+          )}
+          {stories.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <h2 className="text-xs font-bold uppercase tracking-wide text-zinc-400">Истории</h2>
+              {stories.map((story) => (
+                <ScheduledRow
+                  key={story.id}
+                  post={story}
+                  busy={busyIds.has(story.id)}
+                  onCancel={() => handleCancelStory(story.id)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

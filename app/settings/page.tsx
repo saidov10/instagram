@@ -7,8 +7,11 @@ import { logout, updateProfile, updateAvatar, fetchMyProfile, updatePrivacy, upd
 import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
 import { api, getFullImageUrl } from "../services/api";
-import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone, UserX, VolumeX, AlertTriangle, Briefcase, X, Download } from "lucide-react";
+import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone, UserX, VolumeX, AlertTriangle, Briefcase, X, Download, AtSign } from "lucide-react";
 import Avatar from "../components/Avatar";
+import Toggle from "../components/Toggle";
+import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 interface DeviceSession {
   id: string;
@@ -106,6 +109,15 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pwLoading, setPwLoading] = useState(false);
   const [pwMessage, setPwMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // Mention permission + business contact info (#7 profile depth)
+  const [mentionBusy, setMentionBusy] = useState(false);
+  const [bizEmail, setBizEmail] = useState(currentUser?.businessEmail || "");
+  const [bizPhone, setBizPhone] = useState(currentUser?.businessPhone || "");
+  const [bizAddress, setBizAddress] = useState(currentUser?.businessAddress || "");
+  const [bizCategory, setBizCategory] = useState(currentUser?.businessCategory || "");
+  const [bizSaving, setBizSaving] = useState(false);
+  const [bizSaved, setBizSaved] = useState(false);
 
   // Section navigation + privacy panel state
   const [activeSection, setActiveSection] = useState<"profile" | "privacy" | "closeFriends" | "sessions" | "support" | "notifications">("profile");
@@ -317,7 +329,7 @@ export default function SettingsPage() {
 
   const handleLogoutSession = async (sessionId: string) => {
     if (sessionBusy[sessionId]) return;
-    if (!window.confirm("Завершить сеанс на этом устройстве?")) return;
+    if (!(await confirmDialog({ message: "Завершить сеанс на этом устройстве?", confirmText: "Завершить", destructive: true }))) return;
     setSessionBusy((b) => ({ ...b, [sessionId]: true }));
     try {
       await api.account.logoutSession(sessionId);
@@ -409,7 +421,7 @@ export default function SettingsPage() {
   };
 
   const handleDeactivate = async () => {
-    if (!window.confirm("Ваш профиль будет скрыт, пока вы снова не войдёте. Продолжить?")) return;
+    if (!(await confirmDialog({ message: "Ваш профиль будет скрыт, пока вы снова не войдёте. Продолжить?", confirmText: "Продолжить", destructive: true }))) return;
     try {
       await api.account.deactivate();
     } catch (err) {
@@ -442,7 +454,7 @@ export default function SettingsPage() {
 
   const handleRequestDeletion = async () => {
     if (deletionBusy) return;
-    if (!window.confirm("Аккаунт будет запланирован на удаление через 30 дней. Продолжить?")) return;
+    if (!(await confirmDialog({ message: "Аккаунт будет запланирован на удаление через 30 дней. Продолжить?", confirmText: "Продолжить", destructive: true }))) return;
     setDeletionBusy(true);
     try {
       await api.account.requestDeletion();
@@ -544,7 +556,7 @@ export default function SettingsPage() {
           await Notification.requestPermission();
         }
         if (typeof Notification === "undefined" || Notification.permission !== "granted") {
-          alert("Разрешите уведомления в браузере, чтобы включить эту опцию.");
+          toast("Разрешите уведомления в браузере, чтобы включить эту опцию.", "error");
           return;
         }
         const token = localStorage.getItem("instagram_push_token") || crypto.randomUUID();
@@ -588,6 +600,39 @@ export default function SettingsPage() {
       console.error("Failed to update account type:", err);
     } finally {
       setAccountBusy(false);
+    }
+  };
+
+  const handleMentionPermission = async (permission: "EVERYONE" | "FOLLOWING") => {
+    if (!currentUser || mentionBusy || currentUser.mentionPermission === permission) return;
+    setMentionBusy(true);
+    try {
+      await api.profile.updateMentionPermission(permission);
+      await dispatch(fetchMyProfile());
+    } catch (err) {
+      console.error("Failed to update mention permission:", err);
+    } finally {
+      setMentionBusy(false);
+    }
+  };
+
+  const handleSaveBusinessInfo = async () => {
+    if (bizSaving) return;
+    setBizSaving(true);
+    try {
+      await api.profile.updateBusinessInfo({
+        businessEmail: bizEmail.trim(),
+        businessPhone: bizPhone.trim(),
+        businessAddress: bizAddress.trim(),
+        businessCategory: bizCategory.trim(),
+      });
+      await dispatch(fetchMyProfile());
+      setBizSaved(true);
+      setTimeout(() => setBizSaved(false), 2000);
+    } catch (err) {
+      console.error("Failed to update business info:", err);
+    } finally {
+      setBizSaving(false);
     }
   };
 
@@ -689,20 +734,20 @@ export default function SettingsPage() {
         <button
           onClick={() => setActiveSection("profile")}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-sm text-left flex-shrink-0 cursor-pointer ${
-            activeSection === "profile" ? "glass" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400 font-normal"
+            activeSection === "profile" ? "glass" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-600 dark:text-zinc-400 font-normal"
           }`}
         >
           <User className="w-5 h-5 stroke-[1.8px]" />
           <span>Редактировать профиль</span>
         </button>
-        <button onClick={toggleTheme} className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm text-left flex-shrink-0 cursor-pointer text-zinc-550 dark:text-zinc-400">
+        <button onClick={toggleTheme} className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm text-left flex-shrink-0 cursor-pointer text-zinc-600 dark:text-zinc-400">
           {theme === "dark" ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5" />}
           <span>Сменить тему ({theme === "dark" ? "Светлая" : "Темная"})</span>
         </button>
         <button
           onClick={() => setActiveSection("privacy")}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
-            activeSection === "privacy" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+            activeSection === "privacy" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-600 dark:text-zinc-400"
           }`}
         >
           <Shield className="w-5 h-5" />
@@ -711,7 +756,7 @@ export default function SettingsPage() {
         <button
           onClick={() => setActiveSection("closeFriends")}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
-            activeSection === "closeFriends" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+            activeSection === "closeFriends" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-600 dark:text-zinc-400"
           }`}
         >
           <Star className="w-5 h-5 text-green-500 fill-green-500" />
@@ -720,7 +765,7 @@ export default function SettingsPage() {
         <button
           onClick={() => setActiveSection("sessions")}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
-            activeSection === "sessions" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+            activeSection === "sessions" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-600 dark:text-zinc-400"
           }`}
         >
           <Monitor className="w-5 h-5" />
@@ -729,7 +774,7 @@ export default function SettingsPage() {
         <button
           onClick={() => setActiveSection("notifications")}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
-            activeSection === "notifications" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+            activeSection === "notifications" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-600 dark:text-zinc-400"
           }`}
         >
           <Bell className="w-5 h-5" />
@@ -738,7 +783,7 @@ export default function SettingsPage() {
         <button
           onClick={() => setActiveSection("support")}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
-            activeSection === "support" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+            activeSection === "support" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-600 dark:text-zinc-400"
           }`}
         >
           <HelpCircle className="w-5 h-5" />
@@ -760,14 +805,14 @@ export default function SettingsPage() {
         <form onSubmit={handleSave} className="flex flex-col gap-6 max-w-lg">
           
           {/* Picture preview change */}
-          <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-zinc-150 dark:border-zinc-800">
+          <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800">
             <Avatar src={getFullImageUrl(currentUser.avatar)} name={currentUser.username} className="w-14 h-14 border border-zinc-200 dark:border-zinc-800" />
             <div className="flex flex-col items-start">
               <span className="font-bold text-sm">{currentUser.username}</span>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="text-blue-500 hover:text-blue-650 text-xs font-bold text-left cursor-pointer mt-1"
+                className="text-blue-500 hover:text-blue-600 text-xs font-bold text-left cursor-pointer mt-1"
               >
                 Изменить фото профиля
               </button>
@@ -788,7 +833,7 @@ export default function SettingsPage() {
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
             />
           </div>
 
@@ -800,7 +845,7 @@ export default function SettingsPage() {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value.replace(/\s/g, "").toLowerCase())}
-                className="w-full bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 pr-8 text-sm text-zinc-900 dark:text-white"
+                className="w-full bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 pr-8 text-sm text-zinc-900 dark:text-white"
               />
               {username.trim() !== currentUser.username && (
                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs">
@@ -827,7 +872,7 @@ export default function SettingsPage() {
               placeholder="https://"
               value={website}
               onChange={(e) => setWebsite(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
             />
           </div>
 
@@ -839,18 +884,18 @@ export default function SettingsPage() {
               placeholder="она/её, он/его…"
               value={pronouns}
               onChange={(e) => setPronouns(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
             />
           </div>
 
           {/* Bio input */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">О себе</label>
+            <label className="text-xs font-bold uppercase text-zinc-500 dark:text-zinc-500">О себе</label>
             <textarea
               rows={3}
               value={bio}
               onChange={(e) => setBio(e.target.value)}
-              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm resize-none text-zinc-900 dark:text-white"
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm resize-none text-zinc-900 dark:text-white"
             />
           </div>
 
@@ -877,7 +922,7 @@ export default function SettingsPage() {
           <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
             <Briefcase className="w-5 h-5" /> Тип аккаунта
           </h3>
-          <p className="text-sm text-zinc-450 mb-5">
+          <p className="text-sm text-zinc-500 mb-5">
             Бизнес и авторские аккаунты получают доступ к статистике и профессиональным инструментам.
           </p>
           <div className="flex flex-col gap-2">
@@ -898,7 +943,7 @@ export default function SettingsPage() {
               >
                 <div className="flex flex-col">
                   <span className="font-semibold text-sm">{opt.title}</span>
-                  <span className="text-xs text-zinc-450">{opt.desc}</span>
+                  <span className="text-xs text-zinc-500">{opt.desc}</span>
                 </div>
                 <span className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${(currentUser.accountType || "PERSONAL") === opt.type ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-600"}`} />
               </button>
@@ -906,12 +951,64 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* ----------------- BUSINESS CONTACT INFO (#20) — Business/Creator only ----------------- */}
+        {(currentUser.accountType === "BUSINESS" || currentUser.accountType === "CREATOR") && (
+          <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
+            <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+              <Briefcase className="w-5 h-5" /> Контактная информация
+            </h3>
+            <p className="text-sm text-zinc-500 mb-5">
+              Появится в вашем профиле кнопками «Эл. адрес», «Позвонить» и «Как добраться».
+            </p>
+            <div className="flex flex-col gap-3">
+              <input
+                type="email"
+                value={bizEmail}
+                onChange={(e) => setBizEmail(e.target.value)}
+                placeholder="Контактный e-mail"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm outline-none"
+              />
+              <input
+                type="tel"
+                value={bizPhone}
+                onChange={(e) => setBizPhone(e.target.value)}
+                placeholder="Контактный телефон"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm outline-none"
+              />
+              <input
+                type="text"
+                value={bizAddress}
+                onChange={(e) => setBizAddress(e.target.value)}
+                placeholder="Адрес"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm outline-none"
+              />
+              <input
+                type="text"
+                value={bizCategory}
+                onChange={(e) => setBizCategory(e.target.value)}
+                placeholder="Категория (напр. Ресторан)"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm outline-none"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSaveBusinessInfo}
+                  disabled={bizSaving}
+                  className="btn-primary text-sm px-5 py-2.5 rounded-lg cursor-pointer disabled:opacity-50"
+                >
+                  {bizSaving ? "Сохранение..." : "Сохранить"}
+                </button>
+                {bizSaved && <span className="text-sm font-semibold text-green-500">Сохранено</span>}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ----------------- DEACTIVATE ACCOUNT (#22) ----------------- */}
         <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
           <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
             <Ban className="w-5 h-5" /> Временно деактивировать аккаунт
           </h3>
-          <p className="text-sm text-zinc-450 mb-4">
+          <p className="text-sm text-zinc-500 mb-4">
             Ваш профиль, публикации и комментарии будут скрыты, пока вы снова не войдёте. Аккаунт восстановится автоматически при следующем входе.
           </p>
           <button
@@ -927,7 +1024,7 @@ export default function SettingsPage() {
           <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
             <Download className="w-5 h-5" /> Скачать ваши данные
           </h3>
-          <p className="text-sm text-zinc-450 mb-4">
+          <p className="text-sm text-zinc-500 mb-4">
             Получите копию профиля, публикаций и другой информации в формате JSON.
           </p>
           <button
@@ -946,7 +1043,7 @@ export default function SettingsPage() {
           </h3>
           {deletionRequested ? (
             <>
-              <p className="text-sm text-zinc-450 mb-4">
+              <p className="text-sm text-zinc-500 mb-4">
                 Ваш аккаунт будет удалён безвозвратно через 30 дней. Войдите снова в это время, чтобы автоматически отменить удаление.
               </p>
               <button
@@ -959,7 +1056,7 @@ export default function SettingsPage() {
             </>
           ) : (
             <>
-              <p className="text-sm text-zinc-450 mb-4">
+              <p className="text-sm text-zinc-500 mb-4">
                 Аккаунт будет запланирован на удаление через 30 дней. Вход в систему в этот период автоматически отменяет удаление.
               </p>
               <button
@@ -980,30 +1077,30 @@ export default function SettingsPage() {
           </h3>
           <form onSubmit={handleChangePassword} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Текущий пароль</label>
+              <label className="text-xs font-bold uppercase text-zinc-500 dark:text-zinc-500">Текущий пароль</label>
               <input
                 type="password"
                 value={oldPassword}
                 onChange={(e) => setOldPassword(e.target.value)}
-                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Новый пароль</label>
+              <label className="text-xs font-bold uppercase text-zinc-500 dark:text-zinc-500">Новый пароль</label>
               <input
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Подтвердите новый пароль</label>
+              <label className="text-xs font-bold uppercase text-zinc-500 dark:text-zinc-500">Подтвердите новый пароль</label>
               <input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-500 dark:focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
               />
             </div>
             <div className="flex items-center gap-4 mt-2">
@@ -1057,7 +1154,7 @@ export default function SettingsPage() {
                     </div>
                   ))
                 ) : cfResults.length === 0 ? (
-                  <p className="text-sm text-zinc-450 py-2">Ничего не найдено.</p>
+                  <p className="text-sm text-zinc-500 py-2">Ничего не найдено.</p>
                 ) : (
                   cfResults
                     .filter((u) => (u.id || u.userId) !== currentUser.id)
@@ -1074,7 +1171,7 @@ export default function SettingsPage() {
                             />
                             <div className="flex flex-col min-w-0">
                               <span className="font-semibold text-sm truncate">{u.userName || u.username}</span>
-                              <span className="text-xs text-zinc-450 truncate">{u.fullName || ""}</span>
+                              <span className="text-xs text-zinc-500 truncate">{u.fullName || ""}</span>
                             </div>
                           </div>
                           <button
@@ -1099,7 +1196,7 @@ export default function SettingsPage() {
           {/* Current list */}
           <div>
             <h3 className="text-base font-bold mb-4">
-              Ваш список {closeFriends.length > 0 && <span className="text-zinc-450 font-normal">({closeFriends.length})</span>}
+              Ваш список {closeFriends.length > 0 && <span className="text-zinc-500 font-normal">({closeFriends.length})</span>}
             </h3>
             {cfLoading ? (
               <div className="flex flex-col gap-3">
@@ -1111,7 +1208,7 @@ export default function SettingsPage() {
                 ))}
               </div>
             ) : closeFriends.length === 0 ? (
-              <p className="text-sm text-zinc-450">Список пуст. Найдите пользователей выше, чтобы добавить их.</p>
+              <p className="text-sm text-zinc-500">Список пуст. Найдите пользователей выше, чтобы добавить их.</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {closeFriends.map((u) => {
@@ -1171,13 +1268,13 @@ export default function SettingsPage() {
           ) : sessionsError ? (
             <p className="text-sm text-red-500">{sessionsError}</p>
           ) : sessions.length === 0 ? (
-            <p className="text-sm text-zinc-450">Активных сеансов не найдено.</p>
+            <p className="text-sm text-zinc-500">Активных сеансов не найдено.</p>
           ) : (
             <div className="flex flex-col gap-3">
               {sessions.map((s) => (
                 <div
                   key={s.id}
-                  className="flex items-center justify-between gap-3 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800"
+                  className="flex items-center justify-between gap-3 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-10 h-10 rounded-xl bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0">
@@ -1222,18 +1319,18 @@ export default function SettingsPage() {
                 ))}
               </div>
             ) : securityLog.length === 0 ? (
-              <p className="text-sm text-zinc-450">Событий пока нет.</p>
+              <p className="text-sm text-zinc-500">Событий пока нет.</p>
             ) : (
               <div className="flex flex-col gap-2">
                 {securityLog.map((ev) => (
-                  <div key={ev.id} className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+                  <div key={ev.id} className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
                     <div className="flex flex-col min-w-0">
                       <span className="text-sm font-semibold">{securityEventLabel[ev.type] || ev.type}</span>
                       <span className="text-xs text-zinc-500 truncate">
                         {ev.ip ? `IP: ${ev.ip}` : ""}{ev.userAgent ? ` · ${ev.userAgent.slice(0, 40)}` : ""}
                       </span>
                     </div>
-                    <span className="text-xs text-zinc-450 flex-shrink-0">{formatSessionDate(ev.createAt || ev.createdAt)}</span>
+                    <span className="text-xs text-zinc-500 flex-shrink-0">{formatSessionDate(ev.createAt || ev.createdAt)}</span>
                   </div>
                 ))}
               </div>
@@ -1253,7 +1350,7 @@ export default function SettingsPage() {
 
           <form onSubmit={handleSubmitAppeal} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Тип объекта</label>
+              <label className="text-xs font-bold uppercase text-zinc-500 dark:text-zinc-500">Тип объекта</label>
               <select
                 value={appealTargetType}
                 onChange={(e) => setAppealTargetType(e.target.value as typeof appealTargetType)}
@@ -1266,7 +1363,7 @@ export default function SettingsPage() {
               </select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">ID объекта</label>
+              <label className="text-xs font-bold uppercase text-zinc-500 dark:text-zinc-500">ID объекта</label>
               <input
                 type="text"
                 value={appealTargetId}
@@ -1276,7 +1373,7 @@ export default function SettingsPage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Причина апелляции</label>
+              <label className="text-xs font-bold uppercase text-zinc-500 dark:text-zinc-500">Причина апелляции</label>
               <textarea
                 rows={3}
                 value={appealReason}
@@ -1309,11 +1406,11 @@ export default function SettingsPage() {
                 ))}
               </div>
             ) : appeals.length === 0 ? (
-              <p className="text-sm text-zinc-450">Апелляций пока нет.</p>
+              <p className="text-sm text-zinc-500">Апелляций пока нет.</p>
             ) : (
               <div className="flex flex-col gap-2">
                 {appeals.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between gap-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+                  <div key={a.id} className="flex items-center justify-between gap-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
                     <div className="flex flex-col min-w-0">
                       <span className="text-sm font-semibold truncate">{a.targetType} · {a.reason}</span>
                       <span className="text-xs text-zinc-500">{formatSessionDate(a.createAt || a.createdAt)}</span>
@@ -1337,24 +1434,12 @@ export default function SettingsPage() {
             <Bell className="w-5 h-5" /> Уведомления
           </h2>
 
-          <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+          <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
             <div className="flex flex-col">
               <span className="font-semibold text-sm">Push-уведомления в браузере</span>
               <span className="text-xs text-zinc-500 mt-0.5 max-w-xs">Хранится только на этом устройстве.</span>
             </div>
-            <button
-              onClick={handleTogglePush}
-              disabled={pushBusy}
-              className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
-                pushEnabled ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                  pushEnabled ? "translate-x-5.5" : "translate-x-0.5"
-                }`}
-              />
-            </button>
+            <Toggle checked={pushEnabled} onChange={handleTogglePush} disabled={pushBusy} label="Push-уведомления" />
           </div>
 
           {notifLoading ? (
@@ -1373,22 +1458,15 @@ export default function SettingsPage() {
             ] as const).map((cat) => (
               <div
                 key={cat.key}
-                className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800"
+                className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800"
               >
                 <span className="font-semibold text-sm">{cat.label}</span>
-                <button
-                  onClick={() => handleToggleNotifSetting(cat.key)}
+                <Toggle
+                  checked={notifSettings[cat.key] !== false}
+                  onChange={() => handleToggleNotifSetting(cat.key)}
                   disabled={notifBusy[cat.key]}
-                  className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
-                    notifSettings[cat.key] !== false ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                      notifSettings[cat.key] !== false ? "translate-x-5.5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
+                  label={cat.label}
+                />
               </div>
             ))
           )}
@@ -1399,7 +1477,7 @@ export default function SettingsPage() {
             <h2 className="text-xl font-bold mb-8">Конфиденциальность</h2>
 
             {/* Private account toggle */}
-            <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+            <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
               <div className="flex items-start gap-3">
                 <Lock className="w-5 h-5 mt-0.5 flex-shrink-0" />
                 <div className="flex flex-col">
@@ -1409,23 +1487,11 @@ export default function SettingsPage() {
                   </span>
                 </div>
               </div>
-              <button
-                onClick={handleTogglePrivate}
-                disabled={privacyBusy}
-                className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
-                  currentUser.isPrivate ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                    currentUser.isPrivate ? "translate-x-5.5" : "translate-x-0.5"
-                  }`}
-                />
-              </button>
+              <Toggle checked={currentUser.isPrivate} onChange={handleTogglePrivate} disabled={privacyBusy} label="Закрытый аккаунт" />
             </div>
 
             {/* Activity status toggle */}
-            <div className="flex items-center justify-between p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+            <div className="flex items-center justify-between p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
               <div className="flex items-start gap-3">
                 <EyeOff className="w-5 h-5 mt-0.5 flex-shrink-0" />
                 <div className="flex flex-col">
@@ -1435,23 +1501,43 @@ export default function SettingsPage() {
                   </span>
                 </div>
               </div>
-              <button
-                onClick={handleToggleActivityStatus}
-                disabled={activityStatusBusy}
-                className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
-                  currentUser.showActivityStatus ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                    currentUser.showActivityStatus ? "translate-x-5.5" : "translate-x-0.5"
-                  }`}
-                />
-              </button>
+              <Toggle checked={currentUser.showActivityStatus} onChange={handleToggleActivityStatus} disabled={activityStatusBusy} label="Показывать статус активности" />
+            </div>
+
+            {/* Allow @mentions from */}
+            <div className="flex flex-col gap-3 p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
+              <div className="flex items-start gap-3">
+                <AtSign className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div className="flex flex-col">
+                  <span className="font-semibold text-sm">Кто может упоминать вас</span>
+                  <span className="text-xs text-zinc-500 mt-0.5 max-w-xs">
+                    Если выбрать «Подписки», отметить вас через @ сможет только тот, на кого вы подписаны.
+                  </span>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1 pl-8">
+                {([
+                  ["EVERYONE", "Все"],
+                  ["FOLLOWING", "Только те, на кого вы подписаны"],
+                ] as const).map(([value, label]) => {
+                  const active = (currentUser.mentionPermission || "EVERYONE") === value;
+                  return (
+                    <button
+                      key={value}
+                      onClick={() => handleMentionPermission(value)}
+                      disabled={mentionBusy}
+                      className="flex items-center justify-between py-1.5 text-sm cursor-pointer disabled:opacity-50 text-left"
+                    >
+                      <span className={active ? "font-semibold text-blue-500" : ""}>{label}</span>
+                      <span className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${active ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-600"}`} />
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Quiet mode */}
-            <div className="flex flex-col gap-3 p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+            <div className="flex flex-col gap-3 p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
               <div className="flex items-center justify-between">
                 <div className="flex items-start gap-3">
                   <Moon className="w-5 h-5 mt-0.5 flex-shrink-0" />
@@ -1462,19 +1548,7 @@ export default function SettingsPage() {
                     </span>
                   </div>
                 </div>
-                <button
-                  onClick={handleToggleQuietMode}
-                  disabled={quietBusy}
-                  className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
-                    quietEnabled ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                      quietEnabled ? "translate-x-5.5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
+                <Toggle checked={quietEnabled} onChange={handleToggleQuietMode} disabled={quietBusy} label="Тихий режим" />
               </div>
               {quietEnabled && (
                 <div className="flex items-center gap-3">
@@ -1485,7 +1559,7 @@ export default function SettingsPage() {
                     onBlur={handleSaveQuietHours}
                     className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
                   />
-                  <span className="text-xs text-zinc-450">до</span>
+                  <span className="text-xs text-zinc-500">до</span>
                   <input
                     type="time"
                     value={quietEnd}
@@ -1498,7 +1572,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Muted words */}
-            <div className="flex flex-col gap-3 p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+            <div className="flex flex-col gap-3 p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
               <div className="flex items-start gap-3">
                 <VolumeX className="w-5 h-5 mt-0.5 flex-shrink-0" />
                 <div className="flex flex-col">
@@ -1546,7 +1620,7 @@ export default function SettingsPage() {
               <Ban className="w-4.5 h-4.5" /> Заблокированные аккаунты
             </h3>
             {blockedUsers.length === 0 ? (
-              <p className="text-sm text-zinc-450">У вас нет заблокированных пользователей.</p>
+              <p className="text-sm text-zinc-500">У вас нет заблокированных пользователей.</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {blockedUsers.map((u) => {
@@ -1580,7 +1654,7 @@ export default function SettingsPage() {
               <EyeOff className="w-4.5 h-4.5" /> Скрыли истории от...
             </h3>
             {hiddenUsers.length === 0 ? (
-              <p className="text-sm text-zinc-450">Вы не скрывали истории ни от кого.</p>
+              <p className="text-sm text-zinc-500">Вы не скрывали истории ни от кого.</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {hiddenUsers.map((u) => {
@@ -1614,7 +1688,7 @@ export default function SettingsPage() {
               <UserX className="w-4.5 h-4.5" /> Ограниченные аккаунты
             </h3>
             {restrictedUsers.length === 0 ? (
-              <p className="text-sm text-zinc-450">У вас нет ограниченных пользователей.</p>
+              <p className="text-sm text-zinc-500">У вас нет ограниченных пользователей.</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {restrictedUsers.map((u) => {
@@ -1648,7 +1722,7 @@ export default function SettingsPage() {
               <VolumeX className="w-4.5 h-4.5" /> Скрытые аккаунты
             </h3>
             {mutedUsers.length === 0 ? (
-              <p className="text-sm text-zinc-450">Вы никого не скрывали.</p>
+              <p className="text-sm text-zinc-500">Вы никого не скрывали.</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {mutedUsers.map((u) => {
@@ -1664,7 +1738,7 @@ export default function SettingsPage() {
                         />
                         <div className="flex flex-col">
                           <span className="font-semibold text-sm">{u.userName || u.username}</span>
-                          <span className="text-xs text-zinc-450">
+                          <span className="text-xs text-zinc-500">
                             {mt === "ALL" ? "Публикации и истории" : mt === "POSTS" ? "Публикации" : "Истории"}
                           </span>
                         </div>
@@ -1687,7 +1761,7 @@ export default function SettingsPage() {
             <h3 className="text-base font-bold mb-2 flex items-center gap-2">
               <AlertTriangle className="w-4.5 h-4.5" /> Контроль деликатного контента
             </h3>
-            <p className="text-sm text-zinc-450 mb-4">
+            <p className="text-sm text-zinc-500 mb-4">
               Управляйте тем, как часто вы видите деликатные материалы в «Интересном» и ленте.
             </p>
             <div className="flex flex-col gap-2">
@@ -1708,7 +1782,7 @@ export default function SettingsPage() {
                 >
                   <div className="flex flex-col">
                     <span className="font-semibold text-sm">{opt.title}</span>
-                    <span className="text-xs text-zinc-450">{opt.desc}</span>
+                    <span className="text-xs text-zinc-500">{opt.desc}</span>
                   </div>
                   <span className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${sensitiveLevel === opt.level ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-600"}`} />
                 </button>

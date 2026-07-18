@@ -55,6 +55,8 @@ export interface Post {
   isLiked: boolean;
   isSaved: boolean;
   allowComments: boolean;
+  /** Owner-only: WHO may comment when comments are on. Separate from the allowComments on/off switch. */
+  commentPermission?: "EVERYONE" | "FOLLOWING" | "FOLLOWERS";
   comments: Comment[];
   collabUser?: string;
   isVerified?: boolean;
@@ -79,6 +81,8 @@ export interface Post {
   isForCloseFriends?: boolean;
   locationId?: number | null;
   images?: string[];
+  /** Accessibility label for the (first) image, set by the author in the composer. */
+  altText?: string;
   productTags?: { id?: string; name: string; price: number; currency: string; url?: string; x: number; y: number }[];
 }
 
@@ -157,6 +161,7 @@ export const formatBackendPost = (p: any): Post => {
     isSaved: !!p.isSaved,
     // Comments are open unless the author explicitly disabled them.
     allowComments: p.allowComments !== false,
+    commentPermission: p.commentPermission || "EVERYONE",
     isArchived: !!p.isArchived,
     hideLikeCount: likeHidden,
     isSensitive: !!p.isSensitive,
@@ -183,6 +188,7 @@ export const formatBackendPost = (p: any): Post => {
     isForCloseFriends: !!p.isForCloseFriends,
     locationId: p.locationId ?? null,
     images: Array.isArray(p.images) ? p.images.map((img: string) => getFullImageUrl(img)) : undefined,
+    altText: (Array.isArray(p.altTexts) ? p.altTexts[0] : undefined) || p.altText || undefined,
     productTags: Array.isArray(p.productTags) ? p.productTags : [],
   };
 };
@@ -362,6 +368,7 @@ export const createPost = createAsyncThunk(
       isForCloseFriends?: boolean;
       locationId?: number;
       productTags?: { name: string; price: number; currency: string; url?: string; x: number; y: number }[];
+      altTexts?: string[];
     },
     { dispatch, rejectWithValue }
   ) => {
@@ -402,6 +409,21 @@ export const togglePostComments = createAsyncThunk(
       return { postId, allowComments };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to toggle comments.");
+    }
+  }
+);
+
+export const updateCommentPermission = createAsyncThunk(
+  "posts/updateCommentPermission",
+  async (
+    { postId, commentPermission }: { postId: number; commentPermission: "EVERYONE" | "FOLLOWING" | "FOLLOWERS" },
+    { rejectWithValue }
+  ) => {
+    try {
+      await api.post.updateCommentPermission(postId, commentPermission);
+      return { postId, commentPermission };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to update comment permission.");
     }
   }
 );
@@ -702,13 +724,24 @@ const postsSlice = createSlice({
   extraReducers: (builder) => {
     builder
       // Fetch Following Posts
-      .addCase(fetchFollowingPosts.pending, (state) => {
-        state.loading = true;
-        state.error = null;
+      .addCase(fetchFollowingPosts.pending, (state, action) => {
+        // Only the first page shows the full-feed skeleton; later pages append quietly
+        // underneath the already-rendered feed (infinite scroll).
+        if ((action.meta.arg?.pageNumber ?? 1) <= 1) {
+          state.loading = true;
+          state.error = null;
+        }
       })
-      .addCase(fetchFollowingPosts.fulfilled, (state, action: PayloadAction<Post[]>) => {
+      .addCase(fetchFollowingPosts.fulfilled, (state, action) => {
         state.loading = false;
-        state.posts = action.payload;
+        if ((action.meta.arg?.pageNumber ?? 1) > 1) {
+          // Append, skipping any post already in the feed (guards against a backend that
+          // ignores pagination and re-returns the same rows).
+          const seen = new Set(state.posts.map((p) => p.id));
+          state.posts.push(...action.payload.filter((p) => !seen.has(p.id)));
+        } else {
+          state.posts = action.payload;
+        }
       })
       .addCase(fetchFollowingPosts.rejected, (state, action) => {
         state.loading = false;
@@ -757,6 +790,14 @@ const postsSlice = createSlice({
         [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
           const post = list.find((p) => p.id === action.payload.postId);
           if (post) post.allowComments = action.payload.allowComments;
+        });
+      })
+
+      // Comment permission (author only) — WHO may comment
+      .addCase(updateCommentPermission.fulfilled, (state, action) => {
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const post = list.find((p) => p.id === action.payload.postId);
+          if (post) post.commentPermission = action.payload.commentPermission;
         });
       })
 

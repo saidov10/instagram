@@ -17,6 +17,11 @@ export interface UserState {
   accountType: "PERSONAL" | "BUSINESS" | "CREATOR";
   showActivityStatus: boolean;
   isInQuietMode: boolean;
+  mentionPermission: "EVERYONE" | "FOLLOWING";
+  businessEmail: string;
+  businessPhone: string;
+  businessAddress: string;
+  businessCategory: string;
 }
 
 interface AuthState {
@@ -83,6 +88,11 @@ export const fetchMyProfile = createAsyncThunk(
         accountType: (profile.accountType || "PERSONAL") as "PERSONAL" | "BUSINESS" | "CREATOR",
         showActivityStatus: profile.showActivityStatus !== false,
         isInQuietMode: !!profile.isInQuietMode,
+        mentionPermission: (profile.mentionPermission || "EVERYONE") as "EVERYONE" | "FOLLOWING",
+        businessEmail: profile.businessEmail || "",
+        businessPhone: profile.businessPhone || "",
+        businessAddress: profile.businessAddress || "",
+        businessCategory: profile.businessCategory || "",
       };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load profile.");

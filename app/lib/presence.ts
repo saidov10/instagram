@@ -20,41 +20,36 @@ export function isOnline(lastSeenAt?: string | null, now: number = Date.now()): 
   return now - ms < ONLINE_WINDOW_MS;
 }
 
-/** Russian plural forms: 1 минута / 2 минуты / 5 минут. */
-function plural(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
-}
-
 /**
- * Human-readable presence line for a chat header / chat list row.
- * Returns "В сети" while the user is inside the online window.
+ * Human-readable presence line for a chat header.
+ * - Inside the online window → "В сети".
+ * - Otherwise → the exact clock time the user was last seen, e.g. "Был(-а) в сети в 14:00",
+ *   prefixed with "вчера" / a date for older days (Instagram/Telegram style) instead of a
+ *   relative "N минут назад" — a fixed time reads calmer and doesn't drift every tick.
  */
 export function formatLastSeen(lastSeenAt?: string | null, now: number = Date.now()): string {
   const ms = parse(lastSeenAt);
   if (ms === null) return "Был(-а) в сети недавно";
   if (isOnline(lastSeenAt, now)) return "В сети";
 
-  const diff = Math.max(0, now - ms);
-  const minutes = Math.floor(diff / 60000);
-
-  if (minutes < 60) {
-    return `Был(-а) в сети ${minutes} ${plural(minutes, "минуту", "минуты", "минут")} назад`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `Был(-а) в сети ${hours} ${plural(hours, "час", "часа", "часов")} назад`;
-  }
-
-  const days = Math.floor(hours / 24);
-  if (days < 7) {
-    return `Был(-а) в сети ${days} ${plural(days, "день", "дня", "дней")} назад`;
-  }
-
   const date = new Date(ms);
-  return `Был(-а) в сети ${date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}`;
+  const nowDate = new Date(now);
+  const time = date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+  const startOfToday = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  // Today → just the time.
+  if (ms >= startOfToday) return `Был(-а) в сети в ${time}`;
+  // Yesterday.
+  if (ms >= startOfToday - dayMs) return `Был(-а) в сети вчера в ${time}`;
+
+  // Older → date + time (include the year only when it differs from the current one).
+  const dateLabel = date.toLocaleDateString(
+    "ru-RU",
+    date.getFullYear() === nowDate.getFullYear()
+      ? { day: "numeric", month: "long" }
+      : { day: "numeric", month: "long", year: "numeric" },
+  );
+  return `Был(-а) в сети ${dateLabel} в ${time}`;
 }

@@ -138,13 +138,13 @@ export default function ChannelsPage() {
           <Avatar src={openChannel.avatar} name={openChannel.name} className="w-9 h-9" />
           <div className="flex flex-col min-w-0">
             <span className="font-semibold text-sm truncate">{openChannel.name}</span>
-            <span className="text-xs text-zinc-450">{openChannel.subscriberCount} подписчиков</span>
+            <span className="text-xs text-zinc-500">{openChannel.subscriberCount} подписчиков</span>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
           {messages.length === 0 ? (
-            <p className="text-sm text-zinc-450 text-center py-16">Сообщений пока нет.</p>
+            <p className="text-sm text-zinc-500 text-center py-16">Сообщений пока нет.</p>
           ) : (
             messages.map((m) => (
               <div key={m.id} className="glass rounded-2xl rounded-tl-md px-4 py-2.5 text-sm max-w-[80%] self-start">
@@ -199,7 +199,7 @@ export default function ChannelsPage() {
       ) : channels.length === 0 ? (
         <div className="flex flex-col items-center gap-3 py-16 text-center">
           <Radio className="w-10 h-10 text-zinc-400" />
-          <p className="text-sm text-zinc-450 max-w-xs">Каналов пока нет. Создайте свой, чтобы делать объявления подписчикам.</p>
+          <p className="text-sm text-zinc-500 max-w-xs">Каналов пока нет. Создайте свой, чтобы делать объявления подписчикам.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -207,12 +207,12 @@ export default function ChannelsPage() {
             <div
               key={c.id}
               onClick={() => openChannelThread(c)}
-              className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-900"
+              className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-900"
             >
               <Avatar src={c.avatar} name={c.name} className="w-12 h-12" />
               <div className="flex-1 min-w-0">
                 <span className="font-semibold text-sm block truncate">{c.name}</span>
-                <span className="text-xs text-zinc-450">{c.subscriberCount} подписчиков{c.isOwner && " · вы владелец"}</span>
+                <span className="text-xs text-zinc-500">{c.subscriberCount} подписчиков{c.isOwner && " · вы владелец"}</span>
               </div>
               {!c.isOwner && (
                 <button

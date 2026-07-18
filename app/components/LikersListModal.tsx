@@ -16,16 +16,28 @@ interface Liker {
   isFollowing?: boolean;
 }
 
-/** Standard follower-style list opened by tapping a post's like count. */
-export default function LikersListModal({ postId, onClose }: { postId: number; onClose: () => void }) {
+/**
+ * Standard follower-style list opened by tapping a like count.
+ * Pass `postId` for a post's likers, or `commentId` for a comment's likers — same shape/UX.
+ */
+export default function LikersListModal({
+  postId,
+  commentId,
+  onClose,
+}: {
+  postId?: number;
+  commentId?: number;
+  onClose: () => void;
+}) {
   const [likers, setLikers] = useState<Liker[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api.post
-      .getLikers(postId)
+    const fetcher =
+      commentId != null ? api.post.getCommentLikers(commentId) : api.post.getLikers(postId!);
+    fetcher
       .then((list) => {
         if (cancelled) return;
         setLikers(
@@ -44,7 +56,7 @@ export default function LikersListModal({ postId, onClose }: { postId: number; o
     return () => {
       cancelled = true;
     };
-  }, [postId]);
+  }, [postId, commentId]);
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>

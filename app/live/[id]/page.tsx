@@ -8,6 +8,7 @@ import { X, Eye, Send, Radio } from "lucide-react";
 import { RootState } from "../../store/store";
 import { api, getFullImageUrl } from "../../services/api";
 import Avatar from "../../components/Avatar";
+import { confirmDialog } from "../../lib/confirm";
 
 interface LiveComment {
   id: string;
@@ -154,7 +155,7 @@ export default function LiveRoomPage() {
 
   const handleEndLive = async () => {
     if (ending) return;
-    if (!window.confirm("Завершить прямой эфир?")) return;
+    if (!(await confirmDialog({ message: "Завершить прямой эфир?", confirmText: "Завершить", destructive: true }))) return;
     setEnding(true);
     try {
       await api.live.endLive(sessionId);

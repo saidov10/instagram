@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useSelector } from "react-redux";
-import { ShieldAlert, Flag, MessageSquareWarning } from "lucide-react";
+import { ShieldAlert, Flag, MessageSquareWarning, BadgeCheck, Search } from "lucide-react";
 import { RootState } from "../../store/store";
 import { api } from "../../services/api";
 
@@ -92,16 +92,16 @@ function QueueTab({
           ))}
         </div>
       ) : items.length === 0 ? (
-        <p className="text-sm text-zinc-450 text-center py-16">Очередь пуста.</p>
+        <p className="text-sm text-zinc-500 text-center py-16">Очередь пуста.</p>
       ) : (
         <div className="flex flex-col gap-3">
           {items.map((item) => (
-            <div key={item.id} className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800 flex flex-col gap-2">
+            <div key={item.id} className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase text-zinc-450">
+                <span className="text-xs font-bold uppercase text-zinc-500">
                   {item.targetType} #{item.targetId}
                 </span>
-                <span className="text-xs text-zinc-450">{new Date(item.createAt).toLocaleString()}</span>
+                <span className="text-xs text-zinc-500">{new Date(item.createAt).toLocaleString()}</span>
               </div>
               <p className="text-sm font-semibold">{item.reason}</p>
               {item.resolutionNote && <p className="text-xs text-zinc-500">Note: {item.resolutionNote}</p>}
@@ -134,9 +134,89 @@ function QueueTab({
   );
 }
 
+/** Internal verified-badge tool. The backend does not admin-gate set-verified-badge — this is gated here. */
+function VerifyTab() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+
+  const search = async () => {
+    const q = query.trim().replace(/^@/, "");
+    if (!q) return;
+    setLoading(true);
+    try {
+      const list = await api.user.getUsers({ userName: q, pageSize: 10 });
+      setResults(list || []);
+    } catch {
+      setResults([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleBadge = async (u: any) => {
+    const id = u.id || u.userId;
+    const next = !u.isVerified;
+    setBusy((b) => ({ ...b, [id]: true }));
+    try {
+      await api.user.setVerifiedBadge(id, next);
+      setResults((prev) => prev.map((x) => ((x.id || x.userId) === id ? { ...x, isVerified: next } : x)));
+    } catch (err) {
+      console.error("Failed to set verified badge:", err);
+    } finally {
+      setBusy((b) => ({ ...b, [id]: false }));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && search()}
+          placeholder="Имя пользователя"
+          className="flex-1 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm outline-none"
+        />
+        <button onClick={search} className="btn-primary text-sm px-4 py-2 rounded-lg cursor-pointer flex items-center gap-1.5">
+          <Search className="w-4 h-4" /> Найти
+        </button>
+      </div>
+      {loading ? (
+        <div className="w-full h-16 rounded-xl shimmer" />
+      ) : results.length === 0 ? (
+        <p className="text-sm text-zinc-500 text-center py-10">Введите имя пользователя, чтобы найти аккаунт.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {results.map((u) => {
+            const id = u.id || u.userId;
+            return (
+              <div key={id} className="flex items-center justify-between p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
+                <span className="text-sm font-semibold flex items-center gap-1.5">
+                  {u.userName || u.username}
+                  {u.isVerified && <BadgeCheck className="w-4 h-4 text-[#3897F0]" />}
+                </span>
+                <button
+                  onClick={() => toggleBadge(u)}
+                  disabled={busy[id]}
+                  className="text-xs font-bold px-3 py-1.5 rounded-lg glass hover:shadow-soft cursor-pointer disabled:opacity-50"
+                >
+                  {u.isVerified ? "Снять галочку" : "Верифицировать"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ModerationDashboard() {
   const { currentUser } = useSelector((state: RootState) => state.auth);
-  const [tab, setTab] = useState<"reports" | "appeals">("reports");
+  const [tab, setTab] = useState<"reports" | "appeals" | "verify">("reports");
 
   const isAllowed = !!currentUser && ADMIN_USERNAMES.includes(currentUser.username);
 
@@ -147,7 +227,7 @@ export default function ModerationDashboard() {
       <div className="flex flex-col items-center justify-center py-24 text-center gap-3 text-black dark:text-white">
         <ShieldAlert className="w-10 h-10 text-zinc-400" />
         <h2 className="text-lg font-bold">Доступ запрещён</h2>
-        <p className="text-sm text-zinc-450 max-w-xs">Эта панель доступна только внутренней команде модерации.</p>
+        <p className="text-sm text-zinc-500 max-w-xs">Эта панель доступна только внутренней команде модерации.</p>
       </div>
     );
   }
@@ -161,7 +241,7 @@ export default function ModerationDashboard() {
         <button
           onClick={() => setTab("reports")}
           className={`flex items-center gap-1.5 px-4 py-3 text-sm font-semibold border-b-2 cursor-pointer ${
-            tab === "reports" ? "border-current" : "border-transparent text-zinc-450"
+            tab === "reports" ? "border-current" : "border-transparent text-zinc-500"
           }`}
         >
           <Flag className="w-4 h-4" /> Жалобы
@@ -169,17 +249,27 @@ export default function ModerationDashboard() {
         <button
           onClick={() => setTab("appeals")}
           className={`flex items-center gap-1.5 px-4 py-3 text-sm font-semibold border-b-2 cursor-pointer ${
-            tab === "appeals" ? "border-current" : "border-transparent text-zinc-450"
+            tab === "appeals" ? "border-current" : "border-transparent text-zinc-500"
           }`}
         >
           <MessageSquareWarning className="w-4 h-4" /> Апелляции
+        </button>
+        <button
+          onClick={() => setTab("verify")}
+          className={`flex items-center gap-1.5 px-4 py-3 text-sm font-semibold border-b-2 cursor-pointer ${
+            tab === "verify" ? "border-current" : "border-transparent text-zinc-500"
+          }`}
+        >
+          <BadgeCheck className="w-4 h-4" /> Верификация
         </button>
       </div>
 
       {tab === "reports" ? (
         <QueueTab kind="report" fetchFn={api.report.getReports} resolveFn={api.report.resolveReport} />
-      ) : (
+      ) : tab === "appeals" ? (
         <QueueTab kind="appeal" fetchFn={api.report.getAppeals} resolveFn={api.report.resolveAppeal} />
+      ) : (
+        <VerifyTab />
       )}
     </div>
   );

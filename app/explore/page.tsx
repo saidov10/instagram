@@ -330,12 +330,12 @@ export default function ExplorePage() {
                 <div className="flex justify-between items-center mb-3">
                   <div className="flex gap-4">
                     <button onClick={() => handleLike(selectedItem.id)}>
-                      <Heart className={`w-6 h-6 ${selectedItem.isLiked ? "text-red-500 fill-red-500" : "text-zinc-800 dark:text-zinc-250 hover:text-zinc-500"}`} />
+                      <Heart className={`w-6 h-6 ${selectedItem.isLiked ? "text-red-500 fill-red-500" : "text-zinc-800 dark:text-zinc-300 hover:text-zinc-500"}`} />
                     </button>
-                    <button><MessageCircle className="w-6 h-6 text-zinc-800 dark:text-zinc-250" /></button>
-                    <button><Send className="w-6 h-6 text-zinc-800 dark:text-zinc-250" /></button>
+                    <button><MessageCircle className="w-6 h-6 text-zinc-800 dark:text-zinc-300" /></button>
+                    <button><Send className="w-6 h-6 text-zinc-800 dark:text-zinc-300" /></button>
                   </div>
-                  <button><Bookmark className="w-6 h-6 text-zinc-800 dark:text-zinc-250" /></button>
+                  <button><Bookmark className="w-6 h-6 text-zinc-800 dark:text-zinc-300" /></button>
                 </div>
                 <button
                   onClick={() => setLikersModalPostId(selectedItem.id)}
@@ -347,7 +347,7 @@ export default function ExplorePage() {
 
               <form onSubmit={handleAddComment} className="border-t border-zinc-200 dark:border-zinc-800 p-3 flex items-center justify-between">
                 <div className="flex items-center gap-3 flex-1">
-                  <button type="button" className="text-zinc-750 dark:text-zinc-250 hover:text-zinc-500">
+                  <button type="button" className="text-zinc-800 dark:text-zinc-300 hover:text-zinc-500">
                     <Smile className="w-5 h-5" />
                   </button>
                   <input

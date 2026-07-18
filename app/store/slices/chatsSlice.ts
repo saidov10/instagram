@@ -307,6 +307,29 @@ export const reactToMessage = createAsyncThunk(
   }
 );
 
+export const removeReaction = createAsyncThunk(
+  "chats/removeReaction",
+  async ({ messageId, chatId }: { messageId: number; chatId: number }, { rejectWithValue }) => {
+    try {
+      await api.chat.deleteReaction(messageId);
+      return { messageId, chatId };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to remove reaction.");
+    }
+  }
+);
+
+export const forwardMessage = createAsyncThunk(
+  "chats/forwardMessage",
+  async ({ messageId, targetChatIds }: { messageId: number; targetChatIds: number[] }, { rejectWithValue }) => {
+    try {
+      return await api.chat.forwardMessage(messageId, targetChatIds);
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to forward message.");
+    }
+  }
+);
+
 export const deleteMessage = createAsyncThunk(
   "chats/deleteMessage",
   async ({ messageId, chatId, forEveryone }: { messageId: number; chatId: number; forEveryone?: boolean }, { rejectWithValue }) => {
@@ -454,6 +477,15 @@ const chatsSlice = createSlice({
         if (state.activeChat && state.activeChat.id === chatId) {
           const msg = state.activeChat.messages.find((m) => m.id === messageId);
           if (msg) msg.reaction = reaction;
+        }
+      })
+
+      // Remove a reaction
+      .addCase(removeReaction.fulfilled, (state, action) => {
+        const { messageId, chatId } = action.payload;
+        if (state.activeChat && state.activeChat.id === chatId) {
+          const msg = state.activeChat.messages.find((m) => m.id === messageId);
+          if (msg) msg.reaction = undefined;
         }
       })
 

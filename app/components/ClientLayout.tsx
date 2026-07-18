@@ -14,6 +14,7 @@ import { getStoredToken, api, getFullImageUrl } from "../services/api";
 import { ACTIVITY_PING_INTERVAL_MS } from "../lib/presence";
 import NotificationsPanel from "./NotificationsPanel";
 import Avatar from "./Avatar";
+import { toast } from "../lib/toast";
 import SmartImage from "./SmartImage";
 import MusicPicker, { MusicTrack } from "./MusicPicker";
 import {
@@ -128,6 +129,8 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [postHideLikes, setPostHideLikes] = useState(false);
   const [postAgeRestricted, setPostAgeRestricted] = useState(false);
   const [postCloseFriendsOnly, setPostCloseFriendsOnly] = useState(false);
+  // Accessibility alt text for the single composed image.
+  const [postAltText, setPostAltText] = useState("");
 
   // Post location tagging
   const [showLocationPicker, setShowLocationPicker] = useState(false);
@@ -567,6 +570,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     setPostHideLikes(false);
     setPostAgeRestricted(false);
     setPostCloseFriendsOnly(false);
+    setPostAltText("");
     setShowLocationPicker(false);
     setLocationQuery("");
     setLocationResults([]);
@@ -596,7 +600,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     setIsUploading(true);
     setUploadError(null);
     try {
-      if (createType === "story") {
+      if (createType === "story" && isScheduling && scheduledFor) {
+        // Scheduled stories are simple (file + time + audience) — stickers aren't carried.
+        await api.story.scheduleStory(imageFile, new Date(scheduledFor).toISOString(), isForCloseFriends);
+      } else if (createType === "story") {
         const question = stickerQuestion.trim();
         // A sticker only ships if it's actually filled in — a half-typed poll is dropped.
         const sticker =
@@ -652,6 +659,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           isForCloseFriends: postCloseFriendsOnly,
           locationId: selectedLocation?.id,
           productTags: productTags.length > 0 ? productTags : undefined,
+          altTexts: postAltText.trim() ? [postAltText.trim()] : undefined,
         })).unwrap();
         const newPostId = created?.id;
         if (postAgeRestricted && newPostId) {
@@ -662,9 +670,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
       setIsUploading(false);
       setUploadSuccess(true);
       const targetPath =
+        (isScheduling && scheduledFor) ? "/scheduled" :
         createType === "reel" ? "/reels" :
-        createType === "story" ? "/" :
-        (isScheduling && scheduledFor) ? "/scheduled" : "/profile";
+        createType === "story" ? "/" : "/profile";
       setTimeout(() => {
         resetCreateModal();
         router.push(targetPath);
@@ -834,7 +842,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
             <div className="absolute bottom-16 left-0 w-64 glass-strong rounded-2xl shadow-soft-lg p-2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
               <button
                 onClick={toggleTheme}
-                className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-850 text-sm font-medium transition cursor-pointer"
+                className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-sm font-medium transition cursor-pointer"
               >
                 <span className="flex items-center gap-3 text-zinc-900 dark:text-white">
                   {theme === "dark" ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
@@ -868,7 +876,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               <hr className="my-2 border-zinc-200 dark:border-zinc-800" />
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 text-red-650 dark:text-red-400 text-sm font-medium transition cursor-pointer"
+                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 text-red-600 dark:text-red-400 text-sm font-medium transition cursor-pointer"
               >
                 <LogOut className="w-5 h-5" />
                 Выйти
@@ -1093,7 +1101,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                             onClick={() => handleFollowToggle(user)}
                             className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition cursor-pointer ${
                               isCurrentlyFollowing
-                                ? "bg-zinc-100 dark:bg-zinc-800 hover:bg-red-50 dark:hover:bg-red-950/30 text-red-650 dark:text-red-400 border border-zinc-200 dark:border-zinc-700"
+                                ? "bg-zinc-100 dark:bg-zinc-800 hover:bg-red-50 dark:hover:bg-red-950/30 text-red-600 dark:text-red-400 border border-zinc-200 dark:border-zinc-700"
                                 : "bg-blue-500 hover:bg-blue-600 text-white"
                             }`}
                           >
@@ -1403,7 +1411,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                       className={`text-sm font-bold pb-1 border-b-2 transition capitalize cursor-pointer ${
                         createType === type
                           ? "border-black dark:border-white text-black dark:text-white"
-                          : "border-transparent text-zinc-400 hover:text-zinc-650 dark:hover:text-zinc-300"
+                          : "border-transparent text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
                       }`}
                     >
                       {type === "post" ? "Публикация" : type === "reel" ? "Reels" : "История"}
@@ -1420,9 +1428,15 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 <button
                   onClick={handleShare}
                   disabled={isUploading || uploadSuccess}
-                  className="text-sm font-semibold text-blue-500 hover:text-blue-650 disabled:opacity-50 cursor-pointer"
+                  className="text-sm font-semibold text-blue-500 hover:text-blue-600 disabled:opacity-50 cursor-pointer"
                 >
-                  {isUploading ? "Делимся..." : uploadSuccess ? "Поделено" : "Поделиться"}
+                  {isUploading
+                    ? "Делимся..."
+                    : uploadSuccess
+                      ? "Поделено"
+                      : isScheduling && scheduledFor
+                        ? "Запланировать"
+                        : "Поделиться"}
                 </button>
               ) : (
                 <div className="flex items-center gap-3">
@@ -1537,7 +1551,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                             className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs outline-none"
                           />
                           <div className="flex gap-2 justify-end">
-                            <button onClick={() => setPendingTagPos(null)} className="text-xs text-zinc-450 cursor-pointer">
+                            <button onClick={() => setPendingTagPos(null)} className="text-xs text-zinc-500 cursor-pointer">
                               Отмена
                             </button>
                             <button
@@ -1569,9 +1583,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 ) : (
                   <div className="flex flex-col items-center text-center">
                     {createType === "reel" ? (
-                      <Film className="w-16 h-16 text-zinc-400 dark:text-zinc-650 mb-4 stroke-[1.2px]" />
+                      <Film className="w-16 h-16 text-zinc-400 dark:text-zinc-700 mb-4 stroke-[1.2px]" />
                     ) : (
-                      <ImageIcon className="w-16 h-16 text-zinc-400 dark:text-zinc-650 mb-4 stroke-[1.2px]" />
+                      <ImageIcon className="w-16 h-16 text-zinc-400 dark:text-zinc-700 mb-4 stroke-[1.2px]" />
                     )}
                     <p className="text-lg font-normal mb-6 text-zinc-800 dark:text-zinc-200">
                       {createType === "story"
@@ -1621,7 +1635,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           <Globe className="w-5 h-5 flex-shrink-0" />
                           <div className="flex flex-col">
                             <span className="text-sm font-semibold">Поделиться со всеми</span>
-                            <span className={`text-[11px] ${!isForCloseFriends ? "text-white/80" : "text-zinc-450"}`}>
+                            <span className={`text-[11px] ${!isForCloseFriends ? "text-white/80" : "text-zinc-500"}`}>
                               Обычная история
                             </span>
                           </div>
@@ -1637,7 +1651,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           <Star className={`w-5 h-5 flex-shrink-0 fill-green-500 text-green-500`} />
                           <div className="flex flex-col">
                             <span className="text-sm font-semibold">Для близких друзей</span>
-                            <span className={`text-[11px] ${isForCloseFriends ? "text-white/80" : "text-zinc-450"}`}>
+                            <span className={`text-[11px] ${isForCloseFriends ? "text-white/80" : "text-zinc-500"}`}>
                               Видно только вашему списку
                             </span>
                           </div>
@@ -1671,7 +1685,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                       </div>
 
                       {(stickerKind === "POLL" || stickerKind === "QUESTION" || mentionUser) && (
-                        <span className="text-[11px] text-zinc-450">Нажмите на фото слева, чтобы разместить стикер.</span>
+                        <span className="text-[11px] text-zinc-500">Нажмите на фото слева, чтобы разместить стикер.</span>
                       )}
 
                       {/* Mention sticker (#21) */}
@@ -1782,7 +1796,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           </div>
                           <div className="flex flex-col min-w-0 flex-1">
                             <span className="text-xs font-semibold truncate">{reelTrack.title}</span>
-                            <span className="text-[10px] text-zinc-450 truncate">{reelTrack.artist}</span>
+                            <span className="text-[10px] text-zinc-500 truncate">{reelTrack.artist}</span>
                           </div>
                           <button
                             onClick={() => setShowMusicPicker(true)}
@@ -1826,6 +1840,30 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           <span className="text-[10px] text-zinc-400">Выберите время звучания истории (от 5 до 45 секунд)</span>
                         </div>
                       )}
+
+                      <hr className="border-zinc-200 dark:border-zinc-800" />
+
+                      {/* Schedule the story for later */}
+                      <button
+                        onClick={() => setIsScheduling((v) => !v)}
+                        className="flex items-center justify-between text-sm w-full cursor-pointer"
+                      >
+                        <span className="font-medium text-zinc-900 dark:text-zinc-200 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" /> Запланировать историю
+                        </span>
+                        <span className={`w-9 h-5 rounded-full flex items-center transition p-0.5 ${isScheduling ? "bg-blue-500 justify-end" : "bg-zinc-300 dark:bg-zinc-700 justify-start"}`}>
+                          <span className="w-4 h-4 rounded-full bg-white" />
+                        </span>
+                      </button>
+                      {isScheduling && (
+                        <input
+                          type="datetime-local"
+                          value={scheduledFor}
+                          min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                          onChange={(e) => setScheduledFor(e.target.value)}
+                          className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                        />
+                      )}
                     </>
                   ) : (
                     <>
@@ -1866,7 +1904,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                               </div>
                               <div className="flex flex-col min-w-0 flex-1">
                                 <span className="text-xs font-semibold truncate">{reelTrack.title}</span>
-                                <span className="text-[10px] text-zinc-450 truncate">{reelTrack.artist}</span>
+                                <span className="text-[10px] text-zinc-500 truncate">{reelTrack.artist}</span>
                               </div>
                               <button
                                 onClick={() => setShowMusicPicker(true)}
@@ -1891,7 +1929,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                             </button>
                           )}
 
-                          <span className="text-[11px] text-zinc-450">
+                          <span className="text-[11px] text-zinc-500">
                             Без выбранной дорожки Reels использует оригинальный звук видео.
                           </span>
                         </>
@@ -1926,9 +1964,27 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                               />
                               <div className="max-h-32 overflow-y-auto flex flex-col gap-1">
                                 {locationLoading ? (
-                                  <span className="text-xs text-zinc-450">Поиск…</span>
+                                  <span className="text-xs text-zinc-500">Поиск…</span>
                                 ) : locationResults.length === 0 && locationQuery.trim() ? (
-                                  <span className="text-xs text-zinc-450">Не найдено.</span>
+                                  <button
+                                    onClick={async () => {
+                                      const city = locationQuery.trim();
+                                      try {
+                                        const res = await api.location.addLocation({ city, state: "", zipCode: "", country: "" });
+                                        const id = res?.locationId || res?.id;
+                                        if (id) {
+                                          setSelectedLocation({ id, label: city });
+                                          setShowLocationPicker(false);
+                                          setLocationQuery("");
+                                        }
+                                      } catch (err: any) {
+                                        toast(err?.message || "Не удалось создать место.", "error");
+                                      }
+                                    }}
+                                    className="text-left text-xs px-2 py-1.5 rounded-lg text-blue-500 font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+                                  >
+                                    + Создать место «{locationQuery.trim()}»
+                                  </button>
                                 ) : (
                                   locationResults.map((loc) => (
                                     <button
@@ -1951,6 +2007,19 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                           )}
                           <hr className="border-zinc-200 dark:border-zinc-800" />
 
+                          {/* Alt text (accessibility) */}
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-medium text-zinc-900 dark:text-zinc-200">Альтернативный текст</label>
+                            <input
+                              value={postAltText}
+                              onChange={(e) => setPostAltText(e.target.value)}
+                              placeholder="Опишите фото для незрячих людей"
+                              maxLength={200}
+                              className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                            />
+                          </div>
+                          <hr className="border-zinc-200 dark:border-zinc-800" />
+
                           {/* Product tags (shopping) */}
                           <button
                             onClick={() => setShowProductTagger((v) => !v)}
@@ -1963,7 +2032,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                             <ShoppingBag className="w-4 h-4 text-zinc-500" />
                           </button>
                           {showProductTagger && (
-                            <span className="text-[11px] text-zinc-450">Нажмите на фото слева, чтобы разместить метку товара.</span>
+                            <span className="text-[11px] text-zinc-500">Нажмите на фото слева, чтобы разместить метку товара.</span>
                           )}
                           {productTags.length > 0 && (
                             <div className="flex flex-wrap gap-2">

@@ -9,6 +9,7 @@ import { likeStory, answerSticker, deleteStory, Story } from "../store/slices/st
 import { api, getFullImageUrl } from "../services/api";
 import Avatar from "./Avatar";
 import SmartImage from "./SmartImage";
+import { confirmDialog } from "../lib/confirm";
 
 /** Quick reactions offered above the reply box. */
 const QUICK_REACTIONS = ["😂", "😮", "😍", "😢", "👏", "🔥"];
@@ -312,7 +313,7 @@ export default function StoryViewer({
   const handleDeleteStory = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (window.confirm("Вы уверены, что хотите удалить эту историю?")) {
+    if (await confirmDialog({ message: "Удалить эту историю?", confirmText: "Удалить", destructive: true })) {
       try {
         await dispatch(deleteStory(story.id)).unwrap();
         const next = nextStoryId === null ? null : listRef.current.find((s) => s.id !== story.id && s.id === nextStoryId);
@@ -473,7 +474,7 @@ export default function StoryViewer({
             {isMine && (
               <button
                 onClick={handleDeleteStory}
-                className="w-7 h-7 rounded-full bg-black/40 hover:bg-red-650 flex items-center justify-center text-white hover:text-white cursor-pointer transition"
+                className="w-7 h-7 rounded-full bg-black/40 hover:bg-red-600 flex items-center justify-center text-white hover:text-white cursor-pointer transition"
                 title="Удалить историю"
               >
                 <Trash2 className="w-3.5 h-3.5" />

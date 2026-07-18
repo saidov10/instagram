@@ -36,7 +36,7 @@ export default function Avatar({ src, name, className = "w-10 h-10", alt }: Avat
       className={`${className} rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden bg-zinc-200 dark:bg-zinc-700 select-none`}
       title={alt || name}
     >
-      <svg viewBox="0 0 24 24" className="w-[72%] h-[72%] text-zinc-450 dark:text-zinc-400" fill="currentColor">
+      <svg viewBox="0 0 24 24" className="w-[72%] h-[72%] text-zinc-500 dark:text-zinc-400" fill="currentColor">
         <circle cx="12" cy="8" r="4" />
         <path d="M4 20c0-4.418 3.582-7 8-7s8 2.582 8 7v1H4v-1z" />
       </svg>

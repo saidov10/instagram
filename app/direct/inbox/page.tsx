@@ -35,7 +35,9 @@ import {
   Shield,
   LogOut,
   Eye,
-  Radio
+  Radio,
+  Forward,
+  X as XIcon
 } from "lucide-react";
 import { AppDispatch, RootState } from "../../store/store";
 import {
@@ -44,6 +46,8 @@ import {
   selectChat,
   sendMessage,
   reactToMessage,
+  removeReaction,
+  forwardMessage,
   deleteMessage,
   deleteChat,
   startNewChat,
@@ -59,6 +63,8 @@ import Avatar from "../../components/Avatar";
 import SmartImage from "../../components/SmartImage";
 import CallPanel, { CallSession, CallType, mapCall } from "../../components/CallPanel";
 import { isOnline, formatLastSeen } from "../../lib/presence";
+import { toast } from "../../lib/toast";
+import { confirmDialog } from "../../lib/confirm";
 import MusicPicker, { MusicTrack } from "../../components/MusicPicker";
 
 interface ChatNote {
@@ -225,16 +231,61 @@ export default function InboxPage() {
   const [vanishBusy, setVanishBusy] = useState(false);
   const touchStartY = useRef<number | null>(null);
 
-  // Ticks so "был(-а) в сети N минут назад" stays truthful without a refetch.
+  // Ticks so the "в сети / был(-а) в сети в HH:MM" line stays truthful without a refetch.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(t);
   }, []);
 
+  // Presence (lastSeenAt) is NOT included in the trimmed chat objects the backend returns —
+  // get-chats / get-chat-by-id only send otherUser = { id, userName, fullName, avatar }. The
+  // real lastSeenAt lives on the user profile, so fetch it per partner and refresh every 30s.
+  const [presenceMap, setPresenceMap] = useState<Record<string, string | null>>({});
+  const partnerIdsKey = chats
+    .filter((c) => !c.isGroup && c.otherUserId)
+    .map((c) => c.otherUserId)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    const ids = partnerIdsKey.split(",").filter(Boolean);
+    if (ids.length === 0) return;
+    let active = true;
+    const load = async () => {
+      const entries = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const p = await api.profile.getUserProfileById(id);
+            return [id, (p?.lastSeenAt ?? null) as string | null] as const;
+          } catch {
+            return [id, null] as const;
+          }
+        })
+      );
+      if (!active) return;
+      setPresenceMap((prev) => {
+        const next = { ...prev };
+        for (const [id, ls] of entries) next[id] = ls;
+        return next;
+      });
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => { active = false; clearInterval(t); };
+  }, [partnerIdsKey]);
+
+  // Resolve a partner's last-seen: prefer freshly-fetched presence, fall back to whatever the chat carried.
+  const seenAt = (userId?: string | null, fallback?: string | null): string | null =>
+    userId && userId in presenceMap ? presenceMap[userId] : (fallback ?? null);
+
   // Emoji / sticker picker + reactions
   const [showEmoji, setShowEmoji] = useState(false);
   const [reactionMsgId, setReactionMsgId] = useState<number | null>(null);
+
+  // Forward-message picker: holds the message id being forwarded + selected target chats.
+  const [forwardMsgId, setForwardMsgId] = useState<number | null>(null);
+  const [forwardTargets, setForwardTargets] = useState<Set<number>>(new Set());
+  const [forwardBusy, setForwardBusy] = useState(false);
 
   // #4 — typing indicator
   const [otherTyping, setOtherTyping] = useState(false);
@@ -340,6 +391,41 @@ export default function InboxPage() {
     if (!selectedChatId) return;
     dispatch(reactToMessage({ messageId, reaction, chatId: selectedChatId }));
     setReactionMsgId(null);
+  };
+
+  const handleRemoveReaction = (messageId: number) => {
+    if (!selectedChatId) return;
+    dispatch(removeReaction({ messageId, chatId: selectedChatId }));
+    setReactionMsgId(null);
+  };
+
+  // ---- Forward a message to one or more other chats ----
+  const toggleForwardTarget = (chatId: number) => {
+    setForwardTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(chatId)) next.delete(chatId);
+      else next.add(chatId);
+      return next;
+    });
+  };
+
+  const handleConfirmForward = async () => {
+    if (forwardMsgId == null || forwardTargets.size === 0 || forwardBusy) return;
+    setForwardBusy(true);
+    try {
+      const res = await dispatch(
+        forwardMessage({ messageId: forwardMsgId, targetChatIds: Array.from(forwardTargets) })
+      ).unwrap();
+      const skipped = (res?.skipped || []).length;
+      setForwardMsgId(null);
+      setForwardTargets(new Set());
+      if (skipped > 0) toast(`Переслано. Пропущено чатов: ${skipped}.`);
+      else toast("Переслано", "success");
+    } catch (err: any) {
+      toast(err?.message || "Не удалось переслать сообщение.", "error");
+    } finally {
+      setForwardBusy(false);
+    }
   };
 
   // ---- Emoji / sticker send ----
@@ -578,7 +664,8 @@ export default function InboxPage() {
     catch (err) { console.error("Failed to promote:", err); }
   };
   const handleLeaveGroup = async () => {
-    if (!activeChat || !window.confirm("Покинуть эту группу?")) return;
+    if (!activeChat) return;
+    if (!(await confirmDialog({ message: "Покинуть эту группу?", confirmText: "Выйти", destructive: true }))) return;
     try {
       await api.chat.leaveGroup(activeChat.id);
       setShowGroupInfo(false);
@@ -1006,7 +1093,7 @@ export default function InboxPage() {
 
   const handleDeleteChatThread = async (id: number) => {
     try {
-      if (window.confirm("Удалить этот чат?")) {
+      if (await confirmDialog({ message: "Удалить этот чат?", confirmText: "Удалить", destructive: true })) {
         await dispatch(deleteChat(id)).unwrap();
         setSelectedChatId(null);
       }
@@ -1105,9 +1192,9 @@ export default function InboxPage() {
             />
           </div>
           {searchQuery.trim() && (messageSearchLoading || messageSearchResults.length > 0) && (
-            <div className="mt-2 max-h-48 overflow-y-auto flex flex-col gap-1 rounded-lg border border-zinc-150 dark:border-zinc-800">
+            <div className="mt-2 max-h-48 overflow-y-auto flex flex-col gap-1 rounded-lg border border-zinc-200 dark:border-zinc-800">
               {messageSearchLoading ? (
-                <span className="text-xs text-zinc-450 p-3">Поиск сообщений...</span>
+                <span className="text-xs text-zinc-500 p-3">Поиск сообщений...</span>
               ) : (
                 messageSearchResults.map((r) => (
                   <button
@@ -1177,9 +1264,9 @@ export default function InboxPage() {
 
         {/* Sub-tabs */}
         <div className="flex items-center justify-between px-5 border-b border-zinc-200 dark:border-zinc-800 pb-2">
-          <div className="flex gap-6 text-sm font-semibold select-none text-zinc-450 dark:text-zinc-500">
+          <div className="flex gap-6 text-sm font-semibold select-none text-zinc-500 dark:text-zinc-500">
             <span className="text-black dark:text-white border-b-2 border-black dark:border-white pb-2 cursor-pointer">Основная</span>
-            <span className="hover:text-zinc-650 dark:hover:text-zinc-350 cursor-pointer pb-2">Общая</span>
+            <span className="hover:text-zinc-700 dark:hover:text-zinc-400 cursor-pointer pb-2">Общая</span>
           </div>
         </div>
 
@@ -1206,7 +1293,7 @@ export default function InboxPage() {
               <span className="font-bold text-sm">Запросы на переписку</span>
             </div>
             {messageRequests.length === 0 ? (
-              <div className="text-center p-8 text-zinc-450 dark:text-zinc-500 text-sm">Новых запросов нет.</div>
+              <div className="text-center p-8 text-zinc-500 dark:text-zinc-500 text-sm">Новых запросов нет.</div>
             ) : (
               messageRequests.map((req) => (
                 <div key={req.chatId} className="flex items-center gap-3 p-4 px-5 border-b border-zinc-50 dark:border-zinc-900/60">
@@ -1215,7 +1302,7 @@ export default function InboxPage() {
                   </Link>
                   <div className="flex flex-col min-w-0 flex-1">
                     <span className="font-semibold text-sm truncate">{req.username}</span>
-                    <span className="text-xs text-zinc-450 truncate">{req.preview}</span>
+                    <span className="text-xs text-zinc-500 truncate">{req.preview}</span>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <button
@@ -1243,7 +1330,7 @@ export default function InboxPage() {
           {loading ? (
             <ChatsListSkeleton />
           ) : filteredChats.length === 0 ? (
-            <div className="text-center p-8 text-zinc-450 dark:text-zinc-500 text-sm">Чаты не найдены.</div>
+            <div className="text-center p-8 text-zinc-500 dark:text-zinc-500 text-sm">Чаты не найдены.</div>
           ) : (
             filteredChats.map((chat) => {
               const lastMsg = chat.lastMessage || chat.messages[chat.messages.length - 1];
@@ -1255,7 +1342,7 @@ export default function InboxPage() {
                     e.preventDefault();
                     dispatch(pinChat({ chatId: chat.id, isPinned: !chat.isPinned }))
                       .unwrap()
-                      .catch((err: any) => alert(err?.message || "Не удалось закрепить чат (максимум 3)."));
+                      .catch((err: any) => toast(err?.message || "Не удалось закрепить чат (максимум 3).", "error"));
                   }}
                   title="ПКМ — закрепить/открепить"
                   className={`flex items-center justify-between p-4 px-5 hover:bg-zinc-50 dark:hover:bg-zinc-900/60 cursor-pointer transition ${
@@ -1271,7 +1358,7 @@ export default function InboxPage() {
                         name={chat.username}
                         className="w-14 h-14 border border-zinc-200 dark:border-zinc-800"
                       />
-                      {!chat.isGroup && isOnline(chat.lastSeenAt, now) && (
+                      {!chat.isGroup && isOnline(seenAt(chat.otherUserId, chat.lastSeenAt), now) && (
                         <span
                           title="В сети"
                           className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white dark:border-black rounded-full"
@@ -1329,7 +1416,7 @@ export default function InboxPage() {
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setSelectedChatId(null)}
-                  className="md:hidden p-1 mr-1 hover:bg-zinc-150 dark:hover:bg-zinc-900 rounded-full"
+                  className="md:hidden p-1 mr-1 hover:bg-zinc-200 dark:hover:bg-zinc-900 rounded-full"
                 >
                   <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
@@ -1344,7 +1431,7 @@ export default function InboxPage() {
                       name={activeChat.username}
                       className="w-10 h-10 hover:opacity-90 transition"
                     />
-                    {isOnline(activeChat.lastSeenAt, now) && (
+                    {isOnline(seenAt(activeChat.otherUserId, activeChat.lastSeenAt), now) && (
                       <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-black rounded-full" />
                     )}
                   </Link>
@@ -1356,7 +1443,7 @@ export default function InboxPage() {
                       name={activeChat.username}
                       className="w-10 h-10"
                     />
-                    {!activeChat.isGroup && isOnline(activeChat.lastSeenAt, now) && (
+                    {!activeChat.isGroup && isOnline(seenAt(activeChat.otherUserId, activeChat.lastSeenAt), now) && (
                       <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-black rounded-full" />
                     )}
                   </div>
@@ -1373,11 +1460,24 @@ export default function InboxPage() {
                   ) : (
                     <span className="font-semibold text-sm">{activeChat.username}</span>
                   )}
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium">
-                    {activeChat.isGroup
-                      ? participantsLabel(activeChat.groupInfo?.participantsCount || 0)
-                      : formatLastSeen(activeChat.lastSeenAt, now)}
-                  </span>
+                  {activeChat.isGroup ? (
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium">
+                      {participantsLabel(activeChat.groupInfo?.participantsCount || 0)}
+                    </span>
+                  ) : otherTyping ? (
+                    <span className="text-[11px] font-semibold text-link flex items-center gap-1">
+                      печатает
+                      <span className="inline-flex items-center gap-0.5">
+                        <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium">
+                      {formatLastSeen(seenAt(activeChat.otherUserId, activeChat.lastSeenAt), now)}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1540,7 +1640,7 @@ export default function InboxPage() {
                             {isMe ? "Отправлено (только для просмотра)" : "Нажмите, чтобы посмотреть"}
                           </button>
                         ) : msg.isViewOnce && msg.viewOnceOpened && !isMe ? (
-                          <div className="flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm glass rounded-bl-md text-zinc-450">
+                          <div className="flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm glass rounded-bl-md text-zinc-500">
                             <Eye className="w-4 h-4" /> Открыто
                           </div>
                         ) : msg.image ? (
@@ -1583,6 +1683,16 @@ export default function InboxPage() {
                           >
                             <SmilePlus className="w-4 h-4" />
                           </button>
+                          {/* Forward — view-once (and already-unsent) messages can't be forwarded */}
+                          {!msg.isViewOnce && (
+                            <button
+                              onClick={() => { setForwardMsgId(msg.id); setForwardTargets(new Set()); }}
+                              className="p-1.5 glass rounded-full press hover:shadow-soft cursor-pointer"
+                              title="Переслать"
+                            >
+                              <Forward className="w-4 h-4" />
+                            </button>
+                          )}
                           {isMe && (
                             <>
                               <button
@@ -1615,6 +1725,15 @@ export default function InboxPage() {
                                 {r}
                               </button>
                             ))}
+                            {msg.reaction && (
+                              <button
+                                onClick={() => handleRemoveReaction(msg.id)}
+                                className="ml-1 p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 cursor-pointer"
+                                title="Убрать реакцию"
+                              >
+                                <XIcon className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1758,7 +1877,7 @@ export default function InboxPage() {
                 <button
                   type="button"
                   onClick={() => setShowEmoji((v) => !v)}
-                  className={`cursor-pointer transition press ${showEmoji ? "text-[var(--accent-2)]" : "text-zinc-700 dark:text-zinc-300 hover:text-zinc-550"}`}
+                  className={`cursor-pointer transition press ${showEmoji ? "text-[var(--accent-2)]" : "text-zinc-700 dark:text-zinc-300 hover:text-zinc-600"}`}
                 >
                   <Smile className="w-5 h-5" />
                 </button>
@@ -1767,11 +1886,11 @@ export default function InboxPage() {
                   placeholder="Напишите сообщение..."
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 text-zinc-900 dark:text-white"
+                  className="bg-transparent text-sm w-full outline-none placeholder-zinc-500 text-zinc-900 dark:text-white"
                 />
 
                 {inputText.trim() ? (
-                  <button type="submit" className="text-blue-500 font-semibold text-sm hover:text-blue-650 px-1 animate-in fade-in duration-200 cursor-pointer">
+                  <button type="submit" className="text-blue-500 font-semibold text-sm hover:text-blue-600 px-1 animate-in fade-in duration-200 cursor-pointer">
                     Отправить
                   </button>
                 ) : (
@@ -1818,7 +1937,7 @@ export default function InboxPage() {
             </p>
             <button
               onClick={() => setShowCreateChatModal(true)}
-              className="bg-blue-500 hover:bg-blue-650 active:bg-blue-700 text-white font-bold text-sm px-5 py-2.5 rounded-lg transition cursor-pointer"
+              className="bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white font-bold text-sm px-5 py-2.5 rounded-lg transition cursor-pointer"
             >
               Отправить сообщение
             </button>
@@ -2045,7 +2164,7 @@ export default function InboxPage() {
                     </div>
                     <div className="flex flex-col min-w-0 flex-1">
                       <span className="text-xs font-semibold truncate">{newNoteTrack.title}</span>
-                      <span className="text-[10px] text-zinc-450 truncate">{newNoteTrack.artist}</span>
+                      <span className="text-[10px] text-zinc-500 truncate">{newNoteTrack.artist}</span>
                     </div>
                     <button
                       onClick={() => setShowMusicPicker(true)}
@@ -2123,7 +2242,7 @@ export default function InboxPage() {
                 </button>
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-semibold truncate">{viewingNote.musicTrack.title}</span>
-                  <span className="text-[10px] text-zinc-450 truncate">{viewingNote.musicTrack.artist}</span>
+                  <span className="text-[10px] text-zinc-500 truncate">{viewingNote.musicTrack.artist}</span>
                 </div>
                 <audio
                   ref={noteAudioRef}
@@ -2245,7 +2364,7 @@ export default function InboxPage() {
 
             {/* Search Input */}
             <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
-              <span className="text-sm font-semibold text-zinc-550 dark:text-zinc-400">Кому:</span>
+              <span className="text-sm font-semibold text-zinc-600 dark:text-zinc-400">Кому:</span>
               <input
                 type="text"
                 placeholder="Поиск..."
@@ -2258,7 +2377,7 @@ export default function InboxPage() {
             {/* Results */}
             <div className="flex-1 overflow-y-auto max-h-[300px] p-2 flex flex-col gap-1.5">
               {searchUsersResults.length === 0 ? (
-                <p className="text-zinc-450 dark:text-zinc-500 text-sm text-center py-10">
+                <p className="text-zinc-500 dark:text-zinc-500 text-sm text-center py-10">
                   {userSearchText.trim()
                     ? "Пользователи не найдены."
                     : createMode === "group"
@@ -2289,7 +2408,7 @@ export default function InboxPage() {
                             <span className="font-bold text-sm leading-none truncate">
                               {user.userName || user.username}
                             </span>
-                            <span className="text-xs text-zinc-450 leading-none mt-1 truncate">
+                            <span className="text-xs text-zinc-500 leading-none mt-1 truncate">
                               {user.fullName || user.name}
                             </span>
                           </div>
@@ -2315,7 +2434,7 @@ export default function InboxPage() {
             {/* Create group action */}
             {createMode === "group" && (
               <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
-                <span className="text-xs text-zinc-450 flex-1">
+                <span className="text-xs text-zinc-500 flex-1">
                   {groupMembers.length < 2
                     ? "Выберите минимум 2 участника."
                     : `Выбрано: ${groupMembers.length}`}
@@ -2329,6 +2448,52 @@ export default function InboxPage() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- FORWARD MESSAGE PICKER ----------------- */}
+      {forwardMsgId != null && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setForwardMsgId(null)}>
+          <div
+            className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-sm overflow-hidden flex flex-col shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
+              <button onClick={() => setForwardMsgId(null)} className="hover:opacity-70 cursor-pointer">
+                <XIcon className="w-5 h-5" />
+              </button>
+              <h3 className="font-bold text-base">Переслать</h3>
+              <div className="w-5" />
+            </div>
+            <div className="flex-1 overflow-y-auto max-h-[50vh] p-2 flex flex-col">
+              {chats.length === 0 ? (
+                <p className="text-sm text-zinc-500 text-center py-8">Нет доступных чатов.</p>
+              ) : (
+                chats.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => toggleForwardTarget(c.id)}
+                    className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer text-left"
+                  >
+                    <Avatar src={c.avatar} name={c.username} className="w-10 h-10" />
+                    <span className="flex-1 text-sm font-semibold truncate">{c.username}</span>
+                    <span className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${forwardTargets.has(c.id) ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-600"}`}>
+                      {forwardTargets.has(c.id) && <Check className="w-3 h-3 text-white" />}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="p-4 border-t border-zinc-200 dark:border-zinc-800">
+              <button
+                onClick={handleConfirmForward}
+                disabled={forwardTargets.size === 0 || forwardBusy}
+                className="btn-primary w-full py-2.5 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {forwardBusy ? "Пересылаем…" : `Переслать${forwardTargets.size > 0 ? ` (${forwardTargets.size})` : ""}`}
+              </button>
+            </div>
           </div>
         </div>
       )}

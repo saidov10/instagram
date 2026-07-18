@@ -52,6 +52,7 @@ import {
   deletePost,
   updatePostCaption,
   togglePostComments,
+  updateCommentPermission,
   toggleLikeCountVisibility,
   toggleSensitive,
   toggleAgeRestricted,
@@ -64,6 +65,8 @@ import { ProfileSkeleton } from "../components/SkeletonLoader";
 import { useApp } from "../context/AppContext";
 import { Bookmark as BookmarkIcon } from "lucide-react";
 import Avatar from "../components/Avatar";
+import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 import SmartImage from "../components/SmartImage";
 import Highlights from "../components/Highlights";
 import VerifiedBadge from "../components/VerifiedBadge";
@@ -215,7 +218,7 @@ export default function ProfilePage() {
 
   const handleBulkDelete = async () => {
     if (selectedPostIds.size === 0 || bulkBusy) return;
-    if (!window.confirm(`Удалить ${selectedPostIds.size} публикаций? Это действие необратимо.`)) return;
+    if (!(await confirmDialog({ message: `Удалить ${selectedPostIds.size} публикаций? Это действие необратимо.`, confirmText: "Удалить", destructive: true }))) return;
     setBulkBusy(true);
     try {
       await dispatch(bulkDeletePosts(Array.from(selectedPostIds))).unwrap();
@@ -234,13 +237,30 @@ export default function ProfilePage() {
       const matches = await api.user.getUsers({ userName: username, pageSize: 5 });
       const match = matches.find((u: any) => (u.userName || u.username || "").toLowerCase() === username.toLowerCase()) || matches[0];
       if (!match) {
-        alert("Пользователь не найден.");
+        toast("Пользователь не найден.", "error");
         return;
       }
       await api.user.addCollectionCollaborator(collectionId, match.id || match.userId);
-      alert(`@${match.userName || match.username} добавлен(а) в коллекцию.`);
+      toast(`@${match.userName || match.username} добавлен(а) в коллекцию.`, "success");
     } catch (err: any) {
-      alert(err?.message || "Не удалось добавить участника.");
+      toast(err?.message || "Не удалось добавить участника.", "error");
+    }
+  };
+
+  const handleRemoveCollaborator = async (collectionId: number) => {
+    const username = window.prompt("Имя пользователя, которого убрать из коллекции")?.trim().replace(/^@/, "");
+    if (!username) return;
+    try {
+      const matches = await api.user.getUsers({ userName: username, pageSize: 5 });
+      const match = matches.find((u: any) => (u.userName || u.username || "").toLowerCase() === username.toLowerCase()) || matches[0];
+      if (!match) {
+        toast("Пользователь не найден.", "error");
+        return;
+      }
+      await api.user.removeCollectionCollaborator(collectionId, match.id || match.userId);
+      toast(`@${match.userName || match.username} удалён(а) из коллекции.`, "success");
+    } catch (err: any) {
+      toast(err?.message || "Не удалось убрать участника.", "error");
     }
   };
 
@@ -248,7 +268,7 @@ export default function ProfilePage() {
     try {
       await dispatch(pinPostToProfile({ postId: post.id, isPinned: !post.isPinnedToProfile })).unwrap();
     } catch (err: any) {
-      alert(err?.message || "Не удалось закрепить публикацию (максимум 3).");
+      toast(err?.message || "Не удалось закрепить публикацию (максимум 3).", "error");
     }
   };
 
@@ -262,6 +282,13 @@ export default function ProfilePage() {
   const handleTogglePostComments = (post: { id: number; allowComments: boolean }) => {
     dispatch(togglePostComments({ postId: post.id, allowComments: !post.allowComments }));
     setShowDetailMenu(false);
+  };
+  const handleSetCommentPermissionDetail = (
+    post: { id: number; commentPermission?: "EVERYONE" | "FOLLOWING" | "FOLLOWERS" },
+    commentPermission: "EVERYONE" | "FOLLOWING" | "FOLLOWERS"
+  ) => {
+    if ((post.commentPermission || "EVERYONE") === commentPermission) return;
+    dispatch(updateCommentPermission({ postId: post.id, commentPermission }));
   };
   const handleToggleLikeCountDetail = (post: { id: number; hideLikeCount?: boolean }) => {
     dispatch(toggleLikeCountVisibility({ postId: post.id, hideLikeCount: !post.hideLikeCount }));
@@ -313,13 +340,13 @@ export default function ProfilePage() {
     try {
       await api.story.sharePostToStory(postId);
     } catch (err: any) {
-      alert(err?.message || "Автор отключил репост этой публикации в истории.");
+      toast(err?.message || "Автор отключил репост этой публикации в истории.", "error");
     }
   };
 
   const handleRemoveFollower = async (userId: string) => {
     if (removingFollowerId) return;
-    if (!window.confirm("Убрать этого подписчика?")) return;
+    if (!(await confirmDialog({ message: "Убрать этого подписчика?", confirmText: "Убрать", destructive: true }))) return;
     setRemovingFollowerId(userId);
     const snapshot = followers;
     setFollowers((prev) => prev.filter((f) => f.id !== userId));
@@ -437,7 +464,7 @@ export default function ProfilePage() {
   };
 
   const handleDeleteCollection = async (collectionId: number) => {
-    if (!window.confirm("Удалить эту коллекцию?")) return;
+    if (!(await confirmDialog({ message: "Удалить эту коллекцию?", confirmText: "Удалить", destructive: true }))) return;
     try {
       await dispatch(deleteCollection(collectionId)).unwrap();
       if (openCollection === collectionId) setOpenCollection(null);
@@ -474,7 +501,7 @@ export default function ProfilePage() {
   };
 
   const handleDeletePost = async (postId: number) => {
-    if (window.confirm("Вы уверены, что хотите удалить эту публикацию?")) {
+    if (await confirmDialog({ message: "Удалить эту публикацию?", confirmText: "Удалить", destructive: true })) {
       try {
         await dispatch(deletePost(postId)).unwrap();
         setSelected(null);
@@ -557,7 +584,7 @@ export default function ProfilePage() {
               <ChevronDown className="w-5 h-5 text-zinc-500 group-hover:text-black dark:group-hover:text-white" />
             </button>
             {currentUser.isInQuietMode && (
-              <span className="text-xs text-zinc-450 flex items-center gap-1">🌙 В тихом режиме</span>
+              <span className="text-xs text-zinc-500 flex items-center gap-1">🌙 В тихом режиме</span>
             )}
             <div className="flex gap-2 text-sm font-semibold select-none">
               <button
@@ -609,10 +636,10 @@ export default function ProfilePage() {
             <span className="font-semibold block">
               {currentUser.name}
               {currentUser.pronouns && (
-                <span className="font-normal text-zinc-450 dark:text-zinc-500 ml-1.5">{currentUser.pronouns}</span>
+                <span className="font-normal text-zinc-500 dark:text-zinc-500 ml-1.5">{currentUser.pronouns}</span>
               )}
             </span>
-            <p className="mt-1 text-zinc-650 dark:text-zinc-400 whitespace-pre-wrap">{currentUser.about || "Описание отсутствует."}</p>
+            <p className="mt-1 text-zinc-700 dark:text-zinc-400 whitespace-pre-wrap">{currentUser.about || "Описание отсутствует."}</p>
             {currentUser.website && (
               <a
                 href={/^https?:\/\//.test(currentUser.website) ? currentUser.website : `https://${currentUser.website}`}
@@ -937,12 +964,20 @@ export default function ProfilePage() {
                   {openCollection === "all" ? "Все публикации" : collections.find((c) => c.id === openCollection)?.name || "Коллекция"}
                 </h3>
                 {openCollection !== "all" && (
-                  <button
-                    onClick={() => handleInviteCollaborator(openCollection as number)}
-                    className="text-xs font-semibold text-blue-500 hover:underline cursor-pointer"
-                  >
-                    + Участник
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => handleInviteCollaborator(openCollection as number)}
+                      className="text-xs font-semibold text-blue-500 hover:underline cursor-pointer"
+                    >
+                      + Участник
+                    </button>
+                    <button
+                      onClick={() => handleRemoveCollaborator(openCollection as number)}
+                      className="text-xs font-semibold text-red-500 hover:underline cursor-pointer"
+                    >
+                      − Участник
+                    </button>
+                  </div>
                 )}
               </div>
               {savedPosts.length === 0 ? (
@@ -991,7 +1026,7 @@ export default function ProfilePage() {
                   </div>
                   <div className="flex flex-col min-w-0 flex-1 text-left">
                     <span className="font-semibold text-sm truncate">{audio.title}</span>
-                    <span className="text-xs text-zinc-450 truncate">{audio.artist || "Неизвестный исполнитель"}</span>
+                    <span className="text-xs text-zinc-500 truncate">{audio.artist || "Неизвестный исполнитель"}</span>
                   </div>
                   {audio.audioUrl && (
                     <audio src={audio.audioUrl} controls className="h-9 max-w-[220px] flex-shrink-0" />
@@ -1426,7 +1461,7 @@ export default function ProfilePage() {
                   </p>
                 </div>
 
-                <hr className="border-zinc-150 dark:border-zinc-800" />
+                <hr className="border-zinc-200 dark:border-zinc-800" />
 
                 {/* Other Comments */}
                 {selectedPost.comments.map((comment, index: number) => (
@@ -1530,68 +1565,90 @@ export default function ProfilePage() {
             {isProfessional && (
               <button
                 onClick={() => { setShowDetailMenu(false); router.push(`/p/${selectedPost.id}`); }}
-                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
               >
                 Статистика
               </button>
             )}
             <button
               onClick={() => handlePinToProfileDetail(selectedPost)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {selectedPost.isPinnedToProfile ? "Открепить от профиля" : "Закрепить в профиле"}
             </button>
             <button
               onClick={() => handleOpenEditCaption(selectedPost)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               Редактировать подпись
             </button>
             <button
               onClick={() => handleTogglePostComments(selectedPost)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {selectedPost.allowComments ? "Выключить комментарии" : "Включить комментарии"}
             </button>
+            {selectedPost.allowComments && (
+              <div className="px-4 py-2 flex flex-col gap-1 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide">Кто может комментировать</span>
+                {([
+                  ["EVERYONE", "Все"],
+                  ["FOLLOWING", "Подписки"],
+                  ["FOLLOWERS", "Подписчики"],
+                ] as const).map(([value, label]) => {
+                  const active = (selectedPost.commentPermission || "EVERYONE") === value;
+                  return (
+                    <button
+                      key={value}
+                      onClick={() => handleSetCommentPermissionDetail(selectedPost, value)}
+                      className="flex items-center justify-between py-2 text-sm hover:opacity-70 cursor-pointer text-left"
+                    >
+                      <span className={active ? "font-semibold text-blue-500" : ""}>{label}</span>
+                      {active && <span className="text-blue-500">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <button
               onClick={() => handleToggleLikeCountDetail(selectedPost)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {selectedPost.hideLikeCount ? "Показать количество отметок" : "Скрыть количество отметок"}
             </button>
             <button
               onClick={() => handleToggleSensitiveDetail(selectedPost)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {selectedPost.isSensitive ? "Снять отметку «деликатное»" : "Отметить как деликатное"}
             </button>
             <button
               onClick={() => handleToggleAgeRestrictedDetail(selectedPost)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {selectedPost.isAgeRestricted ? "Снять возрастное ограничение" : "Отметить 18+"}
             </button>
             <button
               onClick={() => handleToggleStorySharingDetail(selectedPost)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {selectedPost.allowStorySharing ? "Запретить репост в истории" : "Разрешить репост в истории"}
             </button>
             <button
               onClick={() => handleShareToStoryDetail(selectedPost.id)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               Добавить в историю
             </button>
             <button
               onClick={() => handleCopyDetailLink(selectedPost.id)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               {detailCopied ? "Ссылка скопирована ✓" : "Скопировать ссылку"}
             </button>
             <button
               onClick={() => setShowDetailMenu(false)}
-              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
             >
               Отмена
             </button>

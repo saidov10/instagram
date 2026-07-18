@@ -4,6 +4,8 @@ import "./globals.css";
 import { AppProvider } from "./context/AppContext";
 import Providers from "./components/Providers";
 import ClientLayout from "./components/ClientLayout";
+import ToastHost from "./components/ToastHost";
+import ConfirmHost from "./components/ConfirmHost";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,6 +36,8 @@ export default function RootLayout({
         <Providers>
           <AppProvider>
             <ClientLayout>{children}</ClientLayout>
+            <ToastHost />
+            <ConfirmHost />
           </AppProvider>
         </Providers>
       </body>

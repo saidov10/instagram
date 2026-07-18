@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useSelector } from "react-redux";
-import { Grid, Heart, MessageCircle, Lock, X, MoreHorizontal, EyeOff, Eye, Ban, Flag, UserX, VolumeX, ChevronLeft } from "lucide-react";
+import { Grid, Heart, MessageCircle, Lock, X, MoreHorizontal, EyeOff, Eye, Ban, Flag, UserX, VolumeX, ChevronLeft, Star, Mail, Phone, MapPin } from "lucide-react";
 import { RootState } from "../../store/store";
 import { api, getFullImageUrl, ApiError } from "../../services/api";
 import { ProfileSkeleton } from "../../components/SkeletonLoader";
@@ -35,6 +35,11 @@ interface PublicProfile {
   followingCount: number;
   isPrivate: boolean;
   isVerified: boolean;
+  accountType: string;
+  businessEmail: string;
+  businessPhone: string;
+  businessAddress: string;
+  businessCategory: string;
 }
 
 type FollowState = "none" | "following" | "pending";
@@ -70,6 +75,7 @@ export default function UserProfilePage() {
   const [isBlocked, setIsBlocked] = useState(false);
   const [isHidingStoriesFrom, setIsHidingStoriesFrom] = useState(false);
   const [isRestricted, setIsRestricted] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
   const [muteType, setMuteType] = useState<"NONE" | "ALL" | "POSTS" | "STORIES">("NONE");
   const [showMuteSubmenu, setShowMuteSubmenu] = useState(false);
   const [optionsBusy, setOptionsBusy] = useState(false);
@@ -121,6 +127,11 @@ export default function UserProfilePage() {
         followingCount: p.followingCount ?? 0,
         isPrivate,
         isVerified: !!p.isVerified,
+        accountType: p.accountType || "PERSONAL",
+        businessEmail: p.businessEmail || "",
+        businessPhone: p.businessPhone || "",
+        businessAddress: p.businessAddress || "",
+        businessCategory: p.businessCategory || "",
       });
 
       const followStatus = await api.profile.getIsFollowUserProfileById(userId).catch(() => false);
@@ -174,6 +185,9 @@ export default function UserProfilePage() {
         const entry = (list || []).find((u: any) => (u.id || u.userId) === userId);
         setMuteType(entry ? (entry.muteType || "ALL") : "NONE");
       })
+      .catch(() => {});
+    api.user.getFavorites()
+      .then((list) => setIsFavorite((list || []).some((u: any) => (u.id || u.userId) === userId)))
       .catch(() => {});
   }, [userId]);
 
@@ -251,6 +265,27 @@ export default function UserProfilePage() {
       }
     } catch (err) {
       console.error("Failed to toggle hide stories:", err);
+    } finally {
+      setOptionsBusy(false);
+      setShowOptionsMenu(false);
+    }
+  };
+
+  // Favorites: pure feed re-ranking, distinct from Close Friends. Optimistic toggle.
+  const handleToggleFavorite = async () => {
+    if (!userId || optionsBusy) return;
+    setOptionsBusy(true);
+    const prev = isFavorite;
+    setIsFavorite(!prev);
+    try {
+      if (prev) {
+        await api.user.removeFavorite(userId);
+      } else {
+        await api.user.addFavorite(userId);
+      }
+    } catch (err) {
+      console.error("Failed to toggle favorite:", err);
+      setIsFavorite(prev);
     } finally {
       setOptionsBusy(false);
       setShowOptionsMenu(false);
@@ -374,7 +409,7 @@ export default function UserProfilePage() {
               {profile.isVerified && <VerifiedBadge className="w-[18px] h-[18px]" />}
             </h2>
             {profile.isInQuietMode && (
-              <span className="text-xs text-zinc-450 flex items-center gap-1">🌙 В тихом режиме</span>
+              <span className="text-xs text-zinc-500 flex items-center gap-1">🌙 В тихом режиме</span>
             )}
             <div className="flex gap-2 text-sm font-semibold items-center">
               <button
@@ -446,6 +481,15 @@ export default function UserProfilePage() {
                         </button>
                         <hr className="border-[var(--border)]" />
                         <button
+                          onClick={handleToggleFavorite}
+                          disabled={optionsBusy}
+                          className="w-full flex items-center gap-3 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                        >
+                          <Star className={`w-4.5 h-4.5 ${isFavorite ? "fill-current" : ""}`} />
+                          {isFavorite ? "Убрать из избранного" : "Добавить в избранное"}
+                        </button>
+                        <hr className="border-[var(--border)]" />
+                        <button
                           onClick={() => setShowMuteSubmenu(true)}
                           className="w-full flex items-center gap-3 p-3.5 text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
                         >
@@ -505,11 +549,11 @@ export default function UserProfilePage() {
               <span className="font-semibold block">
                 {profile.fullName}
                 {profile.pronouns && (
-                  <span className="font-normal text-zinc-450 dark:text-zinc-500 ml-1.5">{profile.pronouns}</span>
+                  <span className="font-normal text-zinc-500 dark:text-zinc-500 ml-1.5">{profile.pronouns}</span>
                 )}
               </span>
             )}
-            <p className="mt-1 text-zinc-650 dark:text-zinc-400 whitespace-pre-wrap">
+            <p className="mt-1 text-zinc-700 dark:text-zinc-400 whitespace-pre-wrap">
               {profile.about || "Описание отсутствует."}
             </p>
             {profile.website && (
@@ -522,7 +566,43 @@ export default function UserProfilePage() {
                 {profile.website.replace(/^https?:\/\//, "")}
               </a>
             )}
+            {(profile.accountType === "BUSINESS" || profile.accountType === "CREATOR") && profile.businessCategory && (
+              <span className="mt-1 block text-zinc-500 dark:text-zinc-500">{profile.businessCategory}</span>
+            )}
           </div>
+
+          {/* Business contact buttons */}
+          {(profile.accountType === "BUSINESS" || profile.accountType === "CREATOR") &&
+            (profile.businessEmail || profile.businessPhone || profile.businessAddress) && (
+              <div className="flex flex-wrap gap-2">
+                {profile.businessEmail && (
+                  <a
+                    href={`mailto:${profile.businessEmail}`}
+                    className="flex items-center gap-1.5 text-sm font-semibold glass px-4 py-1.5 rounded-lg hover:shadow-soft transition"
+                  >
+                    <Mail className="w-4 h-4" /> Эл. адрес
+                  </a>
+                )}
+                {profile.businessPhone && (
+                  <a
+                    href={`tel:${profile.businessPhone}`}
+                    className="flex items-center gap-1.5 text-sm font-semibold glass px-4 py-1.5 rounded-lg hover:shadow-soft transition"
+                  >
+                    <Phone className="w-4 h-4" /> Позвонить
+                  </a>
+                )}
+                {profile.businessAddress && (
+                  <a
+                    href={`https://maps.google.com/?q=${encodeURIComponent(profile.businessAddress)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-sm font-semibold glass px-4 py-1.5 rounded-lg hover:shadow-soft transition"
+                  >
+                    <MapPin className="w-4 h-4" /> Как добраться
+                  </a>
+                )}
+              </div>
+            )}
         </div>
       </header>
 

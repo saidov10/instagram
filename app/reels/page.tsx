@@ -592,7 +592,7 @@ function ReelsPageInner() {
                       <Flag className="w-4 h-4" /> Пожаловаться
                     </button>
                   ) : (
-                    <span className="block p-3.5 text-sm text-zinc-450 text-left">Это ваш Reel</span>
+                    <span className="block p-3.5 text-sm text-zinc-500 text-left">Это ваш Reel</span>
                   )}
                 </div>
               )}
@@ -609,7 +609,7 @@ function ReelsPageInner() {
           {/* Modal layout for mobile, simple card for desktop */}
           <div className="glass-strong w-full md:w-[350px] h-[70vh] md:h-[85vh] rounded-t-3xl md:rounded-3xl flex flex-col shadow-soft-lg overflow-hidden animate-in slide-in-from-bottom duration-250">
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-zinc-150 dark:border-zinc-800">
+            <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
               <h3 className="font-bold text-base text-zinc-900 dark:text-white">Комментарии</h3>
               <button
                 onClick={() => setShowComments(false)}
@@ -622,7 +622,7 @@ function ReelsPageInner() {
             {/* Comments List */}
             <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 text-left">
               {currentReel.comments.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-zinc-450 dark:text-zinc-500 text-sm">
+                <div className="h-full flex items-center justify-center text-zinc-500 dark:text-zinc-500 text-sm">
                   Нет комментариев. Будьте первыми!
                 </div>
               ) : (
@@ -664,7 +664,7 @@ function ReelsPageInner() {
             {/* Form Box */}
             <form
               onSubmit={handleAddComment}
-              className="border-t border-zinc-150 dark:border-zinc-800 p-4 flex items-center gap-3 bg-white dark:bg-zinc-900"
+              className="border-t border-zinc-200 dark:border-zinc-800 p-4 flex items-center gap-3 bg-white dark:bg-zinc-900"
             >
               <button type="button" className="text-zinc-800 dark:text-white hover:text-zinc-500">
                 <Smile className="w-5 h-5" />
@@ -674,12 +674,12 @@ function ReelsPageInner() {
                 placeholder="Добавить комментарий..."
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
-                className="bg-transparent text-sm w-full outline-none placeholder-zinc-450 text-zinc-900 dark:text-white"
+                className="bg-transparent text-sm w-full outline-none placeholder-zinc-500 text-zinc-900 dark:text-white"
               />
               {newComment.trim() && (
                 <button
                   type="submit"
-                  className="text-blue-500 font-semibold text-sm hover:text-blue-650 cursor-pointer"
+                  className="text-blue-500 font-semibold text-sm hover:text-blue-600 cursor-pointer"
                 >
                   Опубликовать
                 </button>
