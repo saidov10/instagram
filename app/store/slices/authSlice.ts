@@ -1,16 +1,22 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import { api, getStoredToken, setStoredToken, getFullImageUrl } from "../../services/api";
+import { disconnectSocket } from "../../services/socket";
 
 export interface UserState {
   id: string;
   username: string;
   name: string;
+  fullName: string;
+  website: string;
+  pronouns: string;
   avatar: string;
   about: string;
   gender: number;
   isPrivate: boolean;
   isVerified: boolean;
   accountType: "PERSONAL" | "BUSINESS" | "CREATOR";
+  showActivityStatus: boolean;
+  isInQuietMode: boolean;
 }
 
 interface AuthState {
@@ -47,10 +53,10 @@ export const loginUser = createAsyncThunk(
   "auth/login",
   async (data: any, { dispatch, rejectWithValue }) => {
     try {
-      const token = await api.account.login(data);
+      const { token, reactivated } = await api.account.login(data);
       // Automatically load profile on success
       await dispatch(fetchMyProfile());
-      return token;
+      return { token, reactivated: !!reactivated };
     } catch (err: any) {
       return rejectWithValue(err.message || "Login failed.");
     }
@@ -66,12 +72,17 @@ export const fetchMyProfile = createAsyncThunk(
         id: profile.id || profile.userId || "",
         username: profile.userName || profile.username || "user",
         name: profile.name || profile.fullName || "Instagram User",
+        fullName: profile.fullName || "",
+        website: profile.website || "",
+        pronouns: profile.pronouns || "",
         avatar: getFullImageUrl(profile.avatar || profile.imagePath || profile.image),
         about: profile.about || "",
         gender: profile.gender || 0,
         isPrivate: !!profile.isPrivate,
         isVerified: !!profile.isVerified,
         accountType: (profile.accountType || "PERSONAL") as "PERSONAL" | "BUSINESS" | "CREATOR",
+        showActivityStatus: profile.showActivityStatus !== false,
+        isInQuietMode: !!profile.isInQuietMode,
       };
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to load profile.");
@@ -93,12 +104,24 @@ export const updatePrivacy = createAsyncThunk(
 
 export const updateProfile = createAsyncThunk(
   "auth/updateProfile",
-  async (data: { about?: string; gender?: number }, { rejectWithValue }) => {
+  async (data: { about?: string; gender?: number; fullName?: string; website?: string; pronouns?: string }, { rejectWithValue }) => {
     try {
       const profile = await api.profile.updateUserProfile(data);
       return profile;
     } catch (err: any) {
       return rejectWithValue(err.message || "Failed to update profile.");
+    }
+  }
+);
+
+export const updateUsername = createAsyncThunk(
+  "auth/updateUsername",
+  async (userName: string, { rejectWithValue }) => {
+    try {
+      await api.profile.updateUsername(userName);
+      return userName;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to update username.");
     }
   }
 );
@@ -131,6 +154,7 @@ const authSlice = createSlice({
   reducers: {
     logout(state) {
       setStoredToken(null);
+      disconnectSocket();
       state.currentUser = null;
       state.token = null;
       state.isLoggedIn = false;
@@ -168,7 +192,7 @@ const authSlice = createSlice({
       })
       .addCase(loginUser.fulfilled, (state, action) => {
         state.loading = false;
-        state.token = action.payload;
+        state.token = action.payload.token;
         state.isLoggedIn = true;
       })
       .addCase(loginUser.rejected, (state, action) => {
@@ -200,6 +224,12 @@ const authSlice = createSlice({
         if (state.currentUser) {
           state.currentUser.about = action.meta.arg.about ?? state.currentUser.about;
           state.currentUser.gender = action.meta.arg.gender ?? state.currentUser.gender;
+          if (action.meta.arg.fullName !== undefined) {
+            state.currentUser.fullName = action.meta.arg.fullName;
+            state.currentUser.name = action.meta.arg.fullName || state.currentUser.username;
+          }
+          state.currentUser.website = action.meta.arg.website ?? state.currentUser.website;
+          state.currentUser.pronouns = action.meta.arg.pronouns ?? state.currentUser.pronouns;
         }
       })
 
@@ -207,6 +237,13 @@ const authSlice = createSlice({
       .addCase(updatePrivacy.fulfilled, (state, action: PayloadAction<boolean>) => {
         if (state.currentUser) {
           state.currentUser.isPrivate = action.payload;
+        }
+      })
+
+      // Update Username
+      .addCase(updateUsername.fulfilled, (state, action: PayloadAction<string>) => {
+        if (state.currentUser) {
+          state.currentUser.username = action.payload;
         }
       });
   },

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -33,7 +33,9 @@ import {
   UserPlus,
   UserMinus,
   Shield,
-  LogOut
+  LogOut,
+  Eye,
+  Radio
 } from "lucide-react";
 import { AppDispatch, RootState } from "../../store/store";
 import {
@@ -47,13 +49,15 @@ import {
   startNewChat,
   startNewGroupChat,
   toggleVanishMode,
+  openViewOnceMessage,
+  pinChat,
   ReplyPreview,
 } from "../../store/slices/chatsSlice";
 import { api, getFullImageUrl } from "../../services/api";
 import { ChatsListSkeleton } from "../../components/SkeletonLoader";
 import Avatar from "../../components/Avatar";
 import SmartImage from "../../components/SmartImage";
-import CallPanel, { CallSession, CallType, mapCall, ENV_APP_ID } from "../../components/CallPanel";
+import CallPanel, { CallSession, CallType, mapCall } from "../../components/CallPanel";
 import { isOnline, formatLastSeen } from "../../lib/presence";
 import MusicPicker, { MusicTrack } from "../../components/MusicPicker";
 
@@ -117,7 +121,7 @@ function VoiceMessageBubble({ url, durationMs, isMe }: { url?: string; durationM
   const shownSeconds = playing || progress > 0 ? Math.round(totalSeconds * (1 - progress)) : totalSeconds;
 
   return (
-    <div className={`flex items-center gap-2.5 rounded-2xl px-3.5 py-2.5 min-w-[190px] shadow-soft ${isMe ? "btn-grad rounded-br-md" : "glass rounded-bl-md"}`}>
+    <div className={`flex items-center gap-2.5 rounded-2xl px-3.5 py-2.5 min-w-[190px] shadow-soft ${isMe ? "btn-primary rounded-br-md" : "glass rounded-bl-md"}`}>
       <button
         onClick={toggle}
         className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer ${isMe ? "bg-white/25" : "bg-black/10 dark:bg-white/15"}`}
@@ -174,7 +178,7 @@ function ChatAvatar({
   if (isGroup && !avatar) {
     return (
       <div
-        className={`${className} rounded-full flex-shrink-0 flex items-center justify-center btn-grad text-white`}
+        className={`${className} rounded-full flex-shrink-0 flex items-center justify-center btn-primary`}
         title={name}
       >
         <Users className="w-1/2 h-1/2" />
@@ -192,6 +196,8 @@ export default function InboxPage() {
   const [selectedChatId, setSelectedChatId] = useState<number | null>(null);
   const [inputText, setInputText] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [messageSearchResults, setMessageSearchResults] = useState<any[]>([]);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
 
   // Message requests (pending incoming chats)
   const [messageRequests, setMessageRequests] = useState<any[]>([]);
@@ -209,6 +215,9 @@ export default function InboxPage() {
 
   // Threaded replies
   const [replyTo, setReplyTo] = useState<ReplyPreview | null>(null);
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [pendingImagePreviewUrl, setPendingImagePreviewUrl] = useState<string | null>(null);
+  const [pendingViewOnce, setPendingViewOnce] = useState(false);
   const [highlightedMsgId, setHighlightedMsgId] = useState<number | null>(null);
   const messageRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -235,7 +244,7 @@ export default function InboxPage() {
   const [groupMemberSearch, setGroupMemberSearch] = useState("");
   const [groupMemberResults, setGroupMemberResults] = useState<any[]>([]);
 
-  // Calls (Agora)
+  // Calls (WebRTC + Socket.IO signaling)
   const [call, setCall] = useState<CallSession | null>(null);
   const [callPhase, setCallPhase] = useState<"outgoing" | "incoming" | "connected" | null>(null);
   const [callBusy, setCallBusy] = useState(false);
@@ -511,7 +520,22 @@ export default function InboxPage() {
     let active = true;
     const poll = () => {
       api.chat.getTypingStatus(selectedChatId)
-        .then((res) => { if (active) setOtherTyping(!!(res?.isTyping ?? res?.typing ?? res)); })
+        .then((res) => {
+          if (!active) return;
+          // Backend response shape isn't guaranteed to be a bare boolean — it may be an object
+          // ({isTyping}/{typing}) or a list of currently-typing user ids. Treating any truthy
+          // response (e.g. a non-empty object/array with neither field) as "typing" caused the
+          // indicator to falsely show as soon as a chat was opened, regardless of actual state.
+          let typing = false;
+          if (Array.isArray(res)) {
+            typing = res.some((id: any) => id && id !== currentUser?.id);
+          } else if (res && typeof res === "object") {
+            typing = !!(res.isTyping ?? res.typing ?? false);
+          } else {
+            typing = res === true;
+          }
+          setOtherTyping(typing);
+        })
         .catch(() => {});
     };
     poll();
@@ -585,11 +609,14 @@ export default function InboxPage() {
     setCallError(null);
     try {
       // The backend doesn't reject a second call on top of an active one, so check ourselves
-      // rather than stranding both sides in overlapping call sessions.
+      // rather than stranding both sides in overlapping call sessions. If we get here at all,
+      // *this* client has no CallPanel open (the `!call` guard above already blocks that) — so
+      // a RINGING/ACCEPTED session found here is necessarily orphaned (a previous call that
+      // ended without the panel getting to send ENDED, e.g. a closed tab/crash), not a call
+      // someone is actually on. Clean it up instead of permanently blocking this chat.
       const existing = mapCall(await api.chat.getActiveCall(activeChat.id).catch(() => null));
       if (existing && (existing.status === "RINGING" || existing.status === "ACCEPTED")) {
-        setCallError("В этом чате уже есть активный звонок.");
-        return;
+        await api.chat.respondToCall({ callId: existing.callId, status: "ENDED" }).catch(() => {});
       }
 
       const raw = await api.chat.initiateCall({
@@ -599,20 +626,11 @@ export default function InboxPage() {
       });
       const session = mapCall(raw);
       if (!session) throw new Error("Бэкенд не вернул данные звонка.");
-
-      // Without an Agora App ID nothing can connect. Bail out here rather than ringing the
-      // other side and stranding them in a call that could never join a channel.
-      if (!session.appId && !ENV_APP_ID) {
+      if (!session.channelName) {
         api.chat.respondToCall({ callId: session.callId, status: "ENDED" }).catch(() => {});
-        setCallError(
-          "Звонки не настроены: нет Agora App ID. Укажите NEXT_PUBLIC_AGORA_APP_ID в .env.local или верните appId из /Chat/initiate-call."
-        );
+        setCallError("Бэкенд не вернул channelName для звонка.");
         return;
       }
-
-      // We deliberately do NOT block on a missing rtcToken: it's valid (null) in Agora Testing
-      // mode. The token is forwarded as-is to client.join in CallPanel, which surfaces a clear
-      // "temporarily unavailable" message only if the join actually fails for a token reason.
 
       handledCallIds.current.add(session.callId);
       setCall(session);
@@ -625,11 +643,16 @@ export default function InboxPage() {
     }
   };
 
-  const closeCall = () => {
-    if (call) handledCallIds.current.add(call.callId);
-    setCall(null);
+  // Stable identity on purpose: this is passed to CallPanel as `onEnded`, a dependency of its
+  // WebRTC join effect — a fresh function reference on every InboxPage re-render (new messages,
+  // polling, etc.) would retrigger that effect's cleanup and tear down its socket listeners.
+  const closeCall = useCallback(() => {
+    setCall((prev) => {
+      if (prev) handledCallIds.current.add(prev.callId);
+      return null;
+    });
     setCallPhase(null);
-  };
+  }, [setCall, setCallPhase]);
 
   // Mirror the call into a ref so the poller below can read it without restarting its interval.
   const callRef = useRef<CallSession | null>(null);
@@ -750,14 +773,31 @@ export default function InboxPage() {
   };
 
   const handleSendFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0] && selectedChatId && currentUser) {
+    if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      dispatch(sendMessage({
-        chatId: selectedChatId,
-        file,
-        currentUserId: currentUser.id
-      }));
+      setPendingImageFile(file);
+      setPendingImagePreviewUrl(URL.createObjectURL(file));
+      setPendingViewOnce(false);
     }
+    e.target.value = "";
+  };
+
+  const handleCancelPendingImage = () => {
+    if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl);
+    setPendingImageFile(null);
+    setPendingImagePreviewUrl(null);
+    setPendingViewOnce(false);
+  };
+
+  const handleSendPendingImage = () => {
+    if (!pendingImageFile || !selectedChatId || !currentUser) return;
+    dispatch(sendMessage({
+      chatId: selectedChatId,
+      file: pendingImageFile,
+      isViewOnce: pendingViewOnce,
+      currentUserId: currentUser.id,
+    }));
+    handleCancelPendingImage();
   };
 
   // ---- Voice message recording ----
@@ -911,6 +951,20 @@ export default function InboxPage() {
     });
   };
 
+  // Best-effort screenshot detection (browsers expose no real screenshot API):
+  // fires on the PrintScreen key and on the tab losing focus right after it, which is
+  // the closest client-side signal available. Notifies the other participant(s).
+  useEffect(() => {
+    if (!activeChat) return;
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "PrintScreen") {
+        api.chat.notifyScreenshot(activeChat.id).catch(() => {});
+      }
+    };
+    window.addEventListener("keyup", handleKeyUp);
+    return () => window.removeEventListener("keyup", handleKeyUp);
+  }, [activeChat?.id]);
+
   const scrollToMessage = (messageId: number) => {
     const el = messageRefs.current[messageId];
     if (!el) return;
@@ -966,6 +1020,35 @@ export default function InboxPage() {
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Inbox-wide message-content search (separate from the chat-name filter above).
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setMessageSearchResults([]);
+      return;
+    }
+    setMessageSearchLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const results = await api.chat.searchMessages(q);
+        setMessageSearchResults(results || []);
+      } catch {
+        setMessageSearchResults([]);
+      } finally {
+        setMessageSearchLoading(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const handleOpenSearchResult = async (result: any) => {
+    const chatId = result.chatId;
+    const messageId = result.id || result.messageId;
+    setSearchQuery("");
+    await handleSelectChat(chatId);
+    setTimeout(() => scrollToMessage(messageId), 400);
+  };
+
   return (
     <div className="flex-1 flex h-[calc(100vh-64px)] md:h-screen transition-colors duration-200">
 
@@ -979,6 +1062,13 @@ export default function InboxPage() {
             <ChevronDown className="w-5 h-5 text-zinc-500" />
           </button>
           <div className="flex items-center gap-1">
+            <Link
+              href="/direct/channels"
+              title="Каналы"
+              className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full cursor-pointer"
+            >
+              <Radio className="w-5 h-5" />
+            </Link>
             <button
               onClick={() => {
                 setCreateMode("group");
@@ -1014,6 +1104,24 @@ export default function InboxPage() {
               className="w-full bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 outline-none rounded-lg pl-10 pr-4 py-2 text-sm text-zinc-900 dark:text-white"
             />
           </div>
+          {searchQuery.trim() && (messageSearchLoading || messageSearchResults.length > 0) && (
+            <div className="mt-2 max-h-48 overflow-y-auto flex flex-col gap-1 rounded-lg border border-zinc-150 dark:border-zinc-800">
+              {messageSearchLoading ? (
+                <span className="text-xs text-zinc-450 p-3">Поиск сообщений...</span>
+              ) : (
+                messageSearchResults.map((r) => (
+                  <button
+                    key={r.id || r.messageId}
+                    onClick={() => handleOpenSearchResult(r)}
+                    className="text-left px-3 py-2 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-900 cursor-pointer"
+                  >
+                    <span className="font-semibold mr-1.5">{r.senderName || r.userName}:</span>
+                    <span className="text-zinc-500 truncate">{r.messageText || r.text}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
 
         {/* Status Notes strip */}
@@ -1113,7 +1221,7 @@ export default function InboxPage() {
                     <button
                       onClick={() => handleAcceptRequest(req.chatId)}
                       disabled={requestBusy[req.chatId]}
-                      className="text-xs font-bold btn-grad text-white px-3 py-1.5 rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50"
+                      className="text-xs font-bold btn-primary px-3 py-1.5 rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50"
                     >
                       Принять
                     </button>
@@ -1138,11 +1246,18 @@ export default function InboxPage() {
             <div className="text-center p-8 text-zinc-450 dark:text-zinc-500 text-sm">Чаты не найдены.</div>
           ) : (
             filteredChats.map((chat) => {
-              const lastMsg = chat.messages[chat.messages.length - 1];
+              const lastMsg = chat.lastMessage || chat.messages[chat.messages.length - 1];
               return (
                 <div
                   key={chat.id}
                   onClick={() => handleSelectChat(chat.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    dispatch(pinChat({ chatId: chat.id, isPinned: !chat.isPinned }))
+                      .unwrap()
+                      .catch((err: any) => alert(err?.message || "Не удалось закрепить чат (максимум 3)."));
+                  }}
+                  title="ПКМ — закрепить/открепить"
                   className={`flex items-center justify-between p-4 px-5 hover:bg-zinc-50 dark:hover:bg-zinc-900/60 cursor-pointer transition ${
                     selectedChatId === chat.id ? "bg-zinc-100 dark:bg-zinc-900" : ""
                   }`}
@@ -1169,9 +1284,16 @@ export default function InboxPage() {
                       <span className="font-semibold text-sm truncate flex items-center gap-1.5">
                         {chat.username}
                         {chat.isGroup && <Users className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />}
+                        {chat.isPinned && <Pin className="w-3 h-3 text-zinc-400 flex-shrink-0" />}
                       </span>
                       <span className={`text-xs truncate ${chat.unread ? "font-bold text-black dark:text-white" : "text-zinc-400 dark:text-zinc-500"}`}>
-                        {lastMsg?.image ? "Отправил(-а) вложение" : lastMsg?.text || "Начата беседа"}
+                        {lastMsg?.isViewOnce
+                          ? "📷 Фото (один просмотр)"
+                          : lastMsg?.isVoice
+                          ? "🎤 Голосовое сообщение"
+                          : lastMsg?.image
+                          ? "Отправил(-а) вложение"
+                          : lastMsg?.text || "Начата беседа"}
                         {lastMsg && (
                           <>
                             <span className="mx-1">•</span>
@@ -1406,6 +1528,21 @@ export default function InboxPage() {
                       <div className="relative">
                         {msg.isVoice ? (
                           <VoiceMessageBubble url={msg.voiceUrl} durationMs={msg.durationMs || 0} isMe={isMe} />
+                        ) : msg.isViewOnce && !msg.viewOnceOpened ? (
+                          <button
+                            onClick={() => !isMe && dispatch(openViewOnceMessage({ messageId: msg.id, chatId: activeChat.id }))}
+                            disabled={isMe}
+                            className={`flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm shadow-soft cursor-pointer disabled:cursor-default ${
+                              isMe ? "btn-primary rounded-br-md" : "glass rounded-bl-md hover:shadow-soft-md"
+                            }`}
+                          >
+                            <Eye className="w-4 h-4" />
+                            {isMe ? "Отправлено (только для просмотра)" : "Нажмите, чтобы посмотреть"}
+                          </button>
+                        ) : msg.isViewOnce && msg.viewOnceOpened && !isMe ? (
+                          <div className="flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm glass rounded-bl-md text-zinc-450">
+                            <Eye className="w-4 h-4" /> Открыто
+                          </div>
                         ) : msg.image ? (
                           <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-soft">
                             {/* eslint-disable-next-line @next/next/no-img-element -- chat attachment keeps the sender's natural aspect ratio, unknown for remote images */}
@@ -1415,7 +1552,7 @@ export default function InboxPage() {
                           <div
                             className={`rounded-2xl px-4 py-2.5 text-sm select-text break-words shadow-soft ${
                               isMe
-                                ? "btn-grad rounded-br-md"
+                                ? "btn-primary rounded-br-md"
                                 : "glass rounded-bl-md text-zinc-900 dark:text-zinc-100"
                             }`}
                           >
@@ -1584,8 +1721,34 @@ export default function InboxPage() {
                   <button
                     type="button"
                     onClick={finishRecording}
-                    className="w-9 h-9 rounded-full btn-grad flex items-center justify-center flex-shrink-0 cursor-pointer"
+                    className="w-9 h-9 rounded-full btn-primary flex items-center justify-center flex-shrink-0 cursor-pointer"
                     title="Отправить"
+                  >
+                    <Send className="w-4 h-4 text-white" />
+                  </button>
+                </div>
+              ) : pendingImageFile ? (
+                <div className="flex items-center gap-3 glass rounded-2xl px-3 py-2.5 shadow-soft">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- local blob preview before send */}
+                  <img src={pendingImagePreviewUrl!} alt="" className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+                  <button
+                    type="button"
+                    onClick={() => setPendingViewOnce((v) => !v)}
+                    className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-full cursor-pointer transition ${
+                      pendingViewOnce ? "bg-blue-500 text-white" : "bg-black/5 dark:bg-white/10"
+                    }`}
+                    title="Только для одного просмотра"
+                  >
+                    <Eye className="w-3.5 h-3.5" /> Один просмотр
+                  </button>
+                  <div className="flex-1" />
+                  <button type="button" onClick={handleCancelPendingImage} className="hover:text-red-500 cursor-pointer">
+                    <X className="w-5 h-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSendPendingImage}
+                    className="w-9 h-9 rounded-full btn-primary flex items-center justify-center flex-shrink-0 cursor-pointer"
                   >
                     <Send className="w-4 h-4 text-white" />
                   </button>
@@ -1784,7 +1947,7 @@ export default function InboxPage() {
                 <button
                   onClick={saveNote}
                   disabled={!noteDraft.trim()}
-                  className="btn-grad px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
+                  className="btn-primary px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
                 >
                   {editingNoteId != null ? "Сохранить" : "Добавить"}
                 </button>
@@ -1920,7 +2083,7 @@ export default function InboxPage() {
                 <button
                   onClick={handleCreateNote}
                   disabled={!newNoteText.trim()}
-                  className="flex-1 btn-grad py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
+                  className="flex-1 btn-primary py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer"
                 >
                   Поделиться
                 </button>
@@ -1954,7 +2117,7 @@ export default function InboxPage() {
               <div className="flex items-center gap-3 w-full glass rounded-2xl p-3">
                 <button
                   onClick={toggleNoteAudio}
-                  className="w-9 h-9 rounded-full btn-grad flex items-center justify-center flex-shrink-0 cursor-pointer"
+                  className="w-9 h-9 rounded-full btn-primary flex items-center justify-center flex-shrink-0 cursor-pointer"
                 >
                   {noteAudioPlaying ? <Pause className="w-4 h-4 text-white fill-white" /> : <Play className="w-4 h-4 text-white fill-white ml-0.5" />}
                 </button>
@@ -1987,7 +2150,7 @@ export default function InboxPage() {
                     } : null);
                     setShowCreateNoteModal(true);
                   }}
-                  className="w-full btn-grad py-2 rounded-xl text-xs font-bold cursor-pointer transition shadow-soft hover:shadow-soft-lg"
+                  className="w-full btn-primary py-2 rounded-xl text-xs font-bold cursor-pointer transition shadow-soft hover:shadow-soft-lg"
                 >
                   Оставить новую заметку
                 </button>
@@ -1997,7 +2160,7 @@ export default function InboxPage() {
                     noteAudioRef.current?.pause();
                     handleDeleteNote();
                   }}
-                  className="w-full bg-red-500 hover:bg-red-600 text-white py-2 rounded-xl text-xs font-bold cursor-pointer transition shadow-soft"
+                  className="w-full text-red-500 border border-red-500/40 hover:bg-red-500/5 py-2 rounded-xl text-xs font-bold cursor-pointer transition"
                 >
                   Удалить заметку
                 </button>
@@ -2025,7 +2188,7 @@ export default function InboxPage() {
               <button
                 onClick={() => setCreateMode("direct")}
                 className={`flex-1 py-2 rounded-xl text-sm font-semibold cursor-pointer transition ${
-                  createMode === "direct" ? "btn-grad text-white" : "glass hover:shadow-soft"
+                  createMode === "direct" ? "btn-primary" : "glass hover:shadow-soft"
                 }`}
               >
                 Личный чат
@@ -2033,7 +2196,7 @@ export default function InboxPage() {
               <button
                 onClick={() => setCreateMode("group")}
                 className={`flex-1 py-2 rounded-xl text-sm font-semibold cursor-pointer transition flex items-center justify-center gap-2 ${
-                  createMode === "group" ? "btn-grad text-white" : "glass hover:shadow-soft"
+                  createMode === "group" ? "btn-primary" : "glass hover:shadow-soft"
                 }`}
               >
                 <Users className="w-4 h-4" />
@@ -2136,7 +2299,7 @@ export default function InboxPage() {
                           <span
                             className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ml-2 transition ${
                               checked
-                                ? "btn-grad border-transparent text-white"
+                                ? "btn-primary border-transparent"
                                 : "border-zinc-300 dark:border-zinc-600"
                             }`}
                           >
@@ -2160,7 +2323,7 @@ export default function InboxPage() {
                 <button
                   onClick={handleCreateGroup}
                   disabled={groupBusy || !groupName.trim() || groupMembers.length < 2}
-                  className="btn-grad px-5 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer flex-shrink-0"
+                  className="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 cursor-pointer flex-shrink-0"
                 >
                   {groupBusy ? "Создание..." : "Создать"}
                 </button>
@@ -2173,13 +2336,22 @@ export default function InboxPage() {
       {/* ----------------- CALL PANEL (outgoing / incoming / connected) ----------------- */}
       {call && callPhase && (
         <CallPanel
+          // Forces a full remount (fresh refs — joinStartedRef, pcRef, etc.) whenever the
+          // underlying call session changes identity. Without this, if a new call starts while
+          // the previous CallPanel instance for an old, never-cleanly-ended call hadn't actually
+          // unmounted, `joinStartedRef.current` would still read `true` from that stale call and
+          // permanently block the new call's join effect from ever running — zero WebRTC logs,
+          // zero errors, forever.
+          key={call.callId}
           call={call}
           phase={callPhase}
           peerName={chats.find((c) => c.id === call.chatId)?.username || activeChat?.username || "Пользователь"}
           peerAvatar={chats.find((c) => c.id === call.chatId)?.avatar || activeChat?.avatar}
+          isCaller={call.callerId === currentUser?.id}
           onAccepted={(session) => {
-            // Merge in the fresh session from the ACCEPTED response — it carries the rtcToken
-            // actually usable for joining, which the RINGING snapshot may have lacked.
+            // Merge in the fresh session from the ACCEPTED response — it carries the
+            // channelName/iceServers actually usable for joining, which the RINGING
+            // snapshot may have lacked.
             setCall((prev) => (prev ? { ...prev, ...session } : session));
             setCallPhase("connected");
           }}

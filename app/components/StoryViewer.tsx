@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useDispatch } from "react-redux";
-import { ChevronLeft, ChevronRight, X, Heart, Flag, Star, Send, BarChart3, Search, Play, Pause, Trash2, Eye } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, Heart, Flag, Star, Send, BarChart3, Search, Play, Pause, Trash2, Eye, BookmarkPlus } from "lucide-react";
 import { AppDispatch } from "../store/store";
 import { likeStory, answerSticker, deleteStory, Story } from "../store/slices/storiesSlice";
 import { api, getFullImageUrl } from "../services/api";
@@ -69,6 +69,35 @@ function normalizeResults(raw: any, sticker: NonNullable<Story["sticker"]>): Sti
   return { totalVotes: total, options, answers };
 }
 
+/** Live-ticking DD:HH:MM:SS computed client-side from the sticker's end time. */
+function CountdownStickerPill({ countdown }: { countdown: { endsAt: string; label: string } }) {
+  const [label, setLabel] = useState("");
+  useEffect(() => {
+    const tick = () => {
+      const diff = new Date(countdown.endsAt).getTime() - Date.now();
+      if (diff <= 0) {
+        setLabel("Время вышло");
+        return;
+      }
+      const d = Math.floor(diff / 86400000);
+      const h = Math.floor((diff % 86400000) / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setLabel(`${d > 0 ? `${d}д ` : ""}${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [countdown.endsAt]);
+
+  return (
+    <div className="absolute left-1/2 -translate-x-1/2 bottom-28 z-30 flex flex-col items-center gap-0.5 bg-black/60 backdrop-blur-md text-white px-4 py-2 rounded-2xl">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-white/70">{countdown.label}</span>
+      <span className="text-lg font-bold tabular-nums">{label}</span>
+    </div>
+  );
+}
+
 interface StoryViewerProps {
   story: Story;
   list: Story[];
@@ -90,6 +119,8 @@ export default function StoryViewer({
   const dispatch = useDispatch<AppDispatch>();
 
   const [replyText, setReplyText] = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [replySent, setReplySent] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
   const [flying, setFlying] = useState<FlyingEmoji[]>([]);
 
@@ -128,10 +159,40 @@ export default function StoryViewer({
 
   const storyDurationMs = React.useMemo(() => (story.musicTrack && story.musicTrack.durationMs) ? story.musicTrack.durationMs : 5000, [story.musicTrack]);
 
-  // Real viewers only — no fabricated names. The count prefers the server's
-  // de-duplicated viewCount, falling back to the length of the real viewers list.
-  const viewers = story.viewers || [];
-  const viewsTotal = story.viewCount ?? viewers.length;
+  // Real viewers only — no fabricated names. `get-my-stories` doesn't embed the viewer
+  // list, so the author fetches it fresh via `get-story-viewers` as soon as their own
+  // story opens (not just when the panel is tapped, so the "Просмотры (N)" count is live).
+  const [liveViewers, setLiveViewers] = useState<{ userId: string; username: string; avatar: string; liked?: boolean; reaction?: string }[] | null>(null);
+  const [liveViewCount, setLiveViewCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isMine) return;
+    let cancelled = false;
+    api.story.getStoryViewers(story.id)
+      .then((res) => {
+        if (cancelled) return;
+        setLiveViewCount(res?.viewCount ?? 0);
+        setLiveViewers(
+          (res?.viewers || []).map((v: any) => ({
+            userId: v.userId || v.id || "",
+            username: v.userName || v.username || "user",
+            avatar: getFullImageUrl(v.avatar),
+            liked: !!v.liked,
+            reaction: v.reaction,
+          }))
+        );
+      })
+      .catch(() => {
+        setLiveViewCount(0);
+        setLiveViewers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isMine, story.id]);
+
+  const viewers = liveViewers ?? story.viewers ?? [];
+  const viewsTotal = liveViewCount ?? story.viewCount ?? viewers.length;
 
   // Anything that demands the viewer's attention freezes the auto-advance,
   // otherwise the story would slide away mid-vote or mid-sentence.
@@ -171,6 +232,22 @@ export default function StoryViewer({
     const keys = new Set(batch.map((b) => b.key));
     setTimeout(() => setFlying((prev) => prev.filter((f) => !keys.has(f.key))), 1800);
   }, []);
+
+  const handleSendReply = async () => {
+    const text = replyText.trim();
+    if (!text || replyBusy) return;
+    setReplyBusy(true);
+    try {
+      await api.story.replyToStory(story.id, text);
+      setReplyText("");
+      setReplySent(true);
+      setTimeout(() => setReplySent(false), 2000);
+    } catch (err) {
+      console.error("Failed to reply to story:", err);
+    } finally {
+      setReplyBusy(false);
+    }
+  };
 
   const handleLike = () => {
     dispatch(likeStory({ storyId: story.id, wasLiked: story.isLiked }));
@@ -270,6 +347,36 @@ export default function StoryViewer({
     loadResults();
   };
 
+  // ---- Quick add-to-highlight (own stories only) ----
+  const [showHighlightPicker, setShowHighlightPicker] = useState(false);
+  const [myHighlights, setMyHighlights] = useState<{ id: string; title: string }[]>([]);
+  const [highlightBusy, setHighlightBusy] = useState(false);
+  const [addedHighlight, setAddedHighlight] = useState(false);
+
+  const openHighlightPicker = () => {
+    setShowHighlightPicker(true);
+    if (currentUserId) {
+      api.highlight.getUserHighlights(currentUserId)
+        .then((list) => setMyHighlights((list || []).map((h: any) => ({ id: h.id || h.highlightId, title: h.title || h.name || "Хайлайт" }))))
+        .catch(() => setMyHighlights([]));
+    }
+  };
+
+  const handleAddToHighlight = async (target: { highlightId: string } | { title: string }) => {
+    if (highlightBusy) return;
+    setHighlightBusy(true);
+    try {
+      await api.story.addToHighlight(story.id, target);
+      setShowHighlightPicker(false);
+      setAddedHighlight(true);
+      setTimeout(() => setAddedHighlight(false), 2000);
+    } catch (err) {
+      console.error("Failed to add to highlight:", err);
+    } finally {
+      setHighlightBusy(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/95 z-55 flex items-center justify-center p-4 select-none">
       {/* Close */}
@@ -355,6 +462,16 @@ export default function StoryViewer({
 
             {isMine && (
               <button
+                onClick={openHighlightPicker}
+                className="w-7 h-7 rounded-full bg-black/40 hover:bg-black/60 flex items-center justify-center text-white cursor-pointer transition"
+                title="Добавить в хайлайты"
+              >
+                {addedHighlight ? <span className="text-[10px] font-bold">✓</span> : <BookmarkPlus className="w-3.5 h-3.5" />}
+              </button>
+            )}
+
+            {isMine && (
+              <button
                 onClick={handleDeleteStory}
                 className="w-7 h-7 rounded-full bg-black/40 hover:bg-red-650 flex items-center justify-center text-white hover:text-white cursor-pointer transition"
                 title="Удалить историю"
@@ -389,20 +506,60 @@ export default function StoryViewer({
           ))}
         </div>
 
-        {/* ---- Mention sticker (#21) ---- */}
+        {/* ---- Mention sticker (#21) — placed where the composer put it ---- */}
         {story.mention?.userId && (
           <Link
             href={`/u/${story.mention.userId}`}
             onClick={() => onClose()}
-            className="absolute left-1/2 -translate-x-1/2 bottom-28 z-30 bg-black/60 backdrop-blur-md text-white text-sm font-bold px-3.5 py-1.5 rounded-lg hover:bg-black/75 transition"
+            className="absolute z-30 bg-black/60 backdrop-blur-md text-white text-sm font-bold px-3.5 py-1.5 rounded-lg hover:bg-black/75 transition"
+            style={{
+              left: `${(story.stickerPosition?.x ?? 0.5) * 100}%`,
+              top: `${(story.stickerPosition?.y ?? 0.5) * 100}%`,
+              transform: `translate(-50%, -50%) scale(${story.stickerPosition?.scale ?? 1}) rotate(${story.stickerPosition?.rotation ?? 0}deg)`,
+            }}
           >
-            @{story.mention.username}
+            @{story.mention.username || "профиль"}
           </Link>
         )}
 
-        {/* ---- Interactive sticker ---- */}
+        {/* ---- Link sticker ---- */}
+        {story.link && (
+          <a
+            href={story.link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="absolute left-1/2 -translate-x-1/2 bottom-28 z-30 flex items-center gap-1.5 bg-white text-black text-sm font-bold px-3.5 py-1.5 rounded-full hover:bg-zinc-200 transition"
+          >
+            🔗 {story.link.label}
+          </a>
+        )}
+
+        {/* ---- Countdown sticker ---- */}
+        {story.countdown && <CountdownStickerPill countdown={story.countdown} />}
+
+        {/* ---- Shared post ---- */}
+        {story.sharedPost && (
+          <Link
+            href={`/p/${story.sharedPost.id}`}
+            onClick={() => onClose()}
+            className="absolute left-1/2 -translate-x-1/2 bottom-28 z-30 flex items-center gap-2 bg-black/60 backdrop-blur-md text-white text-xs font-semibold pl-1.5 pr-3 py-1.5 rounded-full hover:bg-black/75 transition"
+          >
+            <SmartImage src={story.sharedPost.image} alt="" width={28} height={28} className="w-7 h-7 rounded-md object-cover" />
+            Публикация от @{story.sharedPost.username}
+          </Link>
+        )}
+
+        {/* ---- Interactive sticker — placed where the composer put it ---- */}
         {sticker && (
-          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 z-20 flex justify-center px-6">
+          <div
+            className="absolute z-20 px-6 w-full max-w-xs"
+            style={{
+              left: `${(story.stickerPosition?.x ?? 0.5) * 100}%`,
+              top: `${(story.stickerPosition?.y ?? 0.5) * 100}%`,
+              transform: `translate(-50%, -50%) scale(${story.stickerPosition?.scale ?? 1}) rotate(${story.stickerPosition?.rotation ?? 0}deg)`,
+            }}
+          >
             <div className="glass-strong w-full max-w-xs rounded-3xl p-4 shadow-soft-lg flex flex-col gap-3">
               <p className="text-sm font-bold text-center break-words">{sticker.question}</p>
 
@@ -420,7 +577,7 @@ export default function StoryViewer({
                         onClick={() => handleVote(i)}
                         disabled={hasVoted || isMine || stickerBusy}
                         className={`relative overflow-hidden rounded-2xl px-4 py-2.5 text-sm font-semibold text-left transition cursor-pointer disabled:cursor-default ${
-                          chosen ? "btn-grad text-white" : "glass hover:shadow-soft"
+                          chosen ? "btn-primary" : "glass hover:shadow-soft"
                         }`}
                       >
                         {showPercent && (
@@ -464,7 +621,7 @@ export default function StoryViewer({
                   <button
                     type="submit"
                     disabled={!answerText.trim() || stickerBusy}
-                    className="w-9 h-9 rounded-full btn-grad flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer"
+                    className="w-9 h-9 rounded-full btn-primary flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer"
                   >
                     <Send className="w-4 h-4 text-white" />
                   </button>
@@ -506,13 +663,30 @@ export default function StoryViewer({
               <>
                 <input
                   type="text"
-                  value={replyText}
+                  value={replySent ? "Отправлено ✓" : replyText}
                   onChange={(e) => setReplyText(e.target.value)}
                   onFocus={() => setShowReactions(true)}
                   onBlur={() => setTimeout(() => setShowReactions(false), 150)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSendReply();
+                    }
+                  }}
+                  disabled={replySent}
                   placeholder={`Ответить ${story.username}...`}
-                  className="flex-1 min-w-0 bg-transparent border border-white/40 focus:border-white rounded-full px-4 py-2.5 text-white text-sm outline-none placeholder-white/70"
+                  className="flex-1 min-w-0 bg-transparent border border-white/40 focus:border-white rounded-full px-4 py-2.5 text-white text-sm outline-none placeholder-white/70 disabled:opacity-70"
                 />
+                {replyText.trim() && !replySent && (
+                  <button
+                    onClick={handleSendReply}
+                    disabled={replyBusy}
+                    title="Отправить"
+                    className="text-white hover:scale-110 active:scale-90 transition cursor-pointer flex-shrink-0 disabled:opacity-50"
+                  >
+                    <Send className="w-6 h-6" />
+                  </button>
+                )}
 
                 <button
                   onClick={handleLike}
@@ -681,6 +855,48 @@ export default function StoryViewer({
           </div>
         )}
       </div>
+
+      {/* ---- Quick add-to-highlight panel ---- */}
+      {showHighlightPicker && (
+        <div
+          className="absolute inset-0 z-45 bg-black/70 backdrop-blur-sm flex items-end"
+          onClick={() => setShowHighlightPicker(false)}
+        >
+          <div
+            className="w-full max-w-md mx-auto glass-strong rounded-t-3xl p-5 flex flex-col gap-3 max-h-[60%] animate-in slide-in-from-bottom duration-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="font-bold text-base text-white">Добавить в хайлайты</h3>
+              <button onClick={() => setShowHighlightPicker(false)} className="p-1 hover:bg-white/10 rounded-full cursor-pointer text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex flex-col gap-2 overflow-y-auto text-white">
+              {myHighlights.map((h) => (
+                <button
+                  key={h.id}
+                  onClick={() => handleAddToHighlight({ highlightId: h.id })}
+                  disabled={highlightBusy}
+                  className="text-left px-3 py-2.5 rounded-xl glass hover:shadow-soft cursor-pointer text-sm font-semibold disabled:opacity-50"
+                >
+                  {h.title}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  const title = window.prompt("Название нового хайлайта")?.trim();
+                  if (title) handleAddToHighlight({ title });
+                }}
+                disabled={highlightBusy}
+                className="text-left px-3 py-2.5 rounded-xl border border-dashed border-white/30 hover:border-white/60 cursor-pointer text-sm font-semibold disabled:opacity-50"
+              >
+                + Новый хайлайт
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Next */}
       <button

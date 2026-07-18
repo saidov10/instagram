@@ -166,18 +166,19 @@ export const api = {
       });
     },
 
-    async login(data: any): Promise<string> {
-      // Returns the Bearer token directly or in wrapper
+    async login(data: any): Promise<{ token: string; reactivated?: boolean }> {
+      // Plain string when the account was already active, or { token, reactivated: true }
+      // when logging back in auto-reactivated a deactivated/pending-deletion account.
       const res = await request<any>("/Account/login", {
         method: "POST",
         body: JSON.stringify(data),
       });
-      // Handle response token payload (could be in res.data or direct string)
       const token = typeof res === "string" ? res : res?.token || res?.data || res;
+      const reactivated = typeof res === "object" && res !== null ? !!res.reactivated : false;
       if (token && typeof token === "string") {
         setStoredToken(token);
       }
-      return token;
+      return { token, reactivated };
     },
 
     async forgotPassword(email: string): Promise<any> {
@@ -203,6 +204,29 @@ export const api = {
     async getActiveSessions(): Promise<any[]> {
       const res = await request<any>("/Account/get-active-sessions");
       return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    /** Live check while typing in Edit Profile — excludes the caller's own current username. */
+    async checkUsernameAvailability(userName: string): Promise<{ userName: string; isAvailable: boolean }> {
+      return request(`/Account/check-username-availability?userName=${encodeURIComponent(userName)}`);
+    },
+
+    /** Reverse-chronological security events: ACCOUNT_CREATED, LOGIN, PASSWORD_CHANGED, etc. */
+    async getSecurityLog(): Promise<any[]> {
+      const res = await request<any>("/Account/get-security-log");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async requestDeletion(): Promise<any> {
+      return request("/Account/request-deletion", { method: "POST" });
+    },
+
+    async cancelDeletion(): Promise<any> {
+      return request("/Account/cancel-deletion", { method: "DELETE" });
+    },
+
+    async exportData(): Promise<any> {
+      return request("/Account/export-data");
     },
 
     async logoutSession(sessionId: string): Promise<any> {
@@ -256,10 +280,28 @@ export const api = {
       return request(`/UserProfile/get-is-follow-user-profile-by-id?followingUserId=${followingUserId}`);
     },
 
-    async updateUserProfile(data: { about?: string; gender?: number }): Promise<any> {
+    async updateUserProfile(data: { about?: string; gender?: number; fullName?: string; website?: string; pronouns?: string }): Promise<any> {
       return request("/UserProfile/update-user-profile", {
         method: "PUT",
         body: JSON.stringify(data),
+      });
+    },
+
+    /** Live-checked in Edit Profile before submitting; keeps a server-side history. */
+    async updateUsername(userName: string): Promise<any> {
+      return request(`/UserProfile/update-username?userName=${encodeURIComponent(userName)}`, {
+        method: "PUT",
+      });
+    },
+
+    async getShareLink(userId: string): Promise<{ webUrl: string; deepLink: string }> {
+      return request(`/UserProfile/get-share-link?userId=${userId}`);
+    },
+
+    /** Mutual: turning yours off also hides everyone else's lastSeenAt from you. */
+    async updateActivityStatusVisibility(showActivityStatus: boolean): Promise<any> {
+      return request(`/UserProfile/update-activity-status-visibility?showActivityStatus=${showActivityStatus}`, {
+        method: "PUT",
       });
     },
 
@@ -379,6 +421,9 @@ export const api = {
       collaboratorIds?: string[];
       isSensitive?: boolean;
       hideLikeCount?: boolean;
+      isForCloseFriends?: boolean;
+      locationId?: number;
+      productTags?: { name: string; price: number; currency: string; url?: string; x: number; y: number }[];
     }): Promise<any> {
       const formData = new FormData();
       formData.append("Title", data.title);
@@ -395,6 +440,11 @@ export const api = {
       }
       if (data.isSensitive) formData.append("isSensitive", "true");
       if (data.hideLikeCount) formData.append("hideLikeCount", "true");
+      if (data.isForCloseFriends) formData.append("isForCloseFriends", "true");
+      if (data.locationId != null) formData.append("locationId", String(data.locationId));
+      if (data.productTags && data.productTags.length > 0) {
+        formData.append("productTags", JSON.stringify(data.productTags));
+      }
       data.images.forEach((img) => {
         formData.append("Images", img);
       });
@@ -403,6 +453,77 @@ export const api = {
         method: "POST",
         body: formData,
       });
+    },
+
+    /** Owner-only carousel media editor: `keepImages` is the kept URLs in final order, `newImages` are appended. */
+    async updatePostMedia(postId: number, keepImages: string[], newImages: File[]): Promise<any> {
+      const formData = new FormData();
+      formData.append("postId", String(postId));
+      formData.append("keepImages", JSON.stringify(keepImages));
+      newImages.forEach((img) => formData.append("Images", img));
+      return request("/Post/update-post-media", { method: "PUT", body: formData });
+    },
+
+    async bulkArchive(postIds: number[], isArchived: boolean): Promise<any> {
+      return request("/Post/bulk-archive", {
+        method: "PUT",
+        body: JSON.stringify({ postIds, isArchived }),
+      });
+    },
+    async bulkDelete(postIds: number[]): Promise<any> {
+      return request("/Post/bulk-delete", {
+        method: "DELETE",
+        body: JSON.stringify({ postIds }),
+      });
+    },
+
+    /** Owner only, max 3; get-my-posts/get-posts sort pinned first. */
+    async pinToProfile(postId: number, isPinned: boolean): Promise<any> {
+      return request(`/Post/pin-to-profile?postId=${postId}&isPinned=${isPinned}`, { method: "PUT" });
+    },
+
+    async toggleAgeRestricted(postId: number, isAgeRestricted: boolean): Promise<any> {
+      return request(`/Post/toggle-age-restricted?postId=${postId}&isAgeRestricted=${isAgeRestricted}`, { method: "PUT" });
+    },
+
+    /** Owner only; disabling 403s share-post-to-story for everyone else. */
+    async toggleStorySharing(postId: number, allowStorySharing: boolean): Promise<any> {
+      return request(`/Post/toggle-story-sharing?postId=${postId}&allowStorySharing=${allowStorySharing}`, { method: "PUT" });
+    },
+
+    async notInterested(data: { postId: number; alsoMuteAuthor?: boolean; alsoMuteHashtags?: boolean }): Promise<any> {
+      return request("/Post/not-interested", { method: "POST", body: JSON.stringify(data) });
+    },
+
+    // --- SCHEDULED POSTS ---
+    async schedulePost(data: {
+      title: string;
+      content: string;
+      images: File[];
+      scheduledFor: string;
+      isReel?: boolean;
+    }): Promise<any> {
+      const formData = new FormData();
+      formData.append("Title", data.title);
+      formData.append("Content", data.content);
+      formData.append("scheduledFor", data.scheduledFor);
+      if (data.isReel) formData.append("isReel", "true");
+      data.images.forEach((img) => formData.append("Images", img));
+      return request("/Post/schedule-post", { method: "POST", body: formData });
+    },
+    /** Auto-publishes any due posts server-side — call on screen open + app foreground. */
+    async getScheduledPosts(): Promise<any[]> {
+      const res = await request<any>("/Post/get-scheduled-posts");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async updateSchedule(draftId: string, scheduledFor: string): Promise<any> {
+      return request("/Post/update-schedule", {
+        method: "PUT",
+        body: JSON.stringify({ draftId, scheduledFor }),
+      });
+    },
+    async cancelSchedule(draftId: string): Promise<any> {
+      return request(`/Post/cancel-schedule?draftId=${draftId}`, { method: "DELETE" });
     },
 
     // --- EXPLORE (feature #3) ---
@@ -539,6 +660,11 @@ export const api = {
       });
     },
 
+    /** Owner-only per-post stat tiles. */
+    async getPostInsights(postId: number): Promise<any> {
+      return request(`/Post/get-post-insights?postId=${postId}`);
+    },
+
     async deleteComment(commentId: number): Promise<any> {
       return request(`/Post/delete-comment?commentId=${commentId}`, {
         method: "DELETE",
@@ -558,6 +684,7 @@ export const api = {
       audioId?: string;
       audioName?: string;
       audioArtist?: string;
+      remixOfPostId?: number;
     }): Promise<any> {
       const formData = new FormData();
       formData.append("File", data.file);
@@ -565,11 +692,16 @@ export const api = {
       if (data.audioId) formData.append("audioId", data.audioId);
       if (data.audioName) formData.append("audioName", data.audioName);
       if (data.audioArtist) formData.append("audioArtist", data.audioArtist);
+      if (data.remixOfPostId != null) formData.append("remixOfPostId", String(data.remixOfPostId));
 
       return request("/Post/add-reel", {
         method: "POST",
         body: formData,
       });
+    },
+
+    async getAudioDetails(audioId: string): Promise<any> {
+      return request(`/Post/get-audio-details?audioId=${encodeURIComponent(audioId)}`);
     },
 
     async getTrendingReels(): Promise<any[]> {
@@ -604,6 +736,25 @@ export const api = {
 
     async getTrendingHashtags(): Promise<any[]> {
       const res = await request<any>("/Post/get-trending-hashtags");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    /** Opens as a standard follower-style list when tapping a post's like count. */
+    async getLikers(postId: number): Promise<any[]> {
+      const res = await request<any>(`/Post/get-likers?postId=${postId}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    async followHashtag(hashtag: string): Promise<any> {
+      const tag = hashtag.replace(/^#/, "");
+      return request(`/Post/follow-hashtag?hashtag=${encodeURIComponent(tag)}`, { method: "POST" });
+    },
+    async unfollowHashtag(hashtag: string): Promise<any> {
+      const tag = hashtag.replace(/^#/, "");
+      return request(`/Post/unfollow-hashtag?hashtag=${encodeURIComponent(tag)}`, { method: "DELETE" });
+    },
+    async getFollowedHashtags(): Promise<string[]> {
+      const res = await request<any>("/Post/get-followed-hashtags");
       return Array.isArray(res) ? res : res?.data || [];
     },
   },
@@ -654,14 +805,18 @@ export const api = {
       return request(`/Story/GetStoryById?id=${id}`);
     },
 
+    /** Returns the created story object directly (id, fileName, audio*, sticker incl. x/y/scale/rotation). */
     async addStory(
       file: File,
       postId?: number,
       isForCloseFriends = false,
       sticker?:
         | { type: "POLL" | "QUESTION"; question: string; options?: string[] }
-        | { type: "MENTION"; mentionUserId: string; mentionUsername?: string },
-      musicTrack?: { id: string; title: string; artist: string; audioUrl: string; coverUrl?: string; durationMs?: number } | null
+        | { type: "MENTION"; mentionUserId: string; mentionUsername?: string }
+        | { type: "LINK"; url: string; label?: string }
+        | { type: "COUNTDOWN"; endsAt: string; label?: string },
+      musicTrack?: { id: string; title: string; artist: string; audioUrl: string; coverUrl?: string; durationMs?: number } | null,
+      stickerPosition?: { x: number; y: number; scale?: number; rotation?: number } | null
     ): Promise<any> {
       const formData = new FormData();
       formData.append("Image", file);
@@ -671,20 +826,29 @@ export const api = {
         if (sticker.type === "MENTION") {
           // Feature #21 — tags a user; they receive a STORY_MENTION notification.
           formData.append("stickerMentionUserId", sticker.mentionUserId);
+        } else if (sticker.type === "LINK") {
+          formData.append("stickerLinkUrl", sticker.url);
+          if (sticker.label) formData.append("stickerLinkLabel", sticker.label);
+        } else if (sticker.type === "COUNTDOWN") {
+          formData.append("stickerCountdownEndsAt", sticker.endsAt);
+          if (sticker.label) formData.append("stickerCountdownLabel", sticker.label);
         } else {
           formData.append("stickerQuestion", sticker.question);
           // A poll's options are a repeated field so the backend binds them as a string[].
           (sticker.options || []).forEach((opt) => formData.append("stickerOptions", opt));
+        }
+        if (stickerPosition) {
+          formData.append("stickerX", String(stickerPosition.x));
+          formData.append("stickerY", String(stickerPosition.y));
+          if (stickerPosition.scale != null) formData.append("stickerScale", String(stickerPosition.scale));
+          if (stickerPosition.rotation != null) formData.append("stickerRotation", String(stickerPosition.rotation));
         }
       }
       if (musicTrack) {
         formData.append("audioUrl", musicTrack.audioUrl);
         formData.append("audioTitle", musicTrack.title);
         formData.append("audioArtist", musicTrack.artist);
-        if (musicTrack.coverUrl) {
-          formData.append("coverUrl", musicTrack.coverUrl);
-        }
-        formData.append("musicTrack", JSON.stringify(musicTrack));
+        if (musicTrack.durationMs != null) formData.append("audioDurationMs", String(musicTrack.durationMs));
       }
       const url = postId ? `/Story/AddStories?PostId=${postId}` : "/Story/AddStories";
       return request(url, {
@@ -725,6 +889,35 @@ export const api = {
     async getArchivedStories(): Promise<any[]> {
       const res = await request<any>("/Story/get-archived-stories");
       return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    /** Author-only: swipe-up viewer list on your own active story. */
+    async getStoryViewers(storyId: number): Promise<{ viewCount: number; viewers: any[] }> {
+      return request(`/Story/get-story-viewers?storyId=${storyId}`);
+    },
+
+    /** Finds/creates the 1:1 chat (message-request rules apply). */
+    async replyToStory(storyId: number, messageText: string): Promise<any> {
+      return request("/Story/reply-to-story", {
+        method: "POST",
+        body: JSON.stringify({ storyId, messageText }),
+      });
+    },
+
+    /** 403s if the author disabled story-resharing. */
+    async sharePostToStory(postId: number): Promise<any> {
+      return request("/Story/share-post-to-story", {
+        method: "POST",
+        body: JSON.stringify({ postId }),
+      });
+    },
+
+    /** One-tap "Highlight" from the story viewer — pass an existing highlightId or a new title. */
+    async addToHighlight(storyId: number, target: { highlightId?: string } | { title: string }): Promise<any> {
+      return request("/Story/add-to-highlight", {
+        method: "POST",
+        body: JSON.stringify({ storyId, ...target }),
+      });
     },
   },
 
@@ -780,7 +973,8 @@ export const api = {
       messageText?: string,
       file?: File,
       voice?: { isVoice: true; durationMs: number },
-      replyToMessageId?: number
+      replyToMessageId?: number,
+      isViewOnce?: boolean
     ): Promise<any> {
       const formData = new FormData();
       formData.append("ChatId", String(chatId));
@@ -793,10 +987,41 @@ export const api = {
       if (replyToMessageId != null) {
         formData.append("replyToMessageId", String(replyToMessageId));
       }
+      if (isViewOnce) formData.append("isViewOnce", "true");
 
       return request("/Chat/send-message", {
         method: "PUT",
         body: formData,
+      });
+    },
+
+    /** Don't render `filePath` for a locked view-once bubble — this returns the media exactly once and wipes it server-side. */
+    async openViewOnceMessage(messageId: number): Promise<{ mediaUrl: string }> {
+      return request("/Chat/open-view-once-message", {
+        method: "POST",
+        body: JSON.stringify({ messageId }),
+      });
+    },
+
+    async searchMessages(query: string, chatId?: number): Promise<any[]> {
+      const q = new URLSearchParams({ query });
+      if (chatId != null) q.append("chatId", String(chatId));
+      const res = await request<any>(`/Chat/search-messages?${q.toString()}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    /** Per-user, max 3. */
+    async pinChat(chatId: number, isPinned: boolean): Promise<any> {
+      return request(`/Chat/pin-chat?chatId=${chatId}&isPinned=${isPinned}`, {
+        method: "PUT",
+      });
+    },
+
+    /** Call from the platform's screenshot-detection API when the other participant screenshots the thread. */
+    async notifyScreenshot(chatId: number): Promise<any> {
+      return request("/Chat/notify-screenshot", {
+        method: "POST",
+        body: JSON.stringify({ chatId }),
       });
     },
 
@@ -935,6 +1160,21 @@ export const api = {
         method: "PUT",
       });
     },
+
+    /** "Remove" on a row in your own Followers list. */
+    async removeFollower(followerId: string): Promise<any> {
+      return request(`/FollowingRelationShip/remove-follower?followerId=${followerId}`, {
+        method: "DELETE",
+      });
+    },
+
+    /** `code` can be a profile URL, instaclone:// deep link, @username, or raw id. */
+    async followViaQr(code: string): Promise<any> {
+      return request("/FollowingRelationShip/follow-via-qr", {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      });
+    },
   },
 
   // --- LOCATION ENDPOINTS ---
@@ -981,6 +1221,11 @@ export const api = {
       return request(`/Location/delete-Location?id=${id}`, {
         method: "DELETE",
       });
+    },
+
+    async getLocationFeed(locationId: number): Promise<any[]> {
+      const res = await request<any>(`/Location/get-location-feed?locationId=${locationId}`);
+      return Array.isArray(res) ? res : res?.data || [];
     },
   },
 
@@ -1150,6 +1395,43 @@ export const api = {
       const res = await request<any>("/User/get-close-friends");
       return Array.isArray(res) ? res : res?.data || [];
     },
+
+    /** startTime/endTime are "HH:mm" strings; the window wraps past midnight. */
+    async updateQuietMode(data: { enabled: boolean; startTime?: string; endTime?: string }): Promise<any> {
+      return request("/User/update-quiet-mode", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async addMutedWord(word: string): Promise<any> {
+      return request("/User/add-muted-word", {
+        method: "POST",
+        body: JSON.stringify({ word }),
+      });
+    },
+    async getMutedWords(): Promise<string[]> {
+      const res = await request<any>("/User/get-muted-words");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async removeMutedWord(word: string): Promise<any> {
+      return request(`/User/remove-muted-word?word=${encodeURIComponent(word)}`, {
+        method: "DELETE",
+      });
+    },
+
+    async addCollectionCollaborator(collectionId: number, userId: string): Promise<any> {
+      return request("/User/add-collection-collaborator", {
+        method: "POST",
+        body: JSON.stringify({ collectionId, userId }),
+      });
+    },
+    async removeCollectionCollaborator(collectionId: number, userId: string): Promise<any> {
+      return request("/User/remove-collection-collaborator", {
+        method: "DELETE",
+        body: JSON.stringify({ collectionId, userId }),
+      });
+    },
   },
 
   // --- SAVED COLLECTIONS ENDPOINTS (feature #2) ---
@@ -1240,6 +1522,30 @@ export const api = {
         method: "DELETE",
       });
     },
+
+    /** Server actually suppresses notification creation per category, not just client-side filtering. */
+    async getSettings(): Promise<Record<string, boolean>> {
+      return request("/Notification/get-settings");
+    },
+    async updateSettings(category: "LIKES" | "COMMENTS" | "FOLLOWS" | "MENTIONS" | "MESSAGES", enabled: boolean): Promise<any> {
+      return request(`/Notification/update-settings?category=${category}&enabled=${enabled}`, {
+        method: "PUT",
+      });
+    },
+
+    /** Storage/logging only — no real push delivery without a configured FCM/APNs backend. */
+    async registerPushToken(token: string, platform: "IOS" | "ANDROID" | "WEB"): Promise<any> {
+      return request("/Notification/register-push-token", {
+        method: "POST",
+        body: JSON.stringify({ token, platform }),
+      });
+    },
+    async unregisterPushToken(token: string): Promise<any> {
+      return request("/Notification/unregister-push-token", {
+        method: "DELETE",
+        body: JSON.stringify({ token }),
+      });
+    },
   },
 
   // --- HIGHLIGHT ENDPOINTS ---
@@ -1268,6 +1574,14 @@ export const api = {
         method: "DELETE",
       });
     },
+
+    /** Drag-to-reorder on the highlight tray — must submit every one of the user's highlight ids. */
+    async reorderHighlights(orderedIds: string[]): Promise<any> {
+      return request("/Highlight/reorder-highlights", {
+        method: "PUT",
+        body: JSON.stringify({ orderedIds }),
+      });
+    },
   },
 
   // --- REPORT ENDPOINTS ---
@@ -1281,6 +1595,124 @@ export const api = {
         method: "POST",
         body: JSON.stringify(data),
       });
+    },
+
+    async submitAppeal(data: { targetType: string; targetId: string; reason: string }): Promise<any> {
+      return request("/Report/submit-appeal", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+
+    async getMyAppeals(): Promise<any[]> {
+      const res = await request<any>("/Report/get-my-appeals");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+
+    // --- INTERNAL MODERATION TOOLING — no role-gating server-side; gate access client-side ---
+    async getReports(status?: string): Promise<any[]> {
+      const res = await request<any>(`/Report/get-reports${status ? `?status=${status}` : ""}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async resolveReport(reportId: string, status: string, resolutionNote?: string): Promise<any> {
+      return request("/Report/resolve-report", {
+        method: "PUT",
+        body: JSON.stringify({ reportId, status, resolutionNote }),
+      });
+    },
+    async getAppeals(status?: string): Promise<any[]> {
+      const res = await request<any>(`/Report/get-appeals${status ? `?status=${status}` : ""}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async resolveAppeal(appealId: string, status: string, resolutionNote?: string): Promise<any> {
+      return request("/Report/resolve-appeal", {
+        method: "PUT",
+        body: JSON.stringify({ appealId, status, resolutionNote }),
+      });
+    },
+  },
+
+  // --- SEARCH ---
+  search: {
+    async unifiedSearch(query: string, filter: "TOP" | "ACCOUNTS" | "TAGS" | "PLACES" = "TOP"): Promise<any> {
+      return request(`/Search/unified-search?query=${encodeURIComponent(query)}&filter=${filter}`);
+    },
+  },
+
+  // --- LIVE VIDEO ENDPOINTS (simulated — text/viewer-count only, no real RTC) ---
+  live: {
+    async startLive(title?: string): Promise<any> {
+      return request("/Live/start-live", {
+        method: "POST",
+        body: JSON.stringify({ title }),
+      });
+    },
+    async endLive(sessionId: string): Promise<any> {
+      return request("/Live/end-live", {
+        method: "POST",
+        body: JSON.stringify({ sessionId }),
+      });
+    },
+    async getActiveLives(): Promise<any[]> {
+      const res = await request<any>("/Live/get-active-lives");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async joinLive(sessionId: string): Promise<any> {
+      return request("/Live/join-live", {
+        method: "POST",
+        body: JSON.stringify({ sessionId }),
+      });
+    },
+    async leaveLive(sessionId: string): Promise<any> {
+      return request("/Live/leave-live", {
+        method: "POST",
+        body: JSON.stringify({ sessionId }),
+      });
+    },
+    async sendLiveComment(sessionId: string, text: string): Promise<any> {
+      return request("/Live/send-live-comment", {
+        method: "POST",
+        body: JSON.stringify({ sessionId, text }),
+      });
+    },
+    async getLiveComments(sessionId: string): Promise<any[]> {
+      const res = await request<any>(`/Live/get-live-comments?sessionId=${sessionId}`);
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+  },
+
+  // --- BROADCAST CHANNELS (one-way announcement threads) ---
+  broadcast: {
+    async createChannel(name: string, description?: string): Promise<any> {
+      return request("/Broadcast/create-channel", {
+        method: "POST",
+        body: JSON.stringify({ name, description }),
+      });
+    },
+    async getChannels(): Promise<any[]> {
+      const res = await request<any>("/Broadcast/get-channels");
+      return Array.isArray(res) ? res : res?.data || [];
+    },
+    async subscribe(channelId: string): Promise<any> {
+      return request(`/Broadcast/subscribe?channelId=${channelId}`, {
+        method: "POST",
+      });
+    },
+    async unsubscribe(channelId: string): Promise<any> {
+      return request(`/Broadcast/unsubscribe?channelId=${channelId}`, {
+        method: "DELETE",
+      });
+    },
+    /** Owner only. */
+    async sendMessage(channelId: string, text: string): Promise<any> {
+      return request("/Broadcast/send-message", {
+        method: "POST",
+        body: JSON.stringify({ channelId, text }),
+      });
+    },
+    async getMessages(channelId: string): Promise<any[]> {
+      const res = await request<any>(`/Broadcast/get-messages?channelId=${channelId}`);
+      return Array.isArray(res) ? res : res?.data || [];
     },
   },
 };

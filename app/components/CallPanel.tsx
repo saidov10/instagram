@@ -1,14 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  IAgoraRTCClient,
-  IAgoraRTCRemoteUser,
-  ICameraVideoTrack,
-  IMicrophoneAudioTrack,
-} from "agora-rtc-sdk-ng";
 import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff } from "lucide-react";
-import { api, getFullImageUrl } from "../services/api";
+import { api } from "../services/api";
+import { getSocket } from "../services/socket";
 import Avatar from "./Avatar";
 
 export type CallType = "AUDIO" | "VIDEO";
@@ -18,67 +13,40 @@ export interface CallSession {
   callId: string;
   chatId: number;
   channelName: string;
-  rtcToken: string;
+  iceServers: RTCIceServer[];
   type: CallType;
   status: string;
   callerId: string;
   recipientId: string;
-  appId?: string;
-  uid?: string | number;
 }
+
+/** Used only if the backend's iceServers list is ever empty — keeps calls on the same
+ *  network (or ones where NAT traversal doesn't need help) working regardless. */
+const FALLBACK_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export function mapCall(raw: any): CallSession | null {
   if (!raw) return null;
   const callId = String(raw.callId ?? raw.id ?? "");
   if (!callId) return null;
+  const rawIce = raw.iceServers ?? raw.iceServer ?? [];
+  const iceServers: RTCIceServer[] =
+    Array.isArray(rawIce) && rawIce.length > 0
+      ? rawIce.map((s: any) => ({
+          urls: s.urls ?? s.url,
+          username: s.username || undefined,
+          credential: s.credential || undefined,
+        }))
+      : FALLBACK_ICE_SERVERS;
   return {
     callId,
     chatId: raw.chatId ?? raw.chat?.id ?? 0,
     channelName: raw.channelName ?? raw.channel ?? "",
-    rtcToken: raw.rtcToken ?? raw.token ?? "",
+    iceServers,
     type: (String(raw.type || "AUDIO").toUpperCase() === "VIDEO" ? "VIDEO" : "AUDIO") as CallType,
     status: String(raw.status || "RINGING").toUpperCase(),
     callerId: raw.callerId ?? raw.initiatorId ?? raw.callerUserId ?? "",
     recipientId: raw.recipientId ?? raw.receiverId ?? "",
-    appId: raw.appId ?? raw.agoraAppId,
-    uid: raw.uid,
   };
-}
-
-/** App ID comes from the backend's call payload when it supplies one, else from env. */
-export const ENV_APP_ID = process.env.NEXT_PUBLIC_AGORA_APP_ID || "";
-
-const CHUNK_RELOAD_KEY = "agora-chunk-reloaded";
-
-/**
- * Loads the Agora SDK lazily (it touches browser globals, so it must not run during SSR).
- *
- * The SDK lives in its own JS chunk. After a dev rebuild or a new deploy, a tab that's
- * still holding the old bundle asks for a chunk hash that no longer exists → "Failed to
- * load chunk". We retry a couple of times (covers a slow/transient fetch), then, if it's
- * genuinely a stale-chunk error, force a single page reload to pull the fresh chunk map.
- * A sessionStorage flag stops that reload from looping.
- */
-async function loadAgoraRTC(retries = 2): Promise<any> {
-  try {
-    const mod = (await import("agora-rtc-sdk-ng")).default;
-    if (typeof window !== "undefined") sessionStorage.removeItem(CHUNK_RELOAD_KEY);
-    return mod;
-  } catch (err: any) {
-    if (retries > 0) {
-      await new Promise((r) => setTimeout(r, 500));
-      return loadAgoraRTC(retries - 1);
-    }
-    const isChunkError =
-      err?.name === "ChunkLoadError" || /loading chunk|failed to load chunk/i.test(err?.message || "");
-    if (isChunkError && typeof window !== "undefined" && !sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
-      sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
-      window.location.reload();
-      // Hang so the caller doesn't surface an error before the reload takes effect.
-      return new Promise<never>(() => {});
-    }
-    throw err;
-  }
 }
 
 /** Rejects if `promise` doesn't settle within `ms`, so a hung join surfaces an error. */
@@ -91,33 +59,20 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-/**
- * Turns raw Agora/getUserMedia errors into a message that says what to actually fix.
- * `hadToken` says whether the backend actually gave us an rtcToken: a token failure with no
- * token means the Agora project is in Secure mode but the backend has no App Certificate, so
- * we surface a "temporarily unavailable" message (a backend/env issue, not the user's fault).
- */
-function describeCallError(err: any, hadToken: boolean): string {
+/** Turns raw getUserMedia/RTCPeerConnection errors into a message that says what to fix. */
+function describeCallError(err: any): string {
   const name = err?.name || "";
   const code = err?.code || "";
   const msg = String(err?.message || "");
 
-  const isTokenError = /token|dynamic key|invalid vendor|CAN_NOT_GET|invalid_?token|-7|110/i.test(msg + code);
-
   if (msg.startsWith("__timeout__")) {
-    return "Не удалось подключиться (истекло время). Проверьте доступ к микрофону и режим проекта Agora.";
+    return "Не удалось подключиться (истекло время). Проверьте доступ к микрофону/камере и сеть.";
   }
   if (name === "NotAllowedError" || code === "PERMISSION_DENIED" || /permission denied/i.test(msg)) {
     return "Доступ к микрофону/камере запрещён. Разрешите его в браузере (значок 🔒 в адресной строке) и повторите.";
   }
   if (name === "NotFoundError" || code === "DEVICE_NOT_FOUND") {
     return "Микрофон или камера не найдены на этом устройстве.";
-  }
-  if (isTokenError && !hadToken) {
-    return "Звонки временно недоступны (сервер не выдал токен Agora). Попробуйте позже.";
-  }
-  if (isTokenError) {
-    return "Ошибка токена Agora. Проверьте: режим проекта (Testing mode не требует токен) или что бэкенд генерирует rtcToken с тем же App ID и App Certificate.";
   }
   return msg || "Не удалось подключиться к звонку.";
 }
@@ -129,54 +84,56 @@ interface CallPanelProps {
   phase: Phase;
   peerName: string;
   peerAvatar?: string;
+  /** Whether the local user is the one who placed the call — only the caller creates the SDP offer. */
+  isCaller: boolean;
   onAccepted: (session: CallSession) => void;
   onEnded: () => void;
 }
 
 /**
- * Full-screen call UI. Drives the Agora RTC lifecycle for the connected phase and
- * reports Accept / Reject / End back to the backend.
+ * Full-screen call UI. Drives a plain RTCPeerConnection for the connected phase,
+ * signaled over the app's Socket.IO connection, and reports Accept / Reject / End
+ * back to the backend over REST.
  */
-export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepted, onEnded }: CallPanelProps) {
-  const clientRef = useRef<IAgoraRTCClient | null>(null);
-  const localTracksRef = useRef<{ mic?: IMicrophoneAudioTrack; cam?: ICameraVideoTrack }>({});
-  const remoteRef = useRef<HTMLDivElement | null>(null);
-  const localRef = useRef<HTMLDivElement | null>(null);
+export default function CallPanel({ call, phase, peerName, peerAvatar, isCaller, onAccepted, onEnded }: CallPanelProps) {
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const remoteRef = useRef<HTMLVideoElement | null>(null);
+  const localRef = useRef<HTMLVideoElement | null>(null);
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
-  // Guards the join effect so it runs exactly once per call. Using state (`joining`/`joined`)
-  // as the guard is a trap: setJoining(true) fires inside the effect, and if that state is in
-  // the dependency array the effect re-runs, its cleanup flips `cancelled`, and the original
-  // join() bails at its first `if (cancelled) return` — leaving the UI stuck on "Подключение…".
-  const joinStartedRef = useRef(false);
 
   const [joining, setJoining] = useState(false);
   const [joined, setJoined] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(call.type === "VIDEO");
   const [remoteJoined, setRemoteJoined] = useState(false);
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
+  // Tracks whether we've already told the backend this call is over (hang-up button, or the
+  // peer leaving) — so the unmount safety net below doesn't fire a redundant second ENDED.
+  const endedRef = useRef(false);
 
-  const appId = call.appId || ENV_APP_ID;
-
-  /** Tears down Agora: unpublishes, closes local tracks, leaves the channel. */
-  const leaveAgora = useCallback(async () => {
-    const { mic, cam } = localTracksRef.current;
-    mic?.stop();
-    mic?.close();
-    cam?.stop();
-    cam?.close();
-    localTracksRef.current = {};
+  /** Tears down WebRTC: stops local tracks, closes the peer connection, leaves the signaling room. */
+  const leaveCall = useCallback(() => {
+    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
+    remoteStreamRef.current = null;
+    if (localRef.current) localRef.current.srcObject = null;
+    if (remoteRef.current) remoteRef.current.srcObject = null;
+    pcRef.current?.close();
+    pcRef.current = null;
     try {
-      await clientRef.current?.leave();
+      getSocket().emit("call:leave", { channelName: call.channelName });
     } catch {
-      /* already gone */
+      /* socket already gone */
     }
-    clientRef.current = null;
     setJoined(false);
     setRemoteJoined(false);
-  }, []);
+    setPlaybackBlocked(false);
+  }, [call.channelName]);
 
   // ---- Ringtone while ringing (both directions) ----
   useEffect(() => {
@@ -200,123 +157,249 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
     return () => clearInterval(t);
   }, [phase, joined]);
 
-  // ---- Agora join once we reach the connected phase ----
+  // ---- WebRTC connect ----
+  // The backend's `call:peer-joined` is only sent to whoever is *already in the room* when
+  // someone else joins — the one who joins later gets nothing. Since only the caller creates
+  // the offer (on receiving peer-joined), the caller must join the signaling room immediately
+  // when the call is placed (phase "outgoing"), so they're the earlier joiner and get notified
+  // once the callee joins later (right after accepting). The callee still only joins on accept.
+  //
+  // `shouldConnect` (not `phase`) is the effect's dependency on purpose. For the caller it's true
+  // across BOTH "outgoing" and "connected", so when the callee accepts and `phase` flips from one
+  // to the other, `shouldConnect` itself doesn't change — the effect does not re-run, and the live
+  // connection isn't torn down. All deps are primitives (bool/string), so the poller re-creating the
+  // `call` object every tick does NOT re-run this effect either.
+  //
+  // Crucially there is NO "already started" ref guard here. A persistent ref guard is fatal under
+  // React StrictMode (dev), which mounts→unmounts→remounts every component: the throwaway mount would
+  // set the guard and kick off getUserMedia, the throwaway unmount would set `cancelled = true`, and
+  // the real remount would hit the guard and bail — so the socket listeners were never attached and
+  // the in-flight getUserMedia resolved into `cancelled === true` and gave up. That's exactly why the
+  // CALLER (whose panel mounts already-connecting in "outgoing") never sent an offer, while the CALLEE
+  // (whose panel mounts idle in "incoming" and only connects later, after StrictMode's dance) worked.
+  // Without the guard, each mount gets its own `cancelled` closure; the throwaway one cancels itself
+  // and the final mount runs to completion — the canonical StrictMode-safe pattern.
+  const shouldConnect = isCaller ? phase === "outgoing" || phase === "connected" : phase === "connected";
   useEffect(() => {
-    if (phase !== "connected" || joinStartedRef.current) return;
-    joinStartedRef.current = true;
+    if (!shouldConnect) return;
 
     let cancelled = false;
+    const cleanupFns: (() => void)[] = [];
 
-    const join = async () => {
-      if (!appId) {
-        setError("Не задан Agora App ID (NEXT_PUBLIC_AGORA_APP_ID).");
-        return;
-      }
+    const start = async () => {
       if (!call.channelName) {
         setError("Бэкенд не вернул channelName для звонка.");
         return;
       }
-      // Note: we deliberately do NOT block on a missing rtcToken. Agora accepts a null token in
-      // Testing mode; a real "007…" token is only required in Secure mode. We forward exactly
-      // what the backend returned and let the join succeed (Testing mode) or fail (Secure mode
-      // without a certificate) — the catch below turns a token failure into a clear message.
 
       setJoining(true);
       setError(null);
       try {
-        // Loaded lazily (with stale-chunk recovery): the SDK touches browser globals
-        // and must not run during SSR.
-        const AgoraRTC = await loadAgoraRTC();
-        if (cancelled) return;
+        const stream = await withTimeout(
+          navigator.mediaDevices.getUserMedia({ audio: true, video: call.type === "VIDEO" }),
+          20000,
+          "media"
+        );
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        localStreamRef.current = stream;
+        if (localRef.current) {
+          localRef.current.srcObject = stream;
+          localRef.current.play().catch(() => {
+            /* local preview is muted, so browsers essentially never block this */
+          });
+        }
 
-        const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-        clientRef.current = client;
+        // Tagged breadcrumbs for the WebRTC handshake — filter the console for "[call]" to see
+        // exactly which step a stuck/silent call died at (join/offer/answer/ICE/track).
+        const log = (...args: any[]) => console.log("[call]", ...args);
 
-        client.on("user-published", async (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
-          await client.subscribe(user, mediaType);
-          if (mediaType === "video" && remoteRef.current) {
-            user.videoTrack?.play(remoteRef.current);
+        const pc = new RTCPeerConnection({ iceServers: call.iceServers });
+        pcRef.current = pc;
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        log("local media ready, tracks:", stream.getTracks().map((t) => t.kind));
+
+        const socket = getSocket();
+        log("socket id:", socket.id, "connected:", socket.connected);
+        const pendingCandidates: RTCIceCandidateInit[] = [];
+        let remoteDescSet = false;
+
+        const flushPendingCandidates = async () => {
+          const queued = pendingCandidates.splice(0);
+          for (const c of queued) {
+            try {
+              await pc.addIceCandidate(c);
+            } catch (err) {
+              console.error("Failed to add queued ICE candidate:", err);
+            }
           }
-          if (mediaType === "audio") {
-            user.audioTrack?.play();
+        };
+
+        pc.ontrack = (e) => {
+          log("ontrack fired:", e.track.kind);
+          if (!remoteStreamRef.current) remoteStreamRef.current = new MediaStream();
+          remoteStreamRef.current.addTrack(e.track);
+          if (remoteRef.current) {
+            remoteRef.current.srcObject = remoteStreamRef.current;
+            // The remote stream isn't muted, and by the time a track actually arrives (after the
+            // async offer/answer/ICE exchange) the browser no longer treats this as a fresh user
+            // gesture — so the `autoPlay` HTML attribute alone can get silently blocked with no
+            // console error. Play it explicitly and surface a tap-to-enable prompt if that fails.
+            remoteRef.current
+              .play()
+              .then(() => setPlaybackBlocked(false))
+              .catch(() => setPlaybackBlocked(true));
           }
           setRemoteJoined(true);
-        });
+        };
 
-        client.on("user-unpublished", () => setRemoteJoined(false));
-        // In a 1-on-1 call, the remote leaving the channel means the peer hung up — tear down
-        // and close our side too instead of sitting on "Ожидание собеседника…".
-        client.on("user-left", () => {
+        pc.onicecandidate = (e) => {
+          if (e.candidate) {
+            socket.emit("call:ice-candidate", { channelName: call.channelName, candidate: e.candidate });
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          log("iceConnectionState:", pc.iceConnectionState);
+          if (pc.iceConnectionState === "failed") {
+            setError("Соединение прервано — не удалось найти прямой путь между устройствами.");
+          }
+        };
+        pc.onconnectionstatechange = () => log("connectionState:", pc.connectionState);
+        pc.onicegatheringstatechange = () => log("iceGatheringState:", pc.iceGatheringState);
+
+        const onPeerJoined = async (payload: any) => {
+          log("call:peer-joined received", payload, "isCaller:", isCaller);
+          if (!isCaller) return;
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("call:offer", { channelName: call.channelName, sdp: pc.localDescription });
+            log("offer sent");
+          } catch (err) {
+            console.error("Failed to create offer:", err);
+          }
+        };
+
+        const onOffer = async ({ sdp }: { sdp: RTCSessionDescriptionInit }) => {
+          log("call:offer received");
+          try {
+            await pc.setRemoteDescription(sdp);
+            remoteDescSet = true;
+            await flushPendingCandidates();
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.emit("call:answer", { channelName: call.channelName, sdp: pc.localDescription });
+            log("answer sent");
+          } catch (err) {
+            console.error("Failed to handle offer:", err);
+          }
+        };
+
+        const onAnswer = async ({ sdp }: { sdp: RTCSessionDescriptionInit }) => {
+          log("call:answer received");
+          try {
+            await pc.setRemoteDescription(sdp);
+            remoteDescSet = true;
+            await flushPendingCandidates();
+          } catch (err) {
+            console.error("Failed to handle answer:", err);
+          }
+        };
+
+        const onIceCandidate = async ({ candidate }: { candidate: RTCIceCandidateInit }) => {
+          if (!candidate) return;
+          if (remoteDescSet) {
+            try {
+              await pc.addIceCandidate(candidate);
+            } catch (err) {
+              console.error("Failed to add ICE candidate:", err);
+            }
+          } else {
+            pendingCandidates.push(candidate);
+          }
+        };
+
+        const onPeerLeft = () => {
+          log("call:peer-left received");
           setRemoteJoined(false);
+<<<<<<< HEAD
           leaveAgora();
           onEnded();
+=======
+          leaveCall();
+          onEnded();
+        };
+
+        socket.on("call:peer-joined", onPeerJoined);
+        socket.on("call:offer", onOffer);
+        socket.on("call:answer", onAnswer);
+        socket.on("call:ice-candidate", onIceCandidate);
+        socket.on("call:peer-left", onPeerLeft);
+        cleanupFns.push(() => {
+          socket.off("call:peer-joined", onPeerJoined);
+          socket.off("call:offer", onOffer);
+          socket.off("call:answer", onAnswer);
+          socket.off("call:ice-candidate", onIceCandidate);
+          socket.off("call:peer-left", onPeerLeft);
+>>>>>>> 804e7580cc930dcc32944644aeab878067266583
         });
 
-        // Always join with uid 0: the backend builds a uid-0 wildcard token that's valid for
-        // whatever uid Agora assigns each client, so both parties use 0. `rtcToken || null`
-        // forwards the backend's token as-is, normalizing an empty/absent token to null
-        // (which Agora treats as "no token", the Testing-mode path).
-        //
-        // Joining the RTC channel can hang if the App ID/token/network is wrong —
-        // time it out so the user sees a real error instead of a frozen "Подключение…".
-        await withTimeout(
-          client.join(appId, call.channelName, call.rtcToken || null, 0),
-          15000,
-          "join"
-        );
-        if (cancelled) return;
-
-        // Acquiring mic/camera waits on the browser permission prompt; time it out too.
-        if (call.type === "VIDEO") {
-          const [mic, cam] = await withTimeout<[IMicrophoneAudioTrack, ICameraVideoTrack]>(
-            AgoraRTC.createMicrophoneAndCameraTracks(),
-            20000,
-            "media"
-          );
-          if (cancelled) {
-            mic.close();
-            cam.close();
-            return;
-          }
-          localTracksRef.current = { mic, cam };
-          if (localRef.current) cam.play(localRef.current);
-          await client.publish([mic, cam]);
-        } else {
-          const mic = await withTimeout<IMicrophoneAudioTrack>(
-            AgoraRTC.createMicrophoneAudioTrack(),
-            20000,
-            "media"
-          );
-          if (cancelled) {
-            mic.close();
-            return;
-          }
-          localTracksRef.current = { mic };
-          await client.publish([mic]);
-        }
+        socket.emit("call:join", { channelName: call.channelName });
+        log("call:join emitted for channel", call.channelName);
 
         if (!cancelled) setJoined(true);
       } catch (err: any) {
-        console.error("Agora join failed:", err);
-        if (!cancelled) setError(describeCallError(err, !!call.rtcToken));
+        console.error("Call connect failed:", err);
+        if (!cancelled) setError(describeCallError(err));
       } finally {
         if (!cancelled) setJoining(false);
       }
     };
 
-    join();
+    start();
 
     return () => {
       cancelled = true;
+      cleanupFns.forEach((fn) => fn());
     };
-  }, [phase, appId, call.channelName, call.rtcToken, call.type, call.uid]);
+    // Deps are deliberately the four primitives that actually define a distinct call to join, and
+    // nothing else. In particular NOT `call.iceServers` (a fresh array reference on every poller
+    // tick — it would tear down the live handshake mid-call), and NOT `leaveCall`/`onEnded`
+    // (recreated on parent re-renders). All four here compare by value, so ordinary re-renders and
+    // poll updates never re-run this effect; only a genuinely different call does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldConnect, call.channelName, call.type, isCaller]);
 
-  // Always release the mic/camera when this panel unmounts.
+  // Always release the mic/camera and leave the signaling room when this panel unmounts —
+  // and if nobody explicitly ended the call yet (e.g. the user just navigated away mid-call
+  // instead of hanging up), tell the backend too, so it never leaves an orphaned RINGING/
+  // ACCEPTED session behind that would block this chat from starting a new call.
+  //
+  // React StrictMode (dev only) mounts every component, immediately unmounts it, then mounts it
+  // again. The ENTIRE teardown — not just the REST ENDED call — must be deferred past that phantom
+  // unmount. `leaveCall()` emits `call:leave` over the socket, which the backend relays to the peer
+  // as `call:peer-left`; firing it on the phantom unmount made the peer think we hung up the instant
+  // the call connected, ending it "by itself". So defer everything to a macrotask and bail if the
+  // component was re-mounted by then (a real unmount never re-mounts). Releasing the mic a tick late
+  // is harmless.
+  const mountedRef = useRef(false);
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      leaveAgora();
+      mountedRef.current = false;
+      setTimeout(() => {
+        if (mountedRef.current) return; // phantom StrictMode unmount — component came back; do nothing
+        leaveCall();
+        if (!endedRef.current) {
+          endedRef.current = true;
+          api.chat.respondToCall({ callId: call.callId, status: "ENDED" }).catch(() => {});
+        }
+      }, 0);
     };
-  }, [leaveAgora]);
+  }, [leaveCall, call.callId]);
 
   // ---- Actions ----
   const handleAccept = async () => {
@@ -324,8 +407,6 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
     setBusy(true);
     try {
       const raw = await api.chat.respondToCall({ callId: call.callId, status: "ACCEPTED" });
-      // The ACCEPTED response carries a freshly issued rtcToken — the RINGING snapshot we
-      // joined on may have had a null/stale one, so this is the session we must join with.
       onAccepted(mapCall(raw) ?? call);
     } catch (err) {
       console.error("Failed to accept call:", err);
@@ -340,27 +421,28 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
     setBusy(true);
     try {
       await api.chat.respondToCall({ callId: call.callId, status });
+      endedRef.current = true;
     } catch (err) {
       console.error("Failed to end call:", err);
     } finally {
-      await leaveAgora();
+      leaveCall();
       setBusy(false);
       onEnded();
     }
   };
 
-  const toggleMic = async () => {
-    const mic = localTracksRef.current.mic;
-    if (!mic) return;
-    await mic.setEnabled(!micOn);
-    setMicOn((v) => !v);
+  const toggleMic = () => {
+    const track = localStreamRef.current?.getAudioTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    setMicOn(track.enabled);
   };
 
-  const toggleCam = async () => {
-    const cam = localTracksRef.current.cam;
-    if (!cam) return;
-    await cam.setEnabled(!camOn);
-    setCamOn((v) => !v);
+  const toggleCam = () => {
+    const track = localStreamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    setCamOn(track.enabled);
   };
 
   const mmss = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -382,12 +464,36 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
       <audio
         ref={ringtoneRef}
         loop
-        src="data:audio/wav;base64,UklGRiQEAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAEAAAAAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8="
+        src="data:audio/wav;base64,UklGRiQEAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAEAAAAAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8AAAAAgD+AP4A/gD8AAAAAgL+Av4C/gL8="
       />
 
-      {/* Remote video fills the screen when connected */}
-      {call.type === "VIDEO" && phase === "connected" && (
-        <div ref={remoteRef} id="remote-player" className="absolute inset-0 bg-black" />
+      {/* Remote media: visible full-screen for video calls. For audio calls it stays in the DOM
+          at 1x1px/opacity-0 rather than `display:none` — some browsers suspend playback entirely
+          on a display:none media element, which would silently kill the audio too. */}
+      <video
+        ref={remoteRef}
+        autoPlay
+        playsInline
+        className={
+          call.type === "VIDEO" && phase === "connected"
+            ? "absolute inset-0 w-full h-full object-cover bg-black"
+            : "absolute w-px h-px opacity-0 pointer-events-none"
+        }
+      />
+
+      {/* Autoplay was blocked by the browser — the click here is a fresh user gesture, so play() succeeds. */}
+      {playbackBlocked && (
+        <button
+          onClick={() => {
+            remoteRef.current
+              ?.play()
+              .then(() => setPlaybackBlocked(false))
+              .catch(() => {});
+          }}
+          className="absolute z-20 top-6 left-1/2 -translate-x-1/2 glass-strong rounded-full px-4 py-2 text-sm font-semibold cursor-pointer animate-pulse"
+        >
+          Нажмите, чтобы включить звук/видео
+        </button>
       )}
 
       {/* Caller identity — hidden behind remote video once the peer's stream arrives */}
@@ -404,9 +510,12 @@ export default function CallPanel({ call, phase, peerName, peerAvatar, onAccepte
 
       {/* Local preview (video calls only) */}
       {call.type === "VIDEO" && phase === "connected" && (
-        <div
+        <video
           ref={localRef}
-          className="absolute top-6 right-6 w-32 h-44 rounded-2xl overflow-hidden bg-zinc-900 ring-1 ring-white/20 shadow-soft-lg z-10"
+          autoPlay
+          playsInline
+          muted
+          className="absolute top-6 right-6 w-32 h-44 rounded-2xl overflow-hidden object-cover bg-zinc-900 ring-1 ring-white/20 shadow-soft-lg z-10"
         />
       )}
 

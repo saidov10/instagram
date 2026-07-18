@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Heart,
@@ -16,7 +17,8 @@ import {
   Smile,
   Film,
   Check,
-  Flag
+  Flag,
+  Repeat
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import {
@@ -33,6 +35,7 @@ import Avatar from "../components/Avatar";
 import SmartImage from "../components/SmartImage";
 import ReportModal, { ReportTarget } from "../components/ReportModal";
 import HashtagText from "../components/HashtagText";
+import LikersListModal from "../components/LikersListModal";
 
 interface ReelComment {
   id: number;
@@ -62,15 +65,18 @@ interface Reel {
   isSaved: boolean;
   isAudioSaved: boolean;
   comments: ReelComment[];
+  remixOfUsername?: string;
 }
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop";
 
-export default function ReelsPage() {
+function ReelsPageInner() {
   const dispatch = useDispatch<AppDispatch>();
-  const { setCreateOpen, setCreateType } = useApp();
+  const { setCreateOpen, setCreateType, setRemixTarget } = useApp();
   const { currentUser, isLoggedIn } = useSelector((state: RootState) => state.auth);
   const { reels: backendReels, savedAudios, loading } = useSelector((state: RootState) => state.posts);
+  const searchParams = useSearchParams();
+  const deepLinkId = searchParams.get("id");
 
   const [muted, setMuted] = useState(false);
   const [activeReelIndex, setActiveReelIndex] = useState(0);
@@ -81,6 +87,13 @@ export default function ReelsPage() {
   const [audioBusy, setAudioBusy] = useState(false);
   const [showReelMenu, setShowReelMenu] = useState(false);
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [likersModalPostId, setLikersModalPostId] = useState<number | null>(null);
+  const [likeBurstId, setLikeBurstId] = useState<number | null>(null);
+
+  const videoRefs = useRef<Map<number, HTMLVideoElement>>(new Map());
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deepLinkAppliedRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -88,6 +101,92 @@ export default function ReelsPage() {
       dispatch(fetchSavedAudios());
     }
   }, [isLoggedIn, dispatch]);
+
+  // Only the active reel's video should ever be playing — every other mounted
+  // <video> must be explicitly paused, since setting the `autoPlay` prop to
+  // false on an element that's already playing does NOT stop it (the attribute
+  // only affects playback at load time). Without this, scrolling past a reel
+  // left its audio running forever underneath every reel after it.
+  useEffect(() => {
+    videoRefs.current.forEach((video, idx) => {
+      if (idx === activeReelIndex) {
+        video.currentTime = 0;
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+        video.currentTime = 0;
+      }
+    });
+  }, [activeReelIndex, reels.length]);
+
+  // Deep link from Explore (?id=<postId>) — jump to that specific reel once it's
+  // loaded, fetching it individually if it isn't part of the general reels feed.
+  useEffect(() => {
+    if (!deepLinkId || deepLinkAppliedRef.current === deepLinkId || reels.length === 0) return;
+    const idx = reels.findIndex((r) => String(r.id) === deepLinkId);
+    if (idx !== -1) {
+      deepLinkAppliedRef.current = deepLinkId;
+      setActiveReelIndex(idx);
+      scrollContainerRef.current?.children[idx]?.scrollIntoView({ block: "start" });
+      return;
+    }
+    deepLinkAppliedRef.current = deepLinkId;
+    api.post
+      .getPostById(Number(deepLinkId))
+      .then((p: any) => {
+        if (!p) return;
+        const audioId = String(p.audioId ?? p.audio?.id ?? "");
+        const extra: Reel = {
+          id: p.id || p.postId,
+          userId: p.userId || p.userProfileId || "",
+          creator: p.userName || p.username || "creator",
+          avatar: getFullImageUrl(p.userAvatar || p.userImage),
+          media: getFullImageUrl(p.filePath || p.imagePath || (p.images && p.images[0]) || p.image),
+          caption: p.content || p.title || p.caption || "",
+          audioId,
+          audioName: p.audioName || p.audio?.title || `Оригинальный звук`,
+          audioArtist: p.audioArtist || p.audio?.artist || p.userName || "",
+          audioUrl: getFullImageUrl(p.audioUrl || p.audio?.audioUrl),
+          likesCount: typeof p.likeCount === "number" ? p.likeCount : (Array.isArray(p.likes) ? p.likes.length : 0),
+          commentsCount: typeof p.commentCount === "number" ? p.commentCount : (p.comments?.length || 0),
+          isLiked: !!p.isLiked,
+          isSaved: !!p.isSaved,
+          isAudioSaved: false,
+          remixOfUsername: p.originalReel?.userName || p.originalReel?.username || undefined,
+          comments: (p.comments || []).map((c: any) => ({
+            id: c.id || c.commentId,
+            userId: c.userId || "",
+            username: c.userName || c.username || "commenter",
+            avatar: getFullImageUrl(c.userAvatar),
+            text: c.comment || c.text || "",
+            likes: typeof c.likeCount === "number" ? c.likeCount : 0,
+            isLiked: !!c.isLiked,
+            time: "Just now",
+          })),
+        };
+        setReels((prev) => [extra, ...prev.filter((r) => r.id !== extra.id)]);
+        setActiveReelIndex(0);
+      })
+      .catch((err) => console.error("Failed to load linked reel:", err));
+  }, [deepLinkId, reels.length]);
+
+  // Single tap toggles mute, double tap (within the same window) likes — mirrors
+  // Instagram's reel gesture behavior. A single native onClick can't tell the two
+  // apart, so the second tap is detected by cancelling the pending single-tap timer.
+  const handleMediaTap = (reel: Reel) => {
+    if (tapTimerRef.current) {
+      clearTimeout(tapTimerRef.current);
+      tapTimerRef.current = null;
+      if (!reel.isLiked) handleLike(reel.id);
+      setLikeBurstId(reel.id);
+      setTimeout(() => setLikeBurstId(null), 800);
+    } else {
+      tapTimerRef.current = setTimeout(() => {
+        tapTimerRef.current = null;
+        setMuted((m) => !m);
+      }, 250);
+    }
+  };
 
   useEffect(() => {
     if (!backendReels || backendReels.length === 0) {
@@ -113,6 +212,7 @@ export default function ReelsPage() {
         isLiked: !!p.isLiked,
         isSaved: !!p.isSaved,
         isAudioSaved: !!audioId && savedAudioIds.has(audioId),
+        remixOfUsername: p.originalReel?.userName || p.originalReel?.username || undefined,
         comments: (p.comments || []).map((c: any) => ({
           id: c.id || c.commentId,
           userId: c.userId || "",
@@ -264,7 +364,7 @@ export default function ReelsPage() {
             setCreateType("reel");
             setCreateOpen(true);
           }}
-          className="btn-grad px-5 py-2.5 rounded-xl text-sm font-bold cursor-pointer"
+          className="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold cursor-pointer"
         >
           Создать Reel
         </button>
@@ -283,21 +383,26 @@ export default function ReelsPage() {
           
           {/* Vertical scroll container */}
           <div
+            ref={scrollContainerRef}
             onScroll={handleScroll}
             className="flex-1 overflow-y-scroll snap-y snap-mandatory no-scrollbar scroll-smooth h-full"
           >
             {reels.map((reel, idx) => (
               <div
                 key={reel.id}
-                className="w-full h-full snap-start snap-always relative flex-shrink-0"
+                onClick={() => handleMediaTap(reel)}
+                className="w-full h-full snap-start snap-always relative flex-shrink-0 cursor-pointer"
               >
                 {reel.media.toLowerCase().endsWith('.mp4') || reel.media.toLowerCase().endsWith('.mov') || reel.media.toLowerCase().endsWith('.webm') ? (
                   <video
+                    ref={(el) => {
+                      if (el) videoRefs.current.set(idx, el);
+                      else videoRefs.current.delete(idx);
+                    }}
                     src={reel.media}
                     className="w-full h-full object-cover select-none"
                     muted={muted}
                     loop
-                    autoPlay={activeReelIndex === idx}
                     playsInline
                   />
                 ) : (
@@ -308,6 +413,13 @@ export default function ReelsPage() {
                     sizes="(max-width: 768px) 100vw, 480px"
                     className="object-cover select-none"
                   />
+                )}
+
+                {/* Double-tap like burst */}
+                {likeBurstId === reel.id && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                    <Heart className="w-28 h-28 text-white fill-white drop-shadow-2xl animate-heart-burst stroke-[1px]" />
+                  </div>
                 )}
 
                 {/* Progress bar line */}
@@ -340,6 +452,11 @@ export default function ReelsPage() {
                 {currentReel.creator}
               </span>
             </Link>
+            {currentReel.remixOfUsername && (
+              <span className="text-[11px] text-white/70 flex items-center gap-1 -mt-1">
+                <Repeat className="w-3 h-3" /> Ремикс @{currentReel.remixOfUsername}
+              </span>
+            )}
 
             {/* Caption */}
             <p className="text-xs line-clamp-2 leading-relaxed opacity-90 select-text text-left">
@@ -348,7 +465,10 @@ export default function ReelsPage() {
 
             {/* Audio track + save-audio */}
             <div className="flex items-center gap-2 mt-1">
-              <div className="flex items-center gap-2 text-xs bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 min-w-0">
+              <Link
+                href={currentReel.audioId ? `/audio/${encodeURIComponent(currentReel.audioId)}` : "#"}
+                className="flex items-center gap-2 text-xs bg-black/25 backdrop-blur-sm rounded-full py-1 px-3 min-w-0 hover:bg-black/40 transition"
+              >
                 <Music className="w-3.5 h-3.5 flex-shrink-0" />
                 <div className="overflow-hidden w-28 relative h-4">
                   <span className="absolute animate-marquee whitespace-nowrap font-medium">
@@ -356,7 +476,7 @@ export default function ReelsPage() {
                     {currentReel.audioArtist ? ` · ${currentReel.audioArtist}` : ""}
                   </span>
                 </div>
-              </div>
+              </Link>
               {currentReel.audioId && (
                 <button
                   onClick={() => handleSaveAudio(currentReel)}
@@ -395,7 +515,12 @@ export default function ReelsPage() {
                   }`}
                 />
               </button>
-              <span className="text-xs font-semibold drop-shadow">{currentReel.likesCount.toLocaleString()}</span>
+              <button
+                onClick={() => setLikersModalPostId(currentReel.id)}
+                className="text-xs font-semibold drop-shadow cursor-pointer hover:opacity-80"
+              >
+                {currentReel.likesCount.toLocaleString()}
+              </button>
             </div>
 
             {/* Comments toggle */}
@@ -432,6 +557,30 @@ export default function ReelsPage() {
               </button>
               {showReelMenu && (
                 <div className="absolute bottom-full right-0 mb-2 w-48 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-20 animate-pop-in">
+                  {currentUser && currentReel.userId !== currentUser.id && (
+                    <button
+                      onClick={() => {
+                        setRemixTarget({
+                          postId: currentReel.id,
+                          username: currentReel.creator,
+                          audio: currentReel.audioId
+                            ? {
+                                id: currentReel.audioId,
+                                title: currentReel.audioName,
+                                artist: currentReel.audioArtist,
+                                audioUrl: currentReel.audioUrl,
+                              }
+                            : null,
+                        });
+                        setCreateType("reel");
+                        setCreateOpen(true);
+                        setShowReelMenu(false);
+                      }}
+                      className="w-full flex items-center gap-2.5 p-3.5 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer text-left"
+                    >
+                      <Repeat className="w-4 h-4" /> Ремикс
+                    </button>
+                  )}
                   {currentUser && currentReel.userId !== currentUser.id ? (
                     <button
                       onClick={() => {
@@ -543,7 +692,18 @@ export default function ReelsPage() {
 
       {/* ----------------- REPORT MODAL ----------------- */}
       {reportTarget && <ReportModal target={reportTarget} onClose={() => setReportTarget(null)} />}
+      {likersModalPostId != null && (
+        <LikersListModal postId={likersModalPostId} onClose={() => setLikersModalPostId(null)} />
+      )}
 
     </div>
+  );
+}
+
+export default function ReelsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ReelsPageInner />
+    </Suspense>
   );
 }

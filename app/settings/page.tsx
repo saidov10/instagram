@@ -3,11 +3,11 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useDispatch, useSelector } from "react-redux";
-import { logout, updateProfile, updateAvatar, fetchMyProfile, updatePrivacy } from "../store/slices/authSlice";
+import { logout, updateProfile, updateAvatar, fetchMyProfile, updatePrivacy, updateUsername as updateUsernameAction } from "../store/slices/authSlice";
 import { AppDispatch, RootState } from "../store/store";
 import { useApp } from "../context/AppContext";
 import { api, getFullImageUrl } from "../services/api";
-import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone, UserX, VolumeX, AlertTriangle, Briefcase } from "lucide-react";
+import { User, Sun, Moon, LogOut, Shield, Bell, HelpCircle, Lock, Ban, EyeOff, Star, Search, Monitor, Smartphone, UserX, VolumeX, AlertTriangle, Briefcase, X, Download } from "lucide-react";
 import Avatar from "../components/Avatar";
 
 interface DeviceSession {
@@ -74,11 +74,31 @@ export default function SettingsPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Local form states
-  const [name, setName] = useState(currentUser?.name || "");
+  const [fullName, setFullName] = useState(currentUser?.fullName || "");
   const [username, setUsername] = useState(currentUser?.username || "");
+  const [website, setWebsite] = useState(currentUser?.website || "");
+  const [pronouns, setPronouns] = useState(currentUser?.pronouns || "");
   const [bio, setBio] = useState(currentUser?.about || "");
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Username availability (live-checked while typing)
+  const [usernameChecking, setUsernameChecking] = useState(false);
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
+
+  // Security activity log
+  const [securityLog, setSecurityLog] = useState<any[]>([]);
+  const [securityLogLoading, setSecurityLogLoading] = useState(false);
+
+  // Appeals ("Справка")
+  const [appeals, setAppeals] = useState<any[]>([]);
+  const [appealsLoading, setAppealsLoading] = useState(false);
+  const [appealTargetType, setAppealTargetType] = useState<"POST" | "COMMENT" | "STORY" | "USER">("USER");
+  const [appealTargetId, setAppealTargetId] = useState("");
+  const [appealReason, setAppealReason] = useState("");
+  const [appealSubmitting, setAppealSubmitting] = useState(false);
+  const [appealMessage, setAppealMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   // Change-password form
   const [oldPassword, setOldPassword] = useState("");
@@ -88,7 +108,7 @@ export default function SettingsPage() {
   const [pwMessage, setPwMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   // Section navigation + privacy panel state
-  const [activeSection, setActiveSection] = useState<"profile" | "privacy" | "closeFriends" | "sessions">("profile");
+  const [activeSection, setActiveSection] = useState<"profile" | "privacy" | "closeFriends" | "sessions" | "support" | "notifications">("profile");
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [hiddenUsers, setHiddenUsers] = useState<any[]>([]);
@@ -98,6 +118,37 @@ export default function SettingsPage() {
   const [sensitiveLevel, setSensitiveLevel] = useState<"HIDE" | "BLUR" | "SHOW">("BLUR");
   const [sensitiveBusy, setSensitiveBusy] = useState(false);
   const [accountBusy, setAccountBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [deletionBusy, setDeletionBusy] = useState(false);
+  const [deletionRequested, setDeletionRequested] = useState(
+    typeof window !== "undefined" && localStorage.getItem("instagram_deletion_requested") === "1"
+  );
+  const [activityStatusBusy, setActivityStatusBusy] = useState(false);
+
+  // Quiet mode
+  const [quietEnabled, setQuietEnabled] = useState(false);
+  const [quietStart, setQuietStart] = useState("22:00");
+  const [quietEnd, setQuietEnd] = useState("07:00");
+  const [quietBusy, setQuietBusy] = useState(false);
+  useEffect(() => {
+    setQuietEnabled(!!currentUser?.isInQuietMode);
+  }, [currentUser?.isInQuietMode]);
+
+  // Muted words
+  const [mutedWords, setMutedWords] = useState<string[]>([]);
+  const [mutedWordInput, setMutedWordInput] = useState("");
+  const [mutedWordBusy, setMutedWordBusy] = useState(false);
+
+  // Notification category settings
+  const [notifSettings, setNotifSettings] = useState<Record<string, boolean>>({});
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifBusy, setNotifBusy] = useState<Record<string, boolean>>({});
+
+  // Browser push token (storage/logging only — no real FCM/APNs delivery behind it)
+  const [pushEnabled, setPushEnabled] = useState(
+    typeof window !== "undefined" && !!localStorage.getItem("instagram_push_token")
+  );
+  const [pushBusy, setPushBusy] = useState(false);
 
   // Login activity / device sessions
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
@@ -127,6 +178,18 @@ export default function SettingsPage() {
     api.user.getMutedUsers()
       .then((list) => setMutedUsers(list || []))
       .catch(() => setMutedUsers([]));
+    api.user.getMutedWords()
+      .then((list) => setMutedWords(list || []))
+      .catch(() => setMutedWords([]));
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "notifications") return;
+    setNotifLoading(true);
+    api.notification.getSettings()
+      .then((settings) => setNotifSettings(settings || {}))
+      .catch(() => setNotifSettings({}))
+      .finally(() => setNotifLoading(false));
   }, [activeSection]);
 
   useEffect(() => {
@@ -173,6 +236,84 @@ export default function SettingsPage() {
       })
       .finally(() => setSessionsLoading(false));
   }, [activeSection]);
+
+  // Live-check username availability while typing (skips the no-op case of the current username)
+  useEffect(() => {
+    const trimmed = username.trim();
+    if (!trimmed || trimmed === currentUser?.username) {
+      setUsernameAvailable(null);
+      setUsernameChecking(false);
+      return;
+    }
+    setUsernameChecking(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.account.checkUsernameAvailability(trimmed);
+        setUsernameAvailable(!!res?.isAvailable);
+      } catch {
+        setUsernameAvailable(null);
+      } finally {
+        setUsernameChecking(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [username, currentUser?.username]);
+
+  useEffect(() => {
+    if (activeSection !== "sessions") return;
+    setSecurityLogLoading(true);
+    api.account.getSecurityLog()
+      .then((list) => setSecurityLog(list || []))
+      .catch(() => setSecurityLog([]))
+      .finally(() => setSecurityLogLoading(false));
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "support") return;
+    setAppealsLoading(true);
+    api.report.getMyAppeals()
+      .then((list) => setAppeals(list || []))
+      .catch(() => setAppeals([]))
+      .finally(() => setAppealsLoading(false));
+  }, [activeSection]);
+
+  const appealStatusLabel: Record<string, string> = {
+    PENDING: "На рассмотрении",
+    APPROVED: "Одобрена",
+    REJECTED: "Отклонена",
+  };
+
+  const handleSubmitAppeal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!appealTargetId.trim() || !appealReason.trim()) return;
+    setAppealSubmitting(true);
+    setAppealMessage(null);
+    try {
+      const created = await api.report.submitAppeal({
+        targetType: appealTargetType,
+        targetId: appealTargetId.trim(),
+        reason: appealReason.trim(),
+      });
+      setAppeals((prev) => [created, ...prev]);
+      setAppealTargetId("");
+      setAppealReason("");
+      setAppealMessage({ type: "ok", text: "Апелляция отправлена." });
+    } catch (err: any) {
+      setAppealMessage({ type: "err", text: err?.message || "Не удалось отправить апелляцию." });
+    } finally {
+      setAppealSubmitting(false);
+    }
+  };
+
+  const securityEventLabel: Record<string, string> = {
+    ACCOUNT_CREATED: "Аккаунт создан",
+    LOGIN: "Вход в аккаунт",
+    PASSWORD_CHANGED: "Пароль изменён",
+    USERNAME_CHANGED: "Изменено имя пользователя",
+    DEACTIVATED: "Аккаунт деактивирован",
+    REACTIVATED: "Аккаунт восстановлен",
+    DELETION_REQUESTED: "Запрошено удаление аккаунта",
+  };
 
   const handleLogoutSession = async (sessionId: string) => {
     if (sessionBusy[sessionId]) return;
@@ -280,6 +421,164 @@ export default function SettingsPage() {
     }
   };
 
+  const handleExportData = async () => {
+    if (exportBusy) return;
+    setExportBusy(true);
+    try {
+      const data = await api.account.exportData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `instagram-data-${currentUser?.username || "export"}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export data:", err);
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
+  const handleRequestDeletion = async () => {
+    if (deletionBusy) return;
+    if (!window.confirm("Аккаунт будет запланирован на удаление через 30 дней. Продолжить?")) return;
+    setDeletionBusy(true);
+    try {
+      await api.account.requestDeletion();
+      localStorage.setItem("instagram_deletion_requested", "1");
+      setDeletionRequested(true);
+    } catch (err) {
+      console.error("Failed to request deletion:", err);
+    } finally {
+      setDeletionBusy(false);
+    }
+  };
+
+  const handleCancelDeletion = async () => {
+    if (deletionBusy) return;
+    setDeletionBusy(true);
+    try {
+      await api.account.cancelDeletion();
+      localStorage.removeItem("instagram_deletion_requested");
+      setDeletionRequested(false);
+    } catch (err) {
+      console.error("Failed to cancel deletion:", err);
+    } finally {
+      setDeletionBusy(false);
+    }
+  };
+
+  const handleToggleActivityStatus = async () => {
+    if (!currentUser || activityStatusBusy) return;
+    setActivityStatusBusy(true);
+    try {
+      await api.profile.updateActivityStatusVisibility(!currentUser.showActivityStatus);
+      await dispatch(fetchMyProfile());
+    } catch (err) {
+      console.error("Failed to update activity status visibility:", err);
+    } finally {
+      setActivityStatusBusy(false);
+    }
+  };
+
+  const handleToggleQuietMode = async () => {
+    if (quietBusy) return;
+    const next = !quietEnabled;
+    setQuietBusy(true);
+    try {
+      await api.user.updateQuietMode({ enabled: next, startTime: quietStart, endTime: quietEnd });
+      setQuietEnabled(next);
+      await dispatch(fetchMyProfile());
+    } catch (err) {
+      console.error("Failed to update quiet mode:", err);
+    } finally {
+      setQuietBusy(false);
+    }
+  };
+
+  const handleSaveQuietHours = async () => {
+    if (!quietEnabled || quietBusy) return;
+    setQuietBusy(true);
+    try {
+      await api.user.updateQuietMode({ enabled: true, startTime: quietStart, endTime: quietEnd });
+    } catch (err) {
+      console.error("Failed to update quiet mode hours:", err);
+    } finally {
+      setQuietBusy(false);
+    }
+  };
+
+  const handleAddMutedWord = async () => {
+    const word = mutedWordInput.trim();
+    if (!word || mutedWordBusy || mutedWords.includes(word)) return;
+    setMutedWordBusy(true);
+    try {
+      await api.user.addMutedWord(word);
+      setMutedWords((prev) => [...prev, word]);
+      setMutedWordInput("");
+    } catch (err) {
+      console.error("Failed to add muted word:", err);
+    } finally {
+      setMutedWordBusy(false);
+    }
+  };
+
+  const handleRemoveMutedWord = async (word: string) => {
+    const snapshot = mutedWords;
+    setMutedWords((prev) => prev.filter((w) => w !== word));
+    try {
+      await api.user.removeMutedWord(word);
+    } catch (err) {
+      console.error("Failed to remove muted word:", err);
+      setMutedWords(snapshot);
+    }
+  };
+
+  const handleTogglePush = async () => {
+    if (pushBusy) return;
+    setPushBusy(true);
+    try {
+      if (!pushEnabled) {
+        if (typeof Notification !== "undefined" && Notification.permission === "default") {
+          await Notification.requestPermission();
+        }
+        if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+          alert("Разрешите уведомления в браузере, чтобы включить эту опцию.");
+          return;
+        }
+        const token = localStorage.getItem("instagram_push_token") || crypto.randomUUID();
+        await api.notification.registerPushToken(token, "WEB");
+        localStorage.setItem("instagram_push_token", token);
+        setPushEnabled(true);
+      } else {
+        const token = localStorage.getItem("instagram_push_token");
+        if (token) await api.notification.unregisterPushToken(token);
+        localStorage.removeItem("instagram_push_token");
+        setPushEnabled(false);
+      }
+    } catch (err) {
+      console.error("Failed to toggle push notifications:", err);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleToggleNotifSetting = async (category: "LIKES" | "COMMENTS" | "FOLLOWS" | "MENTIONS" | "MESSAGES") => {
+    if (notifBusy[category]) return;
+    const next = !notifSettings[category];
+    setNotifBusy((b) => ({ ...b, [category]: true }));
+    setNotifSettings((prev) => ({ ...prev, [category]: next }));
+    try {
+      await api.notification.updateSettings(category, next);
+    } catch (err) {
+      console.error("Failed to update notification setting:", err);
+      setNotifSettings((prev) => ({ ...prev, [category]: !next }));
+    } finally {
+      setNotifBusy((b) => ({ ...b, [category]: false }));
+    }
+  };
+
   const handleAccountType = async (type: "PERSONAL" | "BUSINESS" | "CREATOR") => {
     setAccountBusy(true);
     try {
@@ -337,13 +636,23 @@ export default function SettingsPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
+    const trimmedUsername = username.trim();
+    if (trimmedUsername !== currentUser?.username && usernameAvailable === false) {
+      setSaveError("Это имя пользователя уже занято — измените его или верните прежнее значение.");
+      return;
+    }
     setSaving(true);
     try {
-      await dispatch(updateProfile({ about: bio })).unwrap();
+      if (trimmedUsername && trimmedUsername !== currentUser?.username && usernameAvailable) {
+        await dispatch(updateUsernameAction(trimmedUsername)).unwrap();
+      }
+      await dispatch(updateProfile({ about: bio, fullName, website, pronouns })).unwrap();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setSaveError(typeof err === "string" ? err : err?.message || "Не удалось сохранить изменения. Попробуйте ещё раз.");
     } finally {
       setSaving(false);
     }
@@ -417,11 +726,21 @@ export default function SettingsPage() {
           <Monitor className="w-5 h-5" />
           <span>Безопасность и входы</span>
         </button>
-        <button className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm text-left flex-shrink-0 cursor-pointer text-zinc-550 dark:text-zinc-400">
+        <button
+          onClick={() => setActiveSection("notifications")}
+          className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
+            activeSection === "notifications" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+          }`}
+        >
           <Bell className="w-5 h-5" />
           <span>Уведомления</span>
         </button>
-        <button className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm text-left flex-shrink-0 cursor-pointer text-zinc-550 dark:text-zinc-400">
+        <button
+          onClick={() => setActiveSection("support")}
+          className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left flex-shrink-0 cursor-pointer ${
+            activeSection === "support" ? "glass font-semibold" : "hover:bg-zinc-50 dark:hover:bg-zinc-900 text-zinc-550 dark:text-zinc-400"
+          }`}
+        >
           <HelpCircle className="w-5 h-5" />
           <span>Справка</span>
         </button>
@@ -462,25 +781,65 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Full Name input (Read only or visual) */}
+          {/* Full Name input */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-bold uppercase text-zinc-400 dark:text-zinc-500">Имя</label>
             <input
               type="text"
-              value={name}
-              disabled
-              className="bg-zinc-100/50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800 outline-none rounded-lg px-3 py-2 text-sm text-zinc-500 cursor-not-allowed"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
             />
           </div>
 
-          {/* Username input (Read only or visual) */}
+          {/* Username input — live availability check */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-bold uppercase text-zinc-400 dark:text-zinc-500">Имя пользователя</label>
+            <div className="relative">
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value.replace(/\s/g, "").toLowerCase())}
+                className="w-full bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 pr-8 text-sm text-zinc-900 dark:text-white"
+              />
+              {username.trim() !== currentUser.username && (
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs">
+                  {usernameChecking ? (
+                    <div className="w-3.5 h-3.5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
+                  ) : usernameAvailable === true ? (
+                    <span className="text-green-500">✓</span>
+                  ) : usernameAvailable === false ? (
+                    <span className="text-red-500">✕</span>
+                  ) : null}
+                </span>
+              )}
+            </div>
+            {username.trim() !== currentUser.username && !usernameChecking && usernameAvailable === false && (
+              <span className="text-xs text-red-500">Это имя пользователя уже занято.</span>
+            )}
+          </div>
+
+          {/* Website input */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold uppercase text-zinc-400 dark:text-zinc-500">Сайт</label>
             <input
               type="text"
-              value={username}
-              disabled
-              className="bg-zinc-100/50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800 outline-none rounded-lg px-3 py-2 text-sm text-zinc-500 cursor-not-allowed"
+              placeholder="https://"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+            />
+          </div>
+
+          {/* Pronouns input */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold uppercase text-zinc-400 dark:text-zinc-500">Местоимения</label>
+            <input
+              type="text"
+              placeholder="она/её, он/его…"
+              value={pronouns}
+              onChange={(e) => setPronouns(e.target.value)}
+              className="bg-transparent border border-zinc-300 dark:border-zinc-800 focus:border-zinc-450 dark:focus:border-zinc-650 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
             />
           </div>
 
@@ -499,7 +858,7 @@ export default function SettingsPage() {
           <div className="flex items-center gap-4 mt-2">
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || (username.trim() !== currentUser.username && (usernameChecking || usernameAvailable === false))}
               className="bg-blue-500 hover:bg-blue-600 active:bg-blue-700 disabled:opacity-50 text-white font-bold text-sm px-6 py-2.5 rounded-lg transition cursor-pointer"
             >
               {saving ? "Сохранение..." : "Отправить"}
@@ -561,6 +920,57 @@ export default function SettingsPage() {
           >
             Деактивировать мой аккаунт
           </button>
+        </div>
+
+        {/* ----------------- DATA EXPORT ----------------- */}
+        <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
+          <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+            <Download className="w-5 h-5" /> Скачать ваши данные
+          </h3>
+          <p className="text-sm text-zinc-450 mb-4">
+            Получите копию профиля, публикаций и другой информации в формате JSON.
+          </p>
+          <button
+            onClick={handleExportData}
+            disabled={exportBusy}
+            className="text-sm font-bold glass hover:shadow-soft px-5 py-2.5 rounded-lg transition cursor-pointer disabled:opacity-50"
+          >
+            {exportBusy ? "Подготовка..." : "Скачать данные"}
+          </button>
+        </div>
+
+        {/* ----------------- ACCOUNT DELETION ----------------- */}
+        <div className="mt-12 pt-8 border-t border-zinc-200 dark:border-zinc-800 max-w-lg">
+          <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-red-500" /> Удалить аккаунт
+          </h3>
+          {deletionRequested ? (
+            <>
+              <p className="text-sm text-zinc-450 mb-4">
+                Ваш аккаунт будет удалён безвозвратно через 30 дней. Войдите снова в это время, чтобы автоматически отменить удаление.
+              </p>
+              <button
+                onClick={handleCancelDeletion}
+                disabled={deletionBusy}
+                className="text-sm font-bold glass hover:shadow-soft px-5 py-2.5 rounded-lg transition cursor-pointer disabled:opacity-50"
+              >
+                Отменить удаление
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-zinc-450 mb-4">
+                Аккаунт будет запланирован на удаление через 30 дней. Вход в систему в этот период автоматически отменяет удаление.
+              </p>
+              <button
+                onClick={handleRequestDeletion}
+                disabled={deletionBusy}
+                className="text-sm font-bold text-red-500 border border-red-500/40 hover:bg-red-500/5 px-5 py-2.5 rounded-lg transition cursor-pointer disabled:opacity-50"
+              >
+                Запросить удаление аккаунта
+              </button>
+            </>
+          )}
         </div>
 
         {/* ----------------- CHANGE PASSWORD ----------------- */}
@@ -671,7 +1081,7 @@ export default function SettingsPage() {
                             onClick={() => handleAddCloseFriend(u)}
                             disabled={already || cfBusy[uid]}
                             className={`text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0 ml-2 cursor-pointer disabled:opacity-60 ${
-                              already ? "glass" : "bg-green-500 hover:bg-green-600 text-white"
+                              already ? "glass" : "btn-primary"
                             }`}
                           >
                             {already ? "Добавлен" : "Добавить"}
@@ -801,6 +1211,187 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+
+          {/* Security activity log */}
+          <div className="pt-6 border-t border-zinc-200 dark:border-zinc-800">
+            <h3 className="text-sm font-bold uppercase text-zinc-400 dark:text-zinc-500 mb-3">Журнал активности</h3>
+            {securityLogLoading ? (
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="w-full h-10 rounded-lg shimmer" />
+                ))}
+              </div>
+            ) : securityLog.length === 0 ? (
+              <p className="text-sm text-zinc-450">Событий пока нет.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {securityLog.map((ev) => (
+                  <div key={ev.id} className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-sm font-semibold">{securityEventLabel[ev.type] || ev.type}</span>
+                      <span className="text-xs text-zinc-500 truncate">
+                        {ev.ip ? `IP: ${ev.ip}` : ""}{ev.userAgent ? ` · ${ev.userAgent.slice(0, 40)}` : ""}
+                      </span>
+                    </div>
+                    <span className="text-xs text-zinc-450 flex-shrink-0">{formatSessionDate(ev.createAt || ev.createdAt)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        ) : activeSection === "support" ? (
+        <div className="max-w-lg flex flex-col gap-8">
+          <div>
+            <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+              <HelpCircle className="w-5 h-5" /> Справка
+            </h2>
+            <p className="text-sm text-zinc-500">
+              Если публикация, комментарий, история или аккаунт были заблокированы по ошибке — отправьте апелляцию.
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmitAppeal} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Тип объекта</label>
+              <select
+                value={appealTargetType}
+                onChange={(e) => setAppealTargetType(e.target.value as typeof appealTargetType)}
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              >
+                <option value="USER">Аккаунт</option>
+                <option value="POST">Публикация</option>
+                <option value="COMMENT">Комментарий</option>
+                <option value="STORY">История</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">ID объекта</label>
+              <input
+                type="text"
+                value={appealTargetId}
+                onChange={(e) => setAppealTargetId(e.target.value)}
+                placeholder="Например, ID публикации"
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 outline-none rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-white"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold uppercase text-zinc-450 dark:text-zinc-500">Причина апелляции</label>
+              <textarea
+                rows={3}
+                value={appealReason}
+                onChange={(e) => setAppealReason(e.target.value)}
+                className="bg-transparent border border-zinc-300 dark:border-zinc-800 outline-none rounded-lg px-3 py-2 text-sm resize-none text-zinc-900 dark:text-white"
+              />
+            </div>
+            <div className="flex items-center gap-4">
+              <button
+                type="submit"
+                disabled={appealSubmitting || !appealTargetId.trim() || !appealReason.trim()}
+                className="bg-blue-500 hover:bg-blue-600 active:bg-blue-700 disabled:opacity-50 text-white font-bold text-sm px-6 py-2.5 rounded-lg transition cursor-pointer"
+              >
+                {appealSubmitting ? "Отправка..." : "Отправить апелляцию"}
+              </button>
+              {appealMessage && (
+                <span className={`text-sm font-semibold ${appealMessage.type === "ok" ? "text-green-500" : "text-red-500"}`}>
+                  {appealMessage.text}
+                </span>
+              )}
+            </div>
+          </form>
+
+          <div className="pt-6 border-t border-zinc-200 dark:border-zinc-800">
+            <h3 className="text-sm font-bold uppercase text-zinc-400 dark:text-zinc-500 mb-3">Ваши апелляции</h3>
+            {appealsLoading ? (
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 2 }).map((_, i) => (
+                  <div key={i} className="w-full h-12 rounded-lg shimmer" />
+                ))}
+              </div>
+            ) : appeals.length === 0 ? (
+              <p className="text-sm text-zinc-450">Апелляций пока нет.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {appeals.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between gap-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-sm font-semibold truncate">{a.targetType} · {a.reason}</span>
+                      <span className="text-xs text-zinc-500">{formatSessionDate(a.createAt || a.createdAt)}</span>
+                    </div>
+                    <span className={`text-xs font-bold px-2 py-1 rounded-full flex-shrink-0 ${
+                      a.status === "APPROVED" ? "bg-green-500/15 text-green-600 dark:text-green-400" :
+                      a.status === "REJECTED" ? "bg-red-500/15 text-red-500" :
+                      "bg-zinc-200 dark:bg-zinc-800 text-zinc-500"
+                    }`}>
+                      {appealStatusLabel[a.status] || a.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        ) : activeSection === "notifications" ? (
+        <div className="max-w-lg flex flex-col gap-4">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Bell className="w-5 h-5" /> Уведомления
+          </h2>
+
+          <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+            <div className="flex flex-col">
+              <span className="font-semibold text-sm">Push-уведомления в браузере</span>
+              <span className="text-xs text-zinc-500 mt-0.5 max-w-xs">Хранится только на этом устройстве.</span>
+            </div>
+            <button
+              onClick={handleTogglePush}
+              disabled={pushBusy}
+              className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
+                pushEnabled ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                  pushEnabled ? "translate-x-5.5" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
+
+          {notifLoading ? (
+            <div className="flex flex-col gap-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="w-full h-14 rounded-xl shimmer" />
+              ))}
+            </div>
+          ) : (
+            ([
+              { key: "LIKES", label: "Отметки «Нравится»" },
+              { key: "COMMENTS", label: "Комментарии" },
+              { key: "FOLLOWS", label: "Подписки" },
+              { key: "MENTIONS", label: "Упоминания" },
+              { key: "MESSAGES", label: "Сообщения" },
+            ] as const).map((cat) => (
+              <div
+                key={cat.key}
+                className="flex items-center justify-between p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800"
+              >
+                <span className="font-semibold text-sm">{cat.label}</span>
+                <button
+                  onClick={() => handleToggleNotifSetting(cat.key)}
+                  disabled={notifBusy[cat.key]}
+                  className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
+                    notifSettings[cat.key] !== false ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                      notifSettings[cat.key] !== false ? "translate-x-5.5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            ))
+          )}
         </div>
         ) : (
         <div className="max-w-lg flex flex-col gap-10">
@@ -831,6 +1422,121 @@ export default function SettingsPage() {
                   }`}
                 />
               </button>
+            </div>
+
+            {/* Activity status toggle */}
+            <div className="flex items-center justify-between p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+              <div className="flex items-start gap-3">
+                <EyeOff className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div className="flex flex-col">
+                  <span className="font-semibold text-sm">Показывать статус активности</span>
+                  <span className="text-xs text-zinc-500 mt-0.5 max-w-xs">
+                    Если выключено, вы также не будете видеть, когда были активны другие пользователи.
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={handleToggleActivityStatus}
+                disabled={activityStatusBusy}
+                className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
+                  currentUser.showActivityStatus ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                    currentUser.showActivityStatus ? "translate-x-5.5" : "translate-x-0.5"
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Quiet mode */}
+            <div className="flex flex-col gap-3 p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+              <div className="flex items-center justify-between">
+                <div className="flex items-start gap-3">
+                  <Moon className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-sm">Тихий режим</span>
+                    <span className="text-xs text-zinc-500 mt-0.5 max-w-xs">
+                      В указанные часы другие увидят пометку «В тихом режиме» на вашем профиле.
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={handleToggleQuietMode}
+                  disabled={quietBusy}
+                  className={`relative w-11 h-6 rounded-full transition flex-shrink-0 cursor-pointer disabled:opacity-50 ${
+                    quietEnabled ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-700"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                      quietEnabled ? "translate-x-5.5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              {quietEnabled && (
+                <div className="flex items-center gap-3">
+                  <input
+                    type="time"
+                    value={quietStart}
+                    onChange={(e) => setQuietStart(e.target.value)}
+                    onBlur={handleSaveQuietHours}
+                    className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                  />
+                  <span className="text-xs text-zinc-450">до</span>
+                  <input
+                    type="time"
+                    value={quietEnd}
+                    onChange={(e) => setQuietEnd(e.target.value)}
+                    onBlur={handleSaveQuietHours}
+                    className="bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Muted words */}
+            <div className="flex flex-col gap-3 p-4 mt-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-150 dark:border-zinc-800">
+              <div className="flex items-start gap-3">
+                <VolumeX className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div className="flex flex-col">
+                  <span className="font-semibold text-sm">Скрытые слова</span>
+                  <span className="text-xs text-zinc-500 mt-0.5 max-w-xs">
+                    Комментарии, содержащие эти слова, будут скрыты автоматически.
+                  </span>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={mutedWordInput}
+                  onChange={(e) => setMutedWordInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddMutedWord()}
+                  placeholder="Добавить слово"
+                  className="flex-1 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                />
+                <button
+                  onClick={handleAddMutedWord}
+                  disabled={!mutedWordInput.trim() || mutedWordBusy}
+                  className="text-sm font-bold text-blue-500 disabled:opacity-50 cursor-pointer"
+                >
+                  Добавить
+                </button>
+              </div>
+              {mutedWords.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {mutedWords.map((w) => (
+                    <span key={w} className="flex items-center gap-1.5 glass rounded-full pl-3 pr-2 py-1 text-xs font-semibold">
+                      {w}
+                      <button onClick={() => handleRemoveMutedWord(w)} className="hover:text-red-500 cursor-pointer">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 

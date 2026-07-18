@@ -51,6 +51,9 @@ export default function LoginPage() {
     );
 
     if (loginUser.fulfilled.match(result)) {
+      if (result.payload.reactivated) {
+        sessionStorage.setItem("ig_reactivated_welcome", "1");
+      }
       router.push("/");
     }
   };
@@ -250,9 +253,16 @@ export default function LoginPage() {
                 <p className="text-sm text-zinc-400">
                   Если для <span className="text-white">{forgotEmail}</span> есть аккаунт, мы отправили ссылку для сброса пароля.
                 </p>
+                <Link
+                  href={`/reset-password?email=${encodeURIComponent(forgotEmail)}`}
+                  onClick={() => setShowForgot(false)}
+                  className="w-full mt-2 bg-[#0095f6] hover:bg-[#18a2f8] text-white font-bold rounded-full py-3 text-sm cursor-pointer text-center block"
+                >
+                  У меня есть код
+                </Link>
                 <button
                   onClick={() => setShowForgot(false)}
-                  className="w-full mt-2 bg-[#0095f6] hover:bg-[#18a2f8] text-white font-bold rounded-full py-3 text-sm cursor-pointer"
+                  className="w-full text-sm text-zinc-400 hover:text-white py-1 cursor-pointer"
                 >
                   Готово
                 </button>

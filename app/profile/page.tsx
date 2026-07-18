@@ -25,7 +25,10 @@ import {
   Eye,
   TrendingUp,
   ChevronDown,
-  Plus as PlusIcon
+  Plus as PlusIcon,
+  Check,
+  Repeat2,
+  MoreHorizontal
 } from "lucide-react";
 import { AppDispatch, RootState } from "../store/store";
 import { fetchMyProfile } from "../store/slices/authSlice";
@@ -38,13 +41,24 @@ import {
   fetchCollections,
   createCollection,
   deleteCollection,
+  renameCollection,
+  bulkArchivePosts,
+  bulkDeletePosts,
+  pinPostToProfile,
   archivePost,
   toggleLikePost,
   addPostFavorite,
   addComment,
   deletePost,
+  updatePostCaption,
+  togglePostComments,
+  toggleLikeCountVisibility,
+  toggleSensitive,
+  toggleAgeRestricted,
+  toggleStorySharing,
   Collection,
 } from "../store/slices/postsSlice";
+import { fetchMyStories, viewStory, Story } from "../store/slices/storiesSlice";
 import { api, getFullImageUrl } from "../services/api";
 import { ProfileSkeleton } from "../components/SkeletonLoader";
 import { useApp } from "../context/AppContext";
@@ -53,13 +67,30 @@ import Avatar from "../components/Avatar";
 import SmartImage from "../components/SmartImage";
 import Highlights from "../components/Highlights";
 import VerifiedBadge from "../components/VerifiedBadge";
+import StoryViewer from "../components/StoryViewer";
 
 export default function ProfilePage() {
   const router = useRouter();
   const dispatch = useDispatch<AppDispatch>();
-  const { setCreateOpen } = useApp();
+  const { setCreateOpen, setCreateType } = useApp();
   const { currentUser, profileLoading, isLoggedIn } = useSelector((state: RootState) => state.auth);
   const { myPosts, savedPosts, savedAudios, archivedPosts, taggedPosts, collections } = useSelector((state: RootState) => state.posts);
+  const { myStories } = useSelector((state: RootState) => state.stories);
+  const [activeStoryId, setActiveStoryId] = useState<number | null>(null);
+  const activeStory = activeStoryId === null ? null : myStories.find((s) => s.id === activeStoryId) || null;
+
+  useEffect(() => {
+    if (isLoggedIn) dispatch(fetchMyStories());
+  }, [isLoggedIn, dispatch]);
+
+  const handleOpenOwnStory = () => {
+    if (myStories.length === 0) return;
+    setActiveStoryId(myStories[0].id);
+  };
+
+  const handleNavigateStory = (story: Story) => {
+    setActiveStoryId(story.id);
+  };
 
   // Saved tab: null = folder grid; "all" or a collection id = viewing that folder's posts.
   const [openCollection, setOpenCollection] = useState<"all" | number | null>(null);
@@ -132,7 +163,8 @@ export default function ProfilePage() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"posts" | "saved" | "audios" | "tagged" | "archived">("posts");
+  const [activeTab, setActiveTab] = useState<"posts" | "reels" | "reposts" | "saved" | "audios" | "tagged" | "archived">("posts");
+  const [showMoreTabsMenu, setShowMoreTabsMenu] = useState(false);
   // The backend can hand out duplicate post ids, so we select by (list + index)
   // instead of by id — otherwise `find(by id)` always resolves to the first match
   // and every grid thumbnail would open the same post. Index-based selection is also
@@ -147,6 +179,159 @@ export default function ProfilePage() {
   // Follow list dynamic states
   const [followers, setFollowers] = useState<any[]>([]);
   const [following, setFollowing] = useState<any[]>([]);
+  const [removingFollowerId, setRemovingFollowerId] = useState<string | null>(null);
+
+  // Multi-select mode on the "posts" grid (#5 bulk archive/delete)
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedPostIds, setSelectedPostIds] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const handleTogglePostSelect = (postId: number) => {
+    setSelectedPostIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
+      return next;
+    });
+  };
+
+  const handleExitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedPostIds(new Set());
+  };
+
+  const handleBulkArchive = async () => {
+    if (selectedPostIds.size === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      await dispatch(bulkArchivePosts({ postIds: Array.from(selectedPostIds), isArchived: true })).unwrap();
+      handleExitSelectMode();
+    } catch (err) {
+      console.error("Failed to bulk-archive:", err);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedPostIds.size === 0 || bulkBusy) return;
+    if (!window.confirm(`Удалить ${selectedPostIds.size} публикаций? Это действие необратимо.`)) return;
+    setBulkBusy(true);
+    try {
+      await dispatch(bulkDeletePosts(Array.from(selectedPostIds))).unwrap();
+      handleExitSelectMode();
+    } catch (err) {
+      console.error("Failed to bulk-delete:", err);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleInviteCollaborator = async (collectionId: number) => {
+    const username = window.prompt("Имя пользователя для приглашения в коллекцию")?.trim().replace(/^@/, "");
+    if (!username) return;
+    try {
+      const matches = await api.user.getUsers({ userName: username, pageSize: 5 });
+      const match = matches.find((u: any) => (u.userName || u.username || "").toLowerCase() === username.toLowerCase()) || matches[0];
+      if (!match) {
+        alert("Пользователь не найден.");
+        return;
+      }
+      await api.user.addCollectionCollaborator(collectionId, match.id || match.userId);
+      alert(`@${match.userName || match.username} добавлен(а) в коллекцию.`);
+    } catch (err: any) {
+      alert(err?.message || "Не удалось добавить участника.");
+    }
+  };
+
+  const handlePinToProfile = async (post: { id: number; isPinnedToProfile?: boolean }) => {
+    try {
+      await dispatch(pinPostToProfile({ postId: post.id, isPinned: !post.isPinnedToProfile })).unwrap();
+    } catch (err: any) {
+      alert(err?.message || "Не удалось закрепить публикацию (максимум 3).");
+    }
+  };
+
+  // Post settings menu inside the profile's own detail view (mirrors the home-feed 3-dot menu).
+  const [showDetailMenu, setShowDetailMenu] = useState(false);
+  const [editingCaptionPostId, setEditingCaptionPostId] = useState<number | null>(null);
+  const [editCaptionText, setEditCaptionText] = useState("");
+  const [editCaptionBusy, setEditCaptionBusy] = useState(false);
+  const [detailCopied, setDetailCopied] = useState(false);
+
+  const handleTogglePostComments = (post: { id: number; allowComments: boolean }) => {
+    dispatch(togglePostComments({ postId: post.id, allowComments: !post.allowComments }));
+    setShowDetailMenu(false);
+  };
+  const handleToggleLikeCountDetail = (post: { id: number; hideLikeCount?: boolean }) => {
+    dispatch(toggleLikeCountVisibility({ postId: post.id, hideLikeCount: !post.hideLikeCount }));
+    setShowDetailMenu(false);
+  };
+  const handleToggleSensitiveDetail = (post: { id: number; isSensitive?: boolean }) => {
+    dispatch(toggleSensitive({ postId: post.id, isSensitive: !post.isSensitive }));
+    setShowDetailMenu(false);
+  };
+  const handleToggleAgeRestrictedDetail = (post: { id: number; isAgeRestricted?: boolean }) => {
+    dispatch(toggleAgeRestricted({ postId: post.id, isAgeRestricted: !post.isAgeRestricted }));
+    setShowDetailMenu(false);
+  };
+  const handleToggleStorySharingDetail = (post: { id: number; allowStorySharing?: boolean }) => {
+    dispatch(toggleStorySharing({ postId: post.id, allowStorySharing: !post.allowStorySharing }));
+    setShowDetailMenu(false);
+  };
+  const handlePinToProfileDetail = (post: { id: number; isPinnedToProfile?: boolean }) => {
+    handlePinToProfile(post);
+    setShowDetailMenu(false);
+  };
+  const handleOpenEditCaption = (post: { id: number; caption: string }) => {
+    setEditingCaptionPostId(post.id);
+    setEditCaptionText(post.caption || "");
+    setShowDetailMenu(false);
+  };
+  const handleSaveEditCaption = async () => {
+    if (editingCaptionPostId === null || editCaptionBusy) return;
+    setEditCaptionBusy(true);
+    try {
+      await dispatch(updatePostCaption({ postId: editingCaptionPostId, caption: editCaptionText.trim() })).unwrap();
+      setEditingCaptionPostId(null);
+    } catch (err) {
+      console.error("Failed to update caption:", err);
+    } finally {
+      setEditCaptionBusy(false);
+    }
+  };
+  const handleCopyDetailLink = (postId: number) => {
+    navigator.clipboard?.writeText(`${window.location.origin}/p/${postId}`).catch(() => {});
+    setDetailCopied(true);
+    setTimeout(() => {
+      setDetailCopied(false);
+      setShowDetailMenu(false);
+    }, 1000);
+  };
+  const handleShareToStoryDetail = async (postId: number) => {
+    setShowDetailMenu(false);
+    try {
+      await api.story.sharePostToStory(postId);
+    } catch (err: any) {
+      alert(err?.message || "Автор отключил репост этой публикации в истории.");
+    }
+  };
+
+  const handleRemoveFollower = async (userId: string) => {
+    if (removingFollowerId) return;
+    if (!window.confirm("Убрать этого подписчика?")) return;
+    setRemovingFollowerId(userId);
+    const snapshot = followers;
+    setFollowers((prev) => prev.filter((f) => f.id !== userId));
+    try {
+      await api.following.removeFollower(userId);
+    } catch (err) {
+      console.error("Failed to remove follower:", err);
+      setFollowers(snapshot);
+    } finally {
+      setRemovingFollowerId(null);
+    }
+  };
 
   useEffect(() => {
     if (isLoggedIn && currentUser) {
@@ -241,6 +426,16 @@ export default function ProfilePage() {
     }
   };
 
+  const handleRenameCollection = async (col: { id: number; name: string }) => {
+    const name = window.prompt("Новое название коллекции", col.name)?.trim();
+    if (!name || name === col.name) return;
+    try {
+      await dispatch(renameCollection({ collectionId: col.id, name })).unwrap();
+    } catch (err) {
+      console.error("Failed to rename collection:", err);
+    }
+  };
+
   const handleDeleteCollection = async (collectionId: number) => {
     if (!window.confirm("Удалить эту коллекцию?")) return;
     try {
@@ -316,18 +511,38 @@ export default function ProfilePage() {
     return <ProfileSkeleton />;
   }
 
+  // Split the mixed "posts" feed into distinct grids, like real Instagram profiles.
+  const myReels = myPosts.filter((p) => p.isReel && !p.repostedFrom);
+  const myReposts = myPosts.filter((p) => p.repostedFrom);
+  const myPlainPosts = myPosts.filter((p) => !p.isReel && !p.repostedFrom);
+  const openInLightbox = (postId: number) => {
+    const index = myPosts.findIndex((p) => p.id === postId);
+    if (index !== -1) setSelected({ source: "my", index });
+  };
+
   return (
     <div className="w-full max-w-[935px] mx-auto px-4 py-8 flex flex-col gap-10 text-black dark:text-white transition-colors duration-200 animate-fade-up">
       
       {/* ----------------- PROFILE HEADER ----------------- */}
       <header className="flex flex-col md:flex-row items-center md:items-start gap-8 md:gap-24 border-b border-zinc-200 dark:border-zinc-800 pb-10">
-        {/* Profile Picture */}
-        <div className="relative w-36 h-36 flex-shrink-0 cursor-pointer group">
-          <div className="w-full h-full rounded-full p-[3px] gradient-ring animate-gradient shadow-soft-md">
-            <div className="bg-background p-1 rounded-full w-full h-full">
-              <Avatar src={currentUser.avatar} name={currentUser.username} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
+        {/* Profile Picture — story ring only when there's an active story; taps into the viewer. */}
+        <div
+          onClick={handleOpenOwnStory}
+          className={`relative w-36 h-36 flex-shrink-0 group ${myStories.length > 0 ? "cursor-pointer" : ""}`}
+        >
+          {myStories.length > 0 ? (
+            <div
+              className={`w-full h-full rounded-full p-[3px] shadow-soft-md ${
+                myStories.every((s) => s.viewed) ? "bg-zinc-300 dark:bg-zinc-700" : "gradient-ring animate-gradient"
+              }`}
+            >
+              <div className="bg-background p-1 rounded-full w-full h-full">
+                <Avatar src={currentUser.avatar} name={currentUser.username} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
+              </div>
             </div>
-          </div>
+          ) : (
+            <Avatar src={currentUser.avatar} name={currentUser.username} className="w-full h-full border border-zinc-200 dark:border-zinc-800" />
+          )}
         </div>
 
         {/* User Info Column */}
@@ -341,6 +556,9 @@ export default function ProfilePage() {
               </h2>
               <ChevronDown className="w-5 h-5 text-zinc-500 group-hover:text-black dark:group-hover:text-white" />
             </button>
+            {currentUser.isInQuietMode && (
+              <span className="text-xs text-zinc-450 flex items-center gap-1">🌙 В тихом режиме</span>
+            )}
             <div className="flex gap-2 text-sm font-semibold select-none">
               <button
                 onClick={() => router.push("/settings")}
@@ -388,8 +606,23 @@ export default function ProfilePage() {
 
           {/* Row 3: Bio */}
           <div className="text-sm font-normal text-zinc-900 dark:text-zinc-200">
-            <span className="font-semibold block">{currentUser.name}</span>
+            <span className="font-semibold block">
+              {currentUser.name}
+              {currentUser.pronouns && (
+                <span className="font-normal text-zinc-450 dark:text-zinc-500 ml-1.5">{currentUser.pronouns}</span>
+              )}
+            </span>
             <p className="mt-1 text-zinc-650 dark:text-zinc-400 whitespace-pre-wrap">{currentUser.about || "Описание отсутствует."}</p>
+            {currentUser.website && (
+              <a
+                href={/^https?:\/\//.test(currentUser.website) ? currentUser.website : `https://${currentUser.website}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-[#0095f6] dark:text-[#4da6ff] font-semibold hover:underline"
+              >
+                {currentUser.website.replace(/^https?:\/\//, "")}
+              </a>
+            )}
           </div>
         </div>
       </header>
@@ -400,7 +633,7 @@ export default function ProfilePage() {
       {/* ----------------- TABS SECTION ----------------- */}
       <div className="flex flex-col gap-6">
         {/* Tab Headers */}
-        <div className="flex justify-center border-t border-zinc-200 dark:border-zinc-800 pt-0 gap-16 text-zinc-400 select-none">
+        <div className="flex justify-center border-t border-zinc-200 dark:border-zinc-800 pt-0 gap-10 md:gap-16 text-zinc-400 select-none relative">
           <button
             onClick={() => setActiveTab("posts")}
             className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
@@ -413,26 +646,26 @@ export default function ProfilePage() {
             <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Публикации</span>
           </button>
           <button
-            onClick={() => setActiveTab("saved")}
+            onClick={() => setActiveTab("reels")}
             className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
-              activeTab === "saved"
+              activeTab === "reels"
                 ? "border-black dark:border-white text-black dark:text-white"
                 : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
             }`}
           >
-            <Bookmark className="w-4 h-4" />
-            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Сохранено</span>
+            <Film className="w-4 h-4" />
+            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Reels</span>
           </button>
           <button
-            onClick={() => setActiveTab("audios")}
+            onClick={() => setActiveTab("reposts")}
             className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
-              activeTab === "audios"
+              activeTab === "reposts"
                 ? "border-black dark:border-white text-black dark:text-white"
                 : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
             }`}
           >
-            <Music className="w-4 h-4" />
-            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Звуки</span>
+            <Repeat2 className="w-4 h-4" />
+            <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Репосты</span>
           </button>
           <button
             onClick={() => setActiveTab("tagged")}
@@ -445,12 +678,44 @@ export default function ProfilePage() {
             <UserSquare className="w-4 h-4" />
             <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Отмеченные</span>
           </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowMoreTabsMenu((v) => !v)}
+              className={`flex items-center gap-1.5 py-4 border-t-2 transition cursor-pointer ${
+                activeTab === "saved" || activeTab === "audios"
+                  ? "border-black dark:border-white text-black dark:text-white"
+                  : "border-transparent hover:text-zinc-600 dark:hover:text-zinc-300"
+              }`}
+            >
+              <MoreHorizontal className="w-4 h-4" />
+              <span className="text-[12px] font-bold uppercase tracking-wider hidden md:inline">Ещё</span>
+            </button>
+            {showMoreTabsMenu && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setShowMoreTabsMenu(false)} />
+                <div className="absolute top-full right-0 mt-1 w-48 glass-strong rounded-2xl shadow-soft-lg overflow-hidden z-40 animate-pop-in text-left">
+                  <button
+                    onClick={() => { setActiveTab("saved"); setShowMoreTabsMenu(false); }}
+                    className={`w-full flex items-center gap-2.5 p-3.5 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer ${activeTab === "saved" ? "text-black dark:text-white" : "text-zinc-500"}`}
+                  >
+                    <Bookmark className="w-4 h-4" /> Сохранённое
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab("audios"); setShowMoreTabsMenu(false); }}
+                    className={`w-full flex items-center gap-2.5 p-3.5 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer ${activeTab === "audios" ? "text-black dark:text-white" : "text-zinc-500"}`}
+                  >
+                    <Music className="w-4 h-4" /> Звуки
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Tab Content */}
         {activeTab === "posts" && (
           <div>
-            {myPosts.length === 0 ? (
+            {myPlainPosts.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-6">
                 <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
                   <Grid className="w-8 h-8" />
@@ -465,15 +730,93 @@ export default function ProfilePage() {
                 </button>
               </div>
             ) : (
+              <>
+                <div className="flex justify-end mb-3">
+                  <button
+                    onClick={() => (selectMode ? handleExitSelectMode() : setSelectMode(true))}
+                    className="text-sm font-semibold text-zinc-500 hover:text-current cursor-pointer"
+                  >
+                    {selectMode ? "Отмена" : "Выбрать"}
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-1 md:gap-7">
+                  {myPlainPosts.map((post) => (
+                    <div
+                      key={post.id}
+                      onClick={() => (selectMode ? handleTogglePostSelect(post.id) : openInLightbox(post.id))}
+                      className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                    >
+                      <SmartImage src={post.image} alt="Grid thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
+                      {post.isPinnedToProfile && !selectMode && (
+                        <span className="absolute top-2 left-2 text-white drop-shadow">📌</span>
+                      )}
+                      {selectMode && (
+                        <span
+                          className={`absolute top-2 right-2 w-5 h-5 rounded-full border-2 border-white flex items-center justify-center ${
+                            selectedPostIds.has(post.id) ? "bg-blue-500" : "bg-black/30"
+                          }`}
+                        >
+                          {selectedPostIds.has(post.id) && <Check className="w-3.5 h-3.5 text-white" />}
+                        </span>
+                      )}
+                      {/* Hover Overlay */}
+                      {!selectMode && (
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition duration-200 flex items-center justify-center gap-6 text-white text-base font-bold">
+                          <div className="flex items-center gap-2">
+                            <Heart className="w-6 h-6 fill-white" />
+                            <span>{post.likes}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <MessageCircle className="w-6 h-6 fill-white" />
+                            <span>{post.comments.length}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {selectMode && selectedPostIds.size > 0 && (
+                  <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 glass-strong rounded-full shadow-soft-lg px-5 py-3 flex items-center gap-4 animate-fade-up">
+                    <span className="text-sm font-semibold">{selectedPostIds.size} выбрано</span>
+                    <button onClick={handleBulkArchive} disabled={bulkBusy} className="text-sm font-semibold cursor-pointer disabled:opacity-50">
+                      Архивировать
+                    </button>
+                    <button onClick={handleBulkDelete} disabled={bulkBusy} className="text-sm font-semibold text-red-500 cursor-pointer disabled:opacity-50">
+                      Удалить
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === "reels" && (
+          <div>
+            {myReels.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-6">
+                <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                  <Film className="w-8 h-8" />
+                </div>
+                <h3 className="text-2xl font-bold">Reels пока нет</h3>
+                <p className="text-sm text-zinc-400 max-w-xs">Ваши Reels будут отображаться здесь.</p>
+                <button
+                  onClick={() => { setCreateType("reel"); setCreateOpen(true); }}
+                  className="text-blue-500 font-bold text-sm hover:text-blue-400 cursor-pointer"
+                >
+                  Создать Reel
+                </button>
+              </div>
+            ) : (
               <div className="grid grid-cols-3 gap-1 md:gap-7">
-                {myPosts.map((post, index) => (
+                {myReels.map((post) => (
                   <div
-                    key={index}
-                    onClick={() => setSelected({ source: "my", index })}
+                    key={post.id}
+                    onClick={() => openInLightbox(post.id)}
                     className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
                   >
-                    <SmartImage src={post.image} alt="Grid thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
-                    {/* Hover Overlay */}
+                    <SmartImage src={post.image} alt="Reel thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
+                    <Film className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow" />
                     <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition duration-200 flex items-center justify-center gap-6 text-white text-base font-bold">
                       <div className="flex items-center gap-2">
                         <Heart className="w-6 h-6 fill-white" />
@@ -483,6 +826,36 @@ export default function ProfilePage() {
                         <MessageCircle className="w-6 h-6 fill-white" />
                         <span>{post.comments.length}</span>
                       </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === "reposts" && (
+          <div>
+            {myReposts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center select-none gap-6">
+                <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
+                  <Repeat2 className="w-8 h-8" />
+                </div>
+                <h3 className="text-2xl font-bold">Репостов пока нет</h3>
+                <p className="text-sm text-zinc-400 max-w-xs">Публикации, которые вы репостнули, появятся здесь.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1 md:gap-7">
+                {myReposts.map((post) => (
+                  <div
+                    key={post.id}
+                    onClick={() => openInLightbox(post.id)}
+                    className="relative aspect-square cursor-pointer group bg-zinc-100 dark:bg-zinc-950 overflow-hidden rounded-xl md:rounded-2xl lift shadow-soft"
+                  >
+                    <SmartImage src={post.image} alt="Repost thumbnail" fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition duration-300 group-hover:scale-103" />
+                    <Repeat2 className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow" />
+                    <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition duration-200">
+                      <span className="text-white text-[11px] font-semibold truncate block">От @{post.repostedFrom}</span>
                     </div>
                   </div>
                 ))}
@@ -525,12 +898,21 @@ export default function ProfilePage() {
                     <span className="block text-white font-semibold text-sm truncate">{col.name}</span>
                     <span className="block text-white/70 text-xs">{col.count}</span>
                   </div>
-                  <span
-                    onClick={(e) => { e.stopPropagation(); handleDeleteCollection(col.id); }}
-                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition cursor-pointer hover:bg-black/60"
-                    title="Удалить коллекцию"
-                  >
-                    <Trash2 className="w-4 h-4" />
+                  <span className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition">
+                    <span
+                      onClick={(e) => { e.stopPropagation(); handleRenameCollection(col); }}
+                      className="p-1.5 rounded-full bg-black/40 text-white cursor-pointer hover:bg-black/60"
+                      title="Переименовать коллекцию"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </span>
+                    <span
+                      onClick={(e) => { e.stopPropagation(); handleDeleteCollection(col.id); }}
+                      className="p-1.5 rounded-full bg-black/40 text-white cursor-pointer hover:bg-black/60"
+                      title="Удалить коллекцию"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </span>
                   </span>
                 </button>
               ))}
@@ -551,9 +933,17 @@ export default function ProfilePage() {
                 <button onClick={() => { setOpenCollection(null); dispatch(fetchPostFavorites({})); }} className="hover:opacity-60 cursor-pointer">
                   <ChevronLeft className="w-5 h-5" />
                 </button>
-                <h3 className="font-bold text-base">
+                <h3 className="font-bold text-base flex-1">
                   {openCollection === "all" ? "Все публикации" : collections.find((c) => c.id === openCollection)?.name || "Коллекция"}
                 </h3>
+                {openCollection !== "all" && (
+                  <button
+                    onClick={() => handleInviteCollaborator(openCollection as number)}
+                    className="text-xs font-semibold text-blue-500 hover:underline cursor-pointer"
+                  >
+                    + Участник
+                  </button>
+                )}
               </div>
               {savedPosts.length === 0 ? (
                 <p className="text-sm text-zinc-400 text-center py-16">В этой коллекции пока нет публикаций.</p>
@@ -596,7 +986,7 @@ export default function ProfilePage() {
             <div className="flex flex-col gap-3 max-w-2xl mx-auto w-full">
               {savedAudios.map((audio) => (
                 <div key={audio.audioId} className="flex items-center gap-4 glass rounded-2xl p-3.5 shadow-soft">
-                  <div className="w-12 h-12 rounded-xl btn-grad flex items-center justify-center flex-shrink-0">
+                  <div className="w-12 h-12 rounded-xl btn-primary flex items-center justify-center flex-shrink-0">
                     <Music className="w-5 h-5 text-white" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1 text-left">
@@ -620,7 +1010,7 @@ export default function ProfilePage() {
               className="w-full flex items-center justify-between glass rounded-2xl px-4 py-3 mb-4 hover:shadow-soft transition cursor-pointer"
             >
               <span className="text-sm font-semibold">Запросы на отметку и соавторство</span>
-              <span className="text-xs font-bold text-white btn-grad rounded-full px-2 py-0.5">
+              <span className="text-xs font-bold btn-primary rounded-full px-2 py-0.5">
                 {tagRequests.length + collabRequests.length}
               </span>
             </button>
@@ -835,7 +1225,7 @@ export default function ProfilePage() {
                         <span className="flex-1 text-sm min-w-0 truncate">
                           <span className="font-semibold">{r.userName || r.username || "Пользователь"}</span> отметил(а) вас
                         </span>
-                        <button onClick={() => handleTagRequest(pid, true)} className="text-xs font-bold btn-grad text-white px-3 py-1.5 rounded-lg cursor-pointer">Принять</button>
+                        <button onClick={() => handleTagRequest(pid, true)} className="text-xs font-bold btn-primary px-3 py-1.5 rounded-lg cursor-pointer">Принять</button>
                         <button onClick={() => handleTagRequest(pid, false)} className="text-xs font-bold glass px-3 py-1.5 rounded-lg cursor-pointer">Удалить</button>
                       </div>
                     );
@@ -856,7 +1246,7 @@ export default function ProfilePage() {
                         <span className="flex-1 text-sm min-w-0 truncate">
                           <span className="font-semibold">{r.userName || r.username || "Пользователь"}</span> приглашает в соавторы
                         </span>
-                        <button onClick={() => handleCollabRequest(pid, true)} className="text-xs font-bold btn-grad text-white px-3 py-1.5 rounded-lg cursor-pointer">Принять</button>
+                        <button onClick={() => handleCollabRequest(pid, true)} className="text-xs font-bold btn-primary px-3 py-1.5 rounded-lg cursor-pointer">Принять</button>
                         <button onClick={() => handleCollabRequest(pid, false)} className="text-xs font-bold glass px-3 py-1.5 rounded-lg cursor-pointer">Удалить</button>
                       </div>
                     );
@@ -912,20 +1302,26 @@ export default function ProfilePage() {
                 <p className="text-zinc-500 text-sm text-center py-8">Нет подписчиков.</p>
               ) : (
                 followers.map((user) => (
-                  <Link
-                    key={user.id}
-                    href={`/u/${user.id}`}
-                    onClick={() => setShowFollowersList(false)}
-                    className="flex items-center justify-between hover:opacity-80 transition"
-                  >
-                    <div className="flex items-center gap-3">
+                  <div key={user.id} className="flex items-center justify-between gap-2">
+                    <Link
+                      href={`/u/${user.id}`}
+                      onClick={() => setShowFollowersList(false)}
+                      className="flex items-center gap-3 hover:opacity-80 transition min-w-0"
+                    >
                       <Avatar src={user.avatar} name={user.username} className="w-10 h-10 border border-zinc-200 dark:border-zinc-800" />
-                      <div className="flex flex-col text-left">
-                        <span className="font-bold text-sm leading-none">{user.username}</span>
-                        <span className="text-xs text-zinc-400 leading-none mt-1">{user.name}</span>
+                      <div className="flex flex-col text-left min-w-0">
+                        <span className="font-bold text-sm leading-none truncate">{user.username}</span>
+                        <span className="text-xs text-zinc-400 leading-none mt-1 truncate">{user.name}</span>
                       </div>
-                    </div>
-                  </Link>
+                    </Link>
+                    <button
+                      onClick={() => handleRemoveFollower(user.id)}
+                      disabled={removingFollowerId === user.id}
+                      className="text-xs font-semibold text-zinc-500 hover:text-red-500 cursor-pointer flex-shrink-0 disabled:opacity-50"
+                    >
+                      Удалить
+                    </button>
+                  </div>
                 ))
               )}
             </div>
@@ -998,7 +1394,11 @@ export default function ProfilePage() {
 
             {/* Left Column: Image */}
             <div className="flex-1 bg-zinc-950 flex items-center justify-center max-h-[45vh] md:max-h-full">
-              <SmartImage src={selectedPost.image} alt="Detail" sizes="(max-width: 768px) 100vw, 640px" className="w-full h-full object-contain aspect-square" />
+              {selectedPost.isReel && selectedPost.videoUrl ? (
+                <video src={selectedPost.videoUrl} controls autoPlay loop className="w-full h-full object-contain aspect-square" />
+              ) : (
+                <SmartImage src={selectedPost.image} alt="Detail" sizes="(max-width: 768px) 100vw, 640px" className="w-full h-full object-contain aspect-square" />
+              )}
             </div>
 
             {/* Right Column: Feed and interactions */}
@@ -1066,6 +1466,13 @@ export default function ProfilePage() {
                       >
                         <Trash2 className="w-4 h-4" /> Удалить
                       </button>
+                      <button
+                        onClick={() => setShowDetailMenu(true)}
+                        className="text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer"
+                        title="Ещё"
+                      >
+                        <MoreHorizontal className="w-5 h-5" />
+                      </button>
                     </div>
                   ) : (
                     <button
@@ -1094,6 +1501,140 @@ export default function ProfilePage() {
                   </button>
                 )}
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+      {activeStory && (
+        <StoryViewer
+          key={activeStory.id}
+          story={activeStory}
+          list={myStories}
+          currentUserId={currentUser.id}
+          onNavigate={handleNavigateStory}
+          onClose={() => setActiveStoryId(null)}
+          onReport={() => {}}
+        />
+      )}
+
+      {/* ----------------- POST SETTINGS MENU (own post, from within the profile) ----------------- */}
+      {showDetailMenu && selectedPost && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4"
+          onClick={() => setShowDetailMenu(false)}
+        >
+          <div
+            className="glass-strong w-full max-w-sm rounded-3xl overflow-hidden shadow-soft-lg flex flex-col divide-y divide-zinc-200 dark:divide-zinc-700/60 text-center animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {isProfessional && (
+              <button
+                onClick={() => { setShowDetailMenu(false); router.push(`/p/${selectedPost.id}`); }}
+                className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+              >
+                Статистика
+              </button>
+            )}
+            <button
+              onClick={() => handlePinToProfileDetail(selectedPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {selectedPost.isPinnedToProfile ? "Открепить от профиля" : "Закрепить в профиле"}
+            </button>
+            <button
+              onClick={() => handleOpenEditCaption(selectedPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              Редактировать подпись
+            </button>
+            <button
+              onClick={() => handleTogglePostComments(selectedPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {selectedPost.allowComments ? "Выключить комментарии" : "Включить комментарии"}
+            </button>
+            <button
+              onClick={() => handleToggleLikeCountDetail(selectedPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {selectedPost.hideLikeCount ? "Показать количество отметок" : "Скрыть количество отметок"}
+            </button>
+            <button
+              onClick={() => handleToggleSensitiveDetail(selectedPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {selectedPost.isSensitive ? "Снять отметку «деликатное»" : "Отметить как деликатное"}
+            </button>
+            <button
+              onClick={() => handleToggleAgeRestrictedDetail(selectedPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {selectedPost.isAgeRestricted ? "Снять возрастное ограничение" : "Отметить 18+"}
+            </button>
+            <button
+              onClick={() => handleToggleStorySharingDetail(selectedPost)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {selectedPost.allowStorySharing ? "Запретить репост в истории" : "Разрешить репост в истории"}
+            </button>
+            <button
+              onClick={() => handleShareToStoryDetail(selectedPost.id)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              Добавить в историю
+            </button>
+            <button
+              onClick={() => handleCopyDetailLink(selectedPost.id)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              {detailCopied ? "Ссылка скопирована ✓" : "Скопировать ссылку"}
+            </button>
+            <button
+              onClick={() => setShowDetailMenu(false)}
+              className="py-3.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-750 cursor-pointer"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- EDIT CAPTION MODAL (from within the profile) ----------------- */}
+      {editingCaptionPostId !== null && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4"
+          onClick={() => !editCaptionBusy && setEditingCaptionPostId(null)}
+        >
+          <div
+            className="glass-strong w-full max-w-md rounded-3xl overflow-hidden shadow-soft-lg animate-pop-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700/60">
+              <button
+                onClick={() => setEditingCaptionPostId(null)}
+                disabled={editCaptionBusy}
+                className="text-sm text-zinc-500 hover:text-black dark:hover:text-white cursor-pointer disabled:opacity-60"
+              >
+                Отмена
+              </button>
+              <span className="text-sm font-bold">Редактировать</span>
+              <button
+                onClick={handleSaveEditCaption}
+                disabled={editCaptionBusy}
+                className="text-sm font-bold text-blue-500 hover:text-blue-300 cursor-pointer disabled:opacity-60"
+              >
+                {editCaptionBusy ? "Сохранение…" : "Готово"}
+              </button>
+            </div>
+            <div className="p-4">
+              <textarea
+                value={editCaptionText}
+                onChange={(e) => setEditCaptionText(e.target.value)}
+                placeholder="Добавьте подпись…"
+                rows={4}
+                autoFocus
+                className="w-full bg-transparent text-sm resize-none outline-none placeholder:text-zinc-400"
+              />
             </div>
           </div>
         </div>

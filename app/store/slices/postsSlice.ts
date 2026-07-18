@@ -70,6 +70,16 @@ export interface Post {
   repostedFromUserId?: string;
   /** #16 — approved collaborators shown alongside the author in the header. */
   collaborators?: TaggedUser[];
+  /** Reel post: `image` is the static coverUrl thumbnail; `videoUrl` is the actual playable file. */
+  isReel?: boolean;
+  videoUrl?: string;
+  isPinnedToProfile?: boolean;
+  isAgeRestricted?: boolean;
+  allowStorySharing?: boolean;
+  isForCloseFriends?: boolean;
+  locationId?: number | null;
+  images?: string[];
+  productTags?: { id?: string; name: string; price: number; currency: string; url?: string; x: number; y: number }[];
 }
 
 export interface SavedAudio {
@@ -131,9 +141,15 @@ export const formatBackendPost = (p: any): Post => {
     userId: p.userId || p.userProfileId || "",
     username: p.userName || p.username || "user",
     avatar: getFullImageUrl(p.userAvatar || p.userImage),
-    location: p.locationName || p.location || "",
-    image: getFullImageUrl((p.images && p.images[0]) || p.filePath || p.imagePath || p.image) || DEFAULT_AVATAR,
-    caption: p.content || p.title || "",
+    location: typeof p.location === "object" && p.location
+      ? [p.location.city, p.location.country].filter(Boolean).join(", ")
+      : (p.locationName || p.location || ""),
+    // Reels store the playable file in images[0]/videoUrl and a static thumbnail in coverUrl —
+    // `image` must resolve to something an <img>/SmartImage can actually render.
+    image: getFullImageUrl(p.coverUrl || (p.images && p.images[0]) || p.filePath || p.imagePath || p.image) || DEFAULT_AVATAR,
+    isReel: !!p.isReel,
+    videoUrl: p.isReel ? getFullImageUrl(p.videoUrl || (p.images && p.images[0])) : undefined,
+    caption: p.content || p.title || p.caption || "",
     likes: likeCount,
     time: p.createAt ? new Date(p.createAt).toLocaleDateString() : "Just now",
     // Backend now returns these directly on the post object, based on the JWT-authenticated user.
@@ -161,6 +177,13 @@ export const formatBackendPost = (p: any): Post => {
       avatar: getFullImageUrl(t.userAvatar || t.avatar || t.userImage),
     })),
     comments: (p.comments || []).map(formatComment),
+    isPinnedToProfile: !!p.isPinnedToProfile,
+    isAgeRestricted: !!p.isAgeRestricted,
+    allowStorySharing: p.allowStorySharing !== false,
+    isForCloseFriends: !!p.isForCloseFriends,
+    locationId: p.locationId ?? null,
+    images: Array.isArray(p.images) ? p.images.map((img: string) => getFullImageUrl(img)) : undefined,
+    productTags: Array.isArray(p.productTags) ? p.productTags : [],
   };
 };
 
@@ -245,6 +268,18 @@ export const createCollection = createAsyncThunk(
   }
 );
 
+export const renameCollection = createAsyncThunk(
+  "posts/renameCollection",
+  async ({ collectionId, name }: { collectionId: number; name: string }, { rejectWithValue }) => {
+    try {
+      await api.collection.updateCollection(collectionId, name);
+      return { collectionId, name };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to rename collection.");
+    }
+  }
+);
+
 export const deleteCollection = createAsyncThunk(
   "posts/deleteCollection",
   async (collectionId: number, { rejectWithValue }) => {
@@ -324,6 +359,9 @@ export const createPost = createAsyncThunk(
       collaboratorIds?: string[];
       isSensitive?: boolean;
       hideLikeCount?: boolean;
+      isForCloseFriends?: boolean;
+      locationId?: number;
+      productTags?: { name: string; price: number; currency: string; url?: string; x: number; y: number }[];
     },
     { dispatch, rejectWithValue }
   ) => {
@@ -343,7 +381,7 @@ export const createPost = createAsyncThunk(
 export const createReel = createAsyncThunk(
   "posts/createReel",
   async (
-    data: { file: File; caption?: string; audioId?: string; audioName?: string; audioArtist?: string },
+    data: { file: File; caption?: string; audioId?: string; audioName?: string; audioArtist?: string; remixOfPostId?: number },
     { dispatch, rejectWithValue }
   ) => {
     try {
@@ -532,6 +570,92 @@ export const archivePost = createAsyncThunk(
   }
 );
 
+export const pinPostToProfile = createAsyncThunk(
+  "posts/pinToProfile",
+  async ({ postId, isPinned }: { postId: number; isPinned: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.pinToProfile(postId, isPinned);
+      return { postId, isPinned };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to pin post.");
+    }
+  }
+);
+
+export const toggleAgeRestricted = createAsyncThunk(
+  "posts/toggleAgeRestricted",
+  async ({ postId, isAgeRestricted }: { postId: number; isAgeRestricted: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.toggleAgeRestricted(postId, isAgeRestricted);
+      return { postId, isAgeRestricted };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle age-restriction.");
+    }
+  }
+);
+
+export const toggleStorySharing = createAsyncThunk(
+  "posts/toggleStorySharing",
+  async ({ postId, allowStorySharing }: { postId: number; allowStorySharing: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.toggleStorySharing(postId, allowStorySharing);
+      return { postId, allowStorySharing };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to toggle story sharing.");
+    }
+  }
+);
+
+export const bulkArchivePosts = createAsyncThunk(
+  "posts/bulkArchive",
+  async ({ postIds, isArchived }: { postIds: number[]; isArchived: boolean }, { dispatch, rejectWithValue }) => {
+    try {
+      await api.post.bulkArchive(postIds, isArchived);
+      dispatch(fetchMyPosts());
+      dispatch(fetchArchivedPosts());
+      return { postIds, isArchived };
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to archive posts.");
+    }
+  }
+);
+
+export const bulkDeletePosts = createAsyncThunk(
+  "posts/bulkDelete",
+  async (postIds: number[], { rejectWithValue }) => {
+    try {
+      await api.post.bulkDelete(postIds);
+      return postIds;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to delete posts.");
+    }
+  }
+);
+
+export const updatePostMedia = createAsyncThunk(
+  "posts/updateMedia",
+  async ({ postId, keepImages, newImages }: { postId: number; keepImages: string[]; newImages: File[] }, { rejectWithValue }) => {
+    try {
+      const res = await api.post.updatePostMedia(postId, keepImages, newImages);
+      return formatBackendPost(res);
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to update post media.");
+    }
+  }
+);
+
+export const markNotInterested = createAsyncThunk(
+  "posts/notInterested",
+  async (data: { postId: number; alsoMuteAuthor?: boolean; alsoMuteHashtags?: boolean }, { rejectWithValue }) => {
+    try {
+      await api.post.notInterested(data);
+      return data.postId;
+    } catch (err: any) {
+      return rejectWithValue(err.message || "Failed to save preference.");
+    }
+  }
+);
+
 export const fetchArchivedPosts = createAsyncThunk(
   "posts/fetchArchived",
   async (_, { rejectWithValue }) => {
@@ -622,6 +746,10 @@ const postsSlice = createSlice({
       })
       .addCase(deleteCollection.fulfilled, (state, action: PayloadAction<number>) => {
         state.collections = state.collections.filter((c) => c.id !== action.payload);
+      })
+      .addCase(renameCollection.fulfilled, (state, action: PayloadAction<{ collectionId: number; name: string }>) => {
+        const col = state.collections.find((c) => c.id === action.payload.collectionId);
+        if (col) col.name = action.payload.name;
       })
 
       // Toggle Comments (author only)
@@ -816,6 +944,63 @@ const postsSlice = createSlice({
       // Fetch archived posts
       .addCase(fetchArchivedPosts.fulfilled, (state, action: PayloadAction<Post[]>) => {
         state.archivedPosts = action.payload;
+      })
+
+      // Pin / unpin to profile — max 3, sorted pinned-first
+      .addCase(pinPostToProfile.fulfilled, (state, action) => {
+        const { postId, isPinned } = action.payload;
+        [state.posts, state.myPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) post.isPinnedToProfile = isPinned;
+          list.sort((a, b) => Number(!!b.isPinnedToProfile) - Number(!!a.isPinnedToProfile));
+        });
+      })
+
+      // Age-restricted / story-sharing toggles
+      .addCase(toggleAgeRestricted.fulfilled, (state, action) => {
+        const { postId, isAgeRestricted } = action.payload;
+        [state.posts, state.myPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) post.isAgeRestricted = isAgeRestricted;
+        });
+      })
+      .addCase(toggleStorySharing.fulfilled, (state, action) => {
+        const { postId, allowStorySharing } = action.payload;
+        [state.posts, state.myPosts].forEach((list) => {
+          const post = list.find((p) => p.id === postId);
+          if (post) post.allowStorySharing = allowStorySharing;
+        });
+      })
+
+      // Bulk archive / delete (multi-select on the profile grid)
+      .addCase(bulkArchivePosts.fulfilled, (state, action) => {
+        const { postIds, isArchived } = action.payload;
+        if (isArchived) {
+          state.myPosts = state.myPosts.filter((p) => !postIds.includes(p.id));
+          state.posts = state.posts.filter((p) => !postIds.includes(p.id));
+        }
+      })
+      .addCase(bulkDeletePosts.fulfilled, (state, action: PayloadAction<number[]>) => {
+        [state.posts, state.myPosts, state.savedPosts, state.archivedPosts].forEach((list, i) => {
+          const filtered = list.filter((p) => !action.payload.includes(p.id));
+          if (i === 0) state.posts = filtered;
+          else if (i === 1) state.myPosts = filtered;
+          else if (i === 2) state.savedPosts = filtered;
+          else state.archivedPosts = filtered;
+        });
+      })
+
+      // Carousel media edit
+      .addCase(updatePostMedia.fulfilled, (state, action: PayloadAction<Post>) => {
+        [state.posts, state.myPosts, state.savedPosts].forEach((list) => {
+          const idx = list.findIndex((p) => p.id === action.payload.id);
+          if (idx !== -1) list[idx] = { ...list[idx], image: action.payload.image, images: action.payload.images };
+        });
+      })
+
+      // "Not interested" — collapse from the feed
+      .addCase(markNotInterested.fulfilled, (state, action: PayloadAction<number>) => {
+        state.posts = state.posts.filter((p) => p.id !== action.payload);
       })
 
       // Fetch tagged posts

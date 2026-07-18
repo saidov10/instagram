@@ -3,13 +3,13 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Hash, Heart, MessageCircle, X, ChevronLeft } from "lucide-react";
+import { MapPin, Heart, MessageCircle, X, ChevronLeft } from "lucide-react";
 import { api, getFullImageUrl } from "../../../services/api";
 import Avatar from "../../../components/Avatar";
 import SmartImage from "../../../components/SmartImage";
 import HashtagText from "../../../components/HashtagText";
 
-interface TagPost {
+interface LocationPost {
   id: number;
   userId: string;
   username: string;
@@ -21,54 +21,35 @@ interface TagPost {
   caption: string;
 }
 
-export default function HashtagPage() {
-  const params = useParams<{ tag: string }>();
+export default function LocationPage() {
+  const params = useParams<{ id: string }>();
   const router = useRouter();
-  // The segment arrives percent-encoded for non-latin tags (e.g. #реакт).
-  const tag = decodeURIComponent(params?.tag || "");
+  const locationId = Number(params?.id);
 
-  const [posts, setPosts] = useState<TagPost[]>([]);
+  const [locationLabel, setLocationLabel] = useState("");
+  const [posts, setPosts] = useState<LocationPost[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<TagPost | null>(null);
-  const [isFollowingTag, setIsFollowingTag] = useState(false);
-  const [followTagBusy, setFollowTagBusy] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [selected, setSelected] = useState<LocationPost | null>(null);
 
   useEffect(() => {
-    if (!tag) return;
-    api.post.getFollowedHashtags()
-      .then((tags) => setIsFollowingTag((tags || []).some((t) => t.toLowerCase() === tag.toLowerCase())))
-      .catch(() => setIsFollowingTag(false));
-  }, [tag]);
-
-  const handleToggleFollowTag = async () => {
-    if (followTagBusy) return;
-    setFollowTagBusy(true);
-    const next = !isFollowingTag;
-    setIsFollowingTag(next);
-    try {
-      if (next) {
-        await api.post.followHashtag(tag);
-      } else {
-        await api.post.unfollowHashtag(tag);
-      }
-    } catch (err) {
-      console.error("Failed to toggle hashtag follow:", err);
-      setIsFollowingTag(!next);
-    } finally {
-      setFollowTagBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!tag) return;
+    if (!locationId) return;
     let cancelled = false;
 
     const load = async () => {
       setLoading(true);
+      setNotFound(false);
       try {
-        const raw = await api.post.getByHashtag(tag);
+        const raw = await api.location.getLocationFeed(locationId);
         if (cancelled) return;
-        const mapped: TagPost[] = (raw || []).map((p: any) => {
+        if (raw.length > 0 && raw[0].location) {
+          const loc = raw[0].location;
+          setLocationLabel([loc.city, loc.country].filter(Boolean).join(", "));
+        } else {
+          const loc = await api.location.getLocationById(locationId);
+          setLocationLabel([loc.city, loc.country].filter(Boolean).join(", "));
+        }
+        const mapped: LocationPost[] = (raw || []).map((p: any) => {
           const img = getFullImageUrl((p.images && p.images[0]) || p.filePath || p.imagePath || p.image);
           return {
             id: p.id || p.postId,
@@ -84,8 +65,8 @@ export default function HashtagPage() {
         });
         setPosts(mapped);
       } catch (err) {
-        console.error("Failed to load hashtag posts:", err);
-        if (!cancelled) setPosts([]);
+        console.error("Failed to load location feed:", err);
+        if (!cancelled) setNotFound(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -95,12 +76,21 @@ export default function HashtagPage() {
     return () => {
       cancelled = true;
     };
-  }, [tag]);
+  }, [locationId]);
+
+  if (notFound) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center gap-3 text-black dark:text-white">
+        <h3 className="text-xl font-bold">Место не найдено</h3>
+        <button onClick={() => router.push("/explore")} className="btn-primary px-5 py-2 text-sm mt-2 cursor-pointer">
+          К обзору
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-[975px] mx-auto px-4 py-4 md:py-8 flex flex-col gap-8 text-black dark:text-white">
-
-      {/* Header */}
       <div className="flex items-center gap-4 md:gap-6">
         <button
           onClick={() => router.back()}
@@ -109,26 +99,16 @@ export default function HashtagPage() {
           <ChevronLeft className="w-6 h-6" />
         </button>
         <div className="w-20 h-20 md:w-28 md:h-28 rounded-full bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center flex-shrink-0">
-          <Hash className="w-9 h-9 md:w-12 md:h-12" />
+          <MapPin className="w-9 h-9 md:w-12 md:h-12" />
         </div>
-        <div className="flex flex-col gap-1 min-w-0 flex-1">
-          <h1 className="text-xl md:text-3xl font-light truncate">#{tag}</h1>
+        <div className="flex flex-col gap-1 min-w-0">
+          <h1 className="text-xl md:text-3xl font-light truncate">{locationLabel || "Место"}</h1>
           <p className="text-sm text-zinc-500">
             {loading ? "Загрузка..." : `${posts.length} ${posts.length === 1 ? "публикация" : "публикаций"}`}
           </p>
         </div>
-        <button
-          onClick={handleToggleFollowTag}
-          disabled={followTagBusy}
-          className={`btn-primary px-5 py-2 text-sm flex-shrink-0 cursor-pointer disabled:opacity-60 ${
-            isFollowingTag ? "!bg-transparent !text-current border border-zinc-300 dark:border-zinc-700" : ""
-          }`}
-        >
-          {isFollowingTag ? "Отписаться" : "Подписаться"}
-        </button>
       </div>
 
-      {/* Grid */}
       {loading ? (
         <div className="grid grid-cols-3 gap-1 md:gap-2 auto-rows-[120px] sm:auto-rows-[180px] md:auto-rows-[290px]">
           {Array.from({ length: 9 }).map((_, i) => (
@@ -138,12 +118,10 @@ export default function HashtagPage() {
       ) : posts.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
           <div className="w-16 h-16 rounded-full border-2 border-black dark:border-white flex items-center justify-center">
-            <Hash className="w-7 h-7" />
+            <MapPin className="w-7 h-7" />
           </div>
           <h3 className="text-xl font-bold">Публикаций пока нет</h3>
-          <p className="text-sm text-zinc-500 max-w-xs">
-            По тегу #{tag} ещё ничего не опубликовали.
-          </p>
+          <p className="text-sm text-zinc-500 max-w-xs">Здесь ещё никто не отметил это место.</p>
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-1 md:gap-2 auto-rows-[120px] sm:auto-rows-[180px] md:auto-rows-[290px]">
@@ -156,13 +134,7 @@ export default function HashtagPage() {
               {post.isVideo ? (
                 <video src={post.image} className="w-full h-full object-cover" muted playsInline />
               ) : (
-                <SmartImage
-                  src={post.image}
-                  alt={`#${tag}`}
-                  fill
-                  sizes="(max-width: 768px) 33vw, 300px"
-                  className="object-cover transition-transform duration-500 group-hover:scale-105"
-                />
+                <SmartImage src={post.image} alt={locationLabel} fill sizes="(max-width: 768px) 33vw, 300px" className="object-cover transition-transform duration-500 group-hover:scale-105" />
               )}
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-6 text-white font-semibold transition duration-200">
                 <span className="flex items-center gap-1.5">
@@ -179,19 +151,14 @@ export default function HashtagPage() {
         </div>
       )}
 
-      {/* Post preview */}
       {selected && (
         <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
           onClick={() => setSelected(null)}
         >
-          <button
-            onClick={() => setSelected(null)}
-            className="absolute top-4 right-4 text-white hover:text-zinc-300 p-2"
-          >
+          <button onClick={() => setSelected(null)} className="absolute top-4 right-4 text-white hover:text-zinc-300 p-2">
             <X className="w-8 h-8" />
           </button>
-
           <div
             className="glass-strong w-full max-w-lg md:max-w-4xl rounded-3xl shadow-soft-lg flex flex-col md:flex-row overflow-hidden max-h-[85vh] animate-pop-in"
             onClick={(e) => e.stopPropagation()}
@@ -204,16 +171,11 @@ export default function HashtagPage() {
                 <img src={selected.image} alt="" className="w-full max-h-[40vh] md:max-h-[75vh] object-contain" />
               )}
             </div>
-
             <div className="w-full md:w-[360px] border-t md:border-t-0 md:border-l border-zinc-200 dark:border-zinc-800 flex flex-col bg-white dark:bg-zinc-900">
-              <Link
-                href={selected.userId ? `/u/${selected.userId}` : "#"}
-                className="flex items-center gap-3 p-4 border-b border-zinc-200 dark:border-zinc-800"
-              >
+              <Link href={selected.userId ? `/u/${selected.userId}` : "#"} className="flex items-center gap-3 p-4 border-b border-zinc-200 dark:border-zinc-800">
                 <Avatar src={selected.avatar} name={selected.username} className="w-8 h-8" />
                 <span className="font-semibold text-sm hover:underline">{selected.username}</span>
               </Link>
-
               <div className="flex-1 overflow-y-auto p-4 text-sm">
                 {selected.caption && (
                   <p className="whitespace-pre-wrap break-words">
@@ -222,7 +184,6 @@ export default function HashtagPage() {
                   </p>
                 )}
               </div>
-
               <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-4 text-sm">
                 <span className="flex items-center gap-1.5 font-semibold">
                   <Heart className="w-5 h-5" /> {selected.likes}
